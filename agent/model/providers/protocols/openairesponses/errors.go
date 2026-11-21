@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/alfredxw/denova/agent/model/providers"
-	"github.com/alfredxw/denova/agent/model/providers/protocols/internal/openaiclient"
 	sdk "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/packages/ssestream"
 	"github.com/openai/openai-go/v3/responses"
 )
 
@@ -20,9 +20,16 @@ func adaptAPIError(err error) error {
 	if errors.As(err, &providerError) {
 		return err
 	}
+	// The SDK reports an in-stream error event as its own type after a 200
+	// response, so the status needed for retry classification must come from
+	// the event payload instead of the vendor error.
+	var streamError *ssestream.StreamError
+	if errors.As(err, &streamError) {
+		return providers.NewStreamAPIError(streamError, streamError.Event.Data)
+	}
 	var sdkError *sdk.Error
 	if !errors.As(err, &sdkError) {
-		return openaiclient.AdaptStreamError(err)
+		return err
 	}
 	requestID := ""
 	if sdkError.Response != nil {

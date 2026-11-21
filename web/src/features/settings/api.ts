@@ -1,4 +1,5 @@
 import { APIError, fetchAPI, jsonHeaders, parseSSEStream, readErrorMessage, requestJSON } from '@/lib/api-client'
+import { desktopBridge } from '@/lib/desktop'
 import type { ComfyUIWorkflowCatalog, ComfyUIWorkflowSnapshot, ImageAPIEndpointSettings, ImageAPIProfileSettings, ImagePingResult, LayeredSettings, ModelCatalog, ModelDiscoveryResult, ModelEndpointSettings, ModelPingResult, ModelProfileSettings, SettingsLayer, UpdateStatus, UpdateApplyResult, UpdateCheckResult, UpdateInstallResult } from './types'
 import type { SSEEvent } from '@/lib/api-client'
 import { projectAPIPath } from '@/lib/api-client/project-scope'
@@ -7,7 +8,7 @@ import { GLOBAL_SETTINGS_TARGET, projectSettingsTarget, settingsQueryKeys, setti
 import type { SettingsTarget } from './query'
 import { SettingsSaveError, settingsSaveFiles } from './save-error'
 import type { SettingsPatch } from './merge-patch'
-import type { WebAccessSettings, WebSearchTestResult } from './types'
+import type { UpdateNotesRange, UpdateNotesResult, WebAccessSettings, WebSearchTestResult } from './types'
 
 export function testWebSearch(settings: WebAccessSettings, query: string, signal: AbortSignal): Promise<WebSearchTestResult> {
   return requestJSON('/api/settings/web-search/test', {
@@ -130,6 +131,12 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
   return requestJSON('/api/update/check')
 }
 
+export function getUpdateNotes(range: UpdateNotesRange, signal?: AbortSignal): Promise<UpdateNotesResult> {
+  const query = new URLSearchParams({ to: range.toVersion })
+  if (range.fromVersion) query.set('from', range.fromVersion)
+  return requestJSON(`/api/update/notes?${query}`, { signal })
+}
+
 export async function installUpdateStream(signal?: AbortSignal): Promise<ReadableStream<SSEEvent>> {
   const res = await fetchAPI('/api/update/install/stream', { method: 'POST', signal })
   if (!res.ok) throw new Error(await readErrorMessage(res))
@@ -203,5 +210,6 @@ export function loadComfyUIWorkflow(endpoint: ImageAPIEndpointSettings, profile:
 }
 
 export function getUpdateStatus(signal?: AbortSignal): Promise<UpdateStatus> {
+  if (desktopBridge()) return desktopBridge()!.updates.status()
   return requestJSON('/api/update/status', { signal, cache: 'no-store' })
 }

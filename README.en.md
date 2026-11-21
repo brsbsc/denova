@@ -64,7 +64,7 @@ Start a new book from an idea, import an existing novel to continue writing, or 
 ## Core Features
 
 - **Novel writing**: Markdown document and source editing, multiple tabs, find and replace, outlines and chapter plans, progress tracking, inline comments, change review, and novel import.
-- **Creative Agents**: choose Native, Codex, or Claude Code to work with selections, project files, images, and lore, with multiple conversations, SubAgent collaboration, and task pause/resume.
+- **Creative Agents**: choose Native, Codex, Claude Code, Grok Build, or Antigravity CLI to work with selections, project files, and lore, with multiple conversations and task pause/resume. Image, SubAgent, and Goal capabilities depend on the runtime; see [CLI runtimes](docs/cli-runtimes.md).
 - **Interactive games**: advance stories through player input, with branches, storyline switching, action suggestions, character and world state, rule checks, story planning, and read-aloud. Stage scenes with Lore backgrounds and character sprites, with presentation saved along story branches.
 - **Lore**: organize settings with custom categories, document-style indexes, @ references, and backlinks; find text mentions in project files and a selected story branch, provide grouped context to Writing and Game Agents, and manage multiple images, audio, and covers for each entry.
 - **Creative Setups and Skills**: reuse narrative styles, image styles, rules, and other creative configurations; extend Agent workflows with Skills, including a built-in novel-writing Skill for premises, outlines, scenes, and revision.
@@ -142,15 +142,45 @@ See [Container publishing](docs/container-publishing.en.md) for how the image is
 
 ### Install a Release
 
-macOS / Linux users can run the installer:
+**Denova Desktop (recommended)**: install it and open the app.
+
+| System | Download |
+| --- | --- |
+| macOS Apple Silicon | [Download notarized DMG](https://github.com/alfredxw/denova/releases/download/macos-notarized-v0.8.0/denova-desktop-v0.8.0-macos-arm64.dmg) |
+| Windows x64 | [Download EXE installer](https://github.com/alfredxw/denova/releases/download/v0.8.0/denova-desktop-v0.8.0-windows-x64-setup.exe) |
+
+macOS: open the DMG and drag Denova into Applications. Windows: run the installer. Desktop does not provide macOS Intel or Linux builds. See the [desktop build guide](docs/desktop-distribution.md) to package from source.
+
+macOS requires version 13 or later. Windows 11 and most Windows 10 devices already have WebView2; only devices without it need to install the [Microsoft WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download).
+
+Desktop v0.7.0 and v0.7.1 need one manual installation of this version to switch update feeds; v0.7.2 can update automatically. If an older version cannot start, install this version and select your existing data folder. WebUI v0.7.1 and later can still update automatically.
+
+The macOS DMG linked above is signed with Apple Developer ID and notarized by Apple. The Windows installer is unsigned and may show a security prompt on first launch. Desktop auto-updates still verify their own package signatures.
+
+<details>
+<summary>Denova WebUI · Browser interface</summary>
+
+Run the downloaded program on your computer or server, then open its address in a browser. WebUI is a downloadable application, not a hosted website.
+
+| System | Download |
+| --- | --- |
+| macOS Apple Silicon | [tar.gz](https://github.com/alfredxw/denova/releases/download/v0.8.0/denova-webui-v0.8.0-macos-arm64.tar.gz) |
+| macOS Intel | [tar.gz](https://github.com/alfredxw/denova/releases/download/v0.8.0/denova-webui-v0.8.0-macos-x64.tar.gz) |
+| Windows x64 | [zip](https://github.com/alfredxw/denova/releases/download/v0.8.0/denova-webui-v0.8.0-windows-x64.zip) |
+| Linux x64 | [tar.gz](https://github.com/alfredxw/denova/releases/download/v0.8.0/denova-webui-v0.8.0-linux-x64.tar.gz) |
+| Linux ARM64 | [tar.gz](https://github.com/alfredxw/denova/releases/download/v0.8.0/denova-webui-v0.8.0-linux-arm64.tar.gz) |
+
+On macOS and Linux, run the installer:
 
 ```bash
-curl -fsSL https://github.com/BRSBSC/denova/releases/download/v0.6.3/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/BRSBSC/denova/v0.6.3/scripts/install.sh | sh
 ```
 
 Run `denova` after installation. Windows users and anyone who prefers manual installation can download the archive for their platform from [GitHub Releases](https://github.com/BRSBSC/denova/releases); on Windows, run `denova.exe`.
 
-For stable use, choose a Release. The `master` branch may contain unreleased changes.
+</details>
+
+For stable use, choose a [Release](https://github.com/alfredxw/denova/releases/latest). The `master` branch may contain unreleased changes.
 
 ### First Run
 
@@ -194,7 +224,7 @@ For public or domain-based deployments, put Denova behind an HTTPS reverse proxy
 
 ## Usage statistics
 
-Release builds explain usage statistics on first use. Collection is enabled by default and starts only after the notice is acknowledged. Turn it off anytime under **Settings → General**. Only fixed activity, feature reach, retention, version, platform, execution outcome and duration in milliseconds are sent to Umami Cloud, without creative text, prompts, AI replies, images, project names, file paths or keys. A random local ID links return visits; the cloud receives the connection IP. Source and development builds do not send statistics. See the [metric and field definitions](./docs/analytics.md).
+Release builds explain usage statistics on first use. Collection is enabled by default and starts only after the notice is acknowledged. Turn it off anytime under **Settings → General**. PostHog receives fixed activity, feature usage, retention, version, platform, execution outcome, duration in milliseconds, error category, HTTP status, and theme/language changes, without creative text, prompts, AI replies, images, project names, file paths, keys or raw error text. A random local ID links return visits; the cloud receives the connection IP. Source and development builds do not send statistics. See the [metric and field definitions](./docs/analytics.md).
 
 ## Development
 

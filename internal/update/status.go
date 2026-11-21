@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"denova/internal/buildinfo"
+
 	"github.com/gofrs/flock"
 )
 
@@ -29,26 +31,36 @@ const (
 
 // Status is the stable UI boundary; internal filesystem transaction fields stay private.
 type Status struct {
-	Check          *CheckResult     `json:"check,omitempty"`
-	CheckedAt      time.Time        `json:"checked_at,omitempty"`
-	Operation      string           `json:"operation,omitempty"`
-	Progress       *InstallProgress `json:"progress,omitempty"`
-	OperationError string           `json:"operation_error,omitempty"`
-	RestartWaiting bool             `json:"restart_waiting,omitempty"`
-	Busy           bool             `json:"busy,omitempty"`
-	CurrentVersion string           `json:"current_version"`
-	ID             string           `json:"id,omitempty"`
-	Version        string           `json:"version,omitempty"`
-	Phase          Phase            `json:"phase"`
-	Error          string           `json:"error,omitempty"`
-	LogPath        string           `json:"log_path,omitempty"`
+	Distribution    string           `json:"distribution"`
+	CompletedUpdate *CompletedUpdate `json:"completed_update,omitempty"`
+	Check           *CheckResult     `json:"check,omitempty"`
+	CheckedAt       time.Time        `json:"checked_at,omitempty"`
+	Operation       string           `json:"operation,omitempty"`
+	Progress        *InstallProgress `json:"progress,omitempty"`
+	OperationError  string           `json:"operation_error,omitempty"`
+	RestartWaiting  bool             `json:"restart_waiting,omitempty"`
+	Busy            bool             `json:"busy,omitempty"`
+	CurrentVersion  string           `json:"current_version"`
+	ID              string           `json:"id,omitempty"`
+	Version         string           `json:"version,omitempty"`
+	Phase           Phase            `json:"phase"`
+	Error           string           `json:"error,omitempty"`
+	LogPath         string           `json:"log_path,omitempty"`
 	// ReleasesURL is where this build's releases are published. A fork build
 	// links to its own packages, never to the upstream ones.
 	ReleasesURL string `json:"releases_url"`
 }
 
 func (s *Service) Status() (Status, error) {
-	status := Status{CurrentVersion: s.currentVersion, ReleasesURL: "https://github.com/" + s.repository + "/releases/latest", Phase: "idle"}
+	status := Status{CurrentVersion: s.currentVersion, ReleasesURL: "https://github.com/" + s.repository + "/releases/latest", Phase: "idle", Distribution: buildinfo.Distribution}
+	if buildinfo.Distribution == "desktop" {
+		return status, nil
+	}
+	completed, err := s.CompletedUpdate()
+	if err != nil {
+		return status, err
+	}
+	status.CompletedUpdate = completed
 	s.mu.Lock()
 	status.Check, status.CheckedAt = s.check, s.checkedAt
 	status.Operation, status.Progress, status.OperationError = s.operation, s.progress, s.operationError

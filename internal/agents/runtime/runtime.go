@@ -23,9 +23,17 @@ func (engines *Engines) ExternalRuntime(cfg config.Config) *external.Runtime {
 			encoded, _ := json.Marshal(model)
 			digest := sha256.Sum256(encoded)
 			connectionKey = hex.EncodeToString(digest[:])
+			if selection.Kind == config.RuntimeCodex {
+				// Older cached Codex API threads reference a process-local provider ID.
+				connectionKey = "codex-api-v2:" + connectionKey
+			}
 		}
 	}
 	return &external.Runtime{Selection: selection, ConnectionKey: connectionKey, Acquire: func(ctx context.Context) (external.Adapter, func(), error) {
-		return engines.Acquire(ctx, selection, cfg)
+		adapter, release, err := engines.Acquire(ctx, selection, cfg)
+		if err == nil {
+			adapter = observeAdapter(adapter, cfg, selection)
+		}
+		return adapter, release, err
 	}}
 }

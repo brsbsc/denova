@@ -40,6 +40,7 @@ type Operation struct {
 	mutations       []agenttool.Mutation
 	usage           *agentschema.TokenUsage
 	output          strings.Builder
+	committedOutput int // prefix persisted with accepted guidance
 }
 
 func (operation *Operation) Receipt() agentrun.CommandReceipt { return operation.receipt }
@@ -119,6 +120,9 @@ func (operation *Operation) Wait(ctx context.Context) agentrun.Outcome {
 		if (runErr != nil || ctx.Err() != nil) && operation.output.Len() > 0 {
 			result.Text = operation.output.String()
 		}
+		if operation.committedOutput > 0 {
+			result.Text = operation.output.String()[operation.committedOutput:]
+		}
 		operation.mu.Unlock()
 		cancel()
 		operation.workers.Wait()
@@ -167,11 +171,12 @@ func (operation *Operation) Wait(ctx context.Context) agentrun.Outcome {
 		case agentrun.OutcomeAborted:
 			operation.send(agentrun.NewAbortedEvent(agentrun.AbortReasonUserRequested))
 		case agentrun.OutcomeFailed:
-			operation.send(agentrun.Event{Type: "error", Data: map[string]any{"error_key": "agentRuntime.operationFailed", "message": i18n.New(operation.request.Locale).T("agentRuntime.operationFailed"), "details": map[string]any{"detail": observability.ErrorCause(operation.outcome.Error)}, "run_id": operation.id}})
+			key := FailureKey(operation.outcome.Error)
+			operation.send(agentrun.Event{Type: "error", Data: map[string]any{"error_key": key, "message": i18n.New(operation.request.Locale).T(key), "details": map[string]any{"detail": observability.ErrorCause(operation.outcome.Error)}, "run_id": operation.id}})
 		case agentrun.OutcomeSuspended:
 			operation.send(agentrun.Event{Type: "error", Data: map[string]any{"error_key": "agentRuntime.interrupted", "message": i18n.New(operation.request.Locale).T("agentRuntime.interrupted"), "details": map[string]any{"detail": observability.ErrorCause(operation.outcome.Error)}, "run_id": operation.id}})
 		}
-		if runtimeSession != nil && (settled == externaljournal.Completed || (settled == externaljournal.Interrupted && result.Settled)) {
+		if runtimeSession != nil && (settled == externaljournal.Completed || result.Settled) {
 			err := operation.request.Session.ReadExternal(context.WithoutCancel(ctx), func(state session.ExternalState) error {
 				return runtimeSession.Accept(ctx, fmt.Sprint(state.ContextRevision))
 			})
@@ -188,6 +193,9 @@ func (operation *Operation) Emit(event agentrun.Event) error {
 	defer operation.mu.Unlock()
 	if operation.closed {
 		return errors.New("external operation is closed")
+	}
+	if event.Type == "native_tool" {
+		return operation.observeNative(event)
 	}
 	// The adapter's terminal notifications never acknowledge a product commit.
 	if event.Type != "chunk" && event.Type != "thinking" && event.Type != "context_compaction" && event.Type != "todo_updated" {

@@ -43,6 +43,7 @@ import {
 import { PRESET_RESOURCE_SCOPE, type PresetResourceKind } from '../../preset-ownership'
 import type { ActorStateModule, EventPackageModule, GamePlanningTemplate, ImagePreset, RuleSystemModule, Teller } from '../../types'
 import { PresetResourcePane } from './PresetResourcePane'
+import { imagePresetDraftIsValid } from './ImagePresetEditor'
 import { PresetDirectorySidebar } from './PresetDirectorySidebar'
 import { buildPresetDirectorySections, presetDirectoryEntryId } from './preset-directory-sections'
 import { applyResourceDirectoryOrder, useResourceDirectoryOrder } from '@/components/resource-directory/use-resource-directory-order'
@@ -51,6 +52,8 @@ import { usePresetSelection } from './use-preset-selection'
 import { createPresetConflictResolver, usePresetResourceAutosave } from './usePresetResourceAutosave'
 import { currentPresetBuiltinOverridden, EMPTY_IMAGE_PRESETS, EMPTY_STORY_DIRECTORS, EMPTY_TELLERS, isPresetConfigResourceKind, makeActorStatePayload, makeEventPackagePayload, makeImagePresetPayload, makeRuleSystemPayload, makeStoryDirectorPayload, makeTellerPayload, newActorStateDraft, newEventPackageDraft, newImagePresetDraft, newRuleSystemDraft, newStoryDirectorDraft, newTellerDraft, presetEditorSubtitle, presetEditorTitle, presetResourceDraftSignature, PRESET_DELETE_COPY, type PresetDeleteTarget } from './presetResources'
 import type { ToolNavigationIntent } from '@/components/Chat/tool-navigation'
+import { NarrativePresetImportDialog } from './NarrativePresetImportDialog'
+import type { NarrativeImportTask } from '../../narrative-preset-import'
 
 interface PresetSettingsPanelProps {
   projectId: string
@@ -95,6 +98,9 @@ export function PresetSettingsPanel({
   const [presetConfigValid, setPresetConfigValid] = useState(true)
   const presetConfigValidRef = useRef(true)
   const closeDirectoryRef = useRef<() => void>(() => {})
+  const [importOpen, setImportOpen] = useState(false)
+  const [importTask, setImportTask] = useState<NarrativeImportTask | null>(null)
+  const importedStyleID = useRef('')
 
   const [presetResourceKind, setPresetResourceKind] = useState<PresetResourceKind>('teller')
 
@@ -222,10 +228,13 @@ export function PresetSettingsPanel({
     },
   })
 
+  const imagePresetDraftValid = imagePresetDraftIsValid(imagePresetDraft)
+
   const imagePresetAutosave = usePresetResourceAutosave<ImagePreset, Partial<ImagePreset>, ImagePreset>({
     draft: imagePresetDraft,
     scopeKey: PRESET_RESOURCE_SCOPE,
     active: presetResourceKind === 'image',
+    valid: imagePresetDraftValid,
     makePayload: makeImagePresetPayload,
     baselineFromSaved: (saved) => saved,
     signature: presetResourceDraftSignature,
@@ -335,9 +344,24 @@ export function PresetSettingsPanel({
     })
   }
 
-  const canLeavePresetResource = () => {
-    if (isPresetConfigResourceKind(presetResourceKind) && !presetConfigValidRef.current) {
+  const presetDraftNeedsFix = () => presetResourceKind === 'image'
+    ? !imagePresetDraftValid
+    : isPresetConfigResourceKind(presetResourceKind) && !presetConfigValidRef.current
+
+  const showInvalidPresetDraftNotice = () => {
+    if (presetResourceKind !== 'image') {
       showInvalidPresetConfigNotice()
+      return
+    }
+    toast.error(t('settingPanel.imagePreset.invalidTitle'), {
+      id: PRESET_CONFIG_INVALID_TOAST_ID,
+      description: t('settingPanel.imagePreset.invalidDescription'),
+    })
+  }
+
+  const canLeavePresetResource = () => {
+    if (presetDraftNeedsFix()) {
+      showInvalidPresetDraftNotice()
       return false
     }
     return true
@@ -398,6 +422,26 @@ export function PresetSettingsPanel({
     closeDirectory: () => closeDirectoryRef.current(),
   })
   const toolNavigationNonceRef = useRef(0)
+  useEffect(() => {
+    const id = importedStyleID.current
+    const imported = tellers.find(item => item.id === id)
+    if (!id || !imported || imported.invalid) return
+    // Both import paths refresh the persisted catalog before opening the result,
+    // preserving any current editor's pending save.
+    importedStyleID.current = ''
+    void handleSelectTeller(id)
+    setAgentOpen(false)
+    toast.success(t('narrativeStyle.import.saved', { name: imported.name }))
+  }, [tellers])
+
+  function startNarrativeImport(task: NarrativeImportTask) {
+    importedStyleID.current = task.id
+    setImportTask(task)
+    setImportOpen(false)
+    setAgentOpen(true)
+    console.info('[narrative-preset-import] Starting configuration task', { id: task.id })
+  }
+
   useEffect(() => {
     const intent = toolNavigationIntent
     if (!intent || intent.nonce === toolNavigationNonceRef.current || intent.target.kind !== 'config_resource') return
@@ -558,8 +602,8 @@ export function PresetSettingsPanel({
   }
 
   const flushActivePresetAutosave = async () => {
-    if (isPresetConfigResourceKind(presetResourceKind) && !presetConfigValidRef.current) {
-      showInvalidPresetConfigNotice()
+    if (presetDraftNeedsFix()) {
+      showInvalidPresetDraftNotice()
       return
     }
     await runPresetMutation('[preset-settings] Failed to save preset', t('editor.saveFailed'), async () => {
@@ -607,6 +651,7 @@ export function PresetSettingsPanel({
       activeId={activeDirectoryId}
       activeSectionId={presetResourceKind}
       saving={busy}
+      onImportNarrativeStyle={() => { void (async () => { if (await flushPresetResourceAutoSave()) setImportOpen(true) })() }}
       onSelect={handleSelectDirectoryEntry}
       onReorderItems={(sectionId, orderedItemIds) => {
         const kind = sectionId as PresetResourceKind
@@ -640,6 +685,10 @@ export function PresetSettingsPanel({
               projectId={projectId}
               origin="teller"
               resourceId={presetResourceKind}
+              initialInstruction={importTask?.instruction}
+              initialInstructionKey={importTask?.id}
+              initialInstructionDisplayMessage={importTask?.displayMessage}
+              onInitialInstructionAccepted={() => setImportTask(null)}
               context={{
                 active_resource_kind: presetResourceKind,
                 active_resource_id: currentActivePresetId(presetResourceKind),
@@ -750,6 +799,11 @@ export function PresetSettingsPanel({
           )
         }}
       </ResourceWorkspace>
+      {importOpen && <NarrativePresetImportDialog onClose={() => setImportOpen(false)} onConvert={startNarrativeImport} onImported={id => {
+        importedStyleID.current = id
+        setImportOpen(false)
+        void refreshTellers().catch(error => reportPresetError('[narrative-preset-import] Failed to refresh saved style', t('narrativeStyle.import.error.refreshFailed'), error))
+      }} />}
       <ConfirmDialog
         open={Boolean(deletePresetTarget)}
         onOpenChange={(open) => {

@@ -532,7 +532,29 @@ export interface BookCoverResult {
   size_bytes?: number
 }
 
+export type ChapterStructure = 'chapters' | 'volumes' | 'sections'
+
+export interface ManuscriptNode {
+  index?: number
+  path: string
+  title: string
+  directory: boolean
+  children?: ManuscriptNode[]
+}
+
+export interface StructurePreview {
+  from: ChapterStructure
+  to: ChapterStructure
+  revision: string
+  before: ManuscriptNode[]
+  after: ManuscriptNode[]
+  merged_chapters: number
+  files_before: number
+  files_after: number
+}
+
 export interface ChapterSummary {
+  ancestors?: ManuscriptNode[]
   path: string
   file_name: string
   display_title: string
@@ -554,6 +576,8 @@ export interface DocumentPreview {
 }
 
 export interface WorkspaceSummary {
+  structure?: ChapterStructure
+  manuscript?: ManuscriptNode[]
   title: string
   author: string
   chapter_count: number
@@ -604,6 +628,25 @@ export interface CharacterCardImportResult {
   classification_mode: LoreClassificationMode
   classification_counts: Partial<Record<LoreItem['type'], number>>
   uncertain_type_count: number
+  overridden?: string[]
+  skipped?: string[]
+  /** Same-name lore entries the import would replace; present when confirmation is still required. */
+  pending_overrides?: ImportDuplicatePreview[]
+  /** Held plan backing pending_overrides; the confirm request must reuse it. */
+  review_plan_id?: string
+  /** The confirmed preview no longer matches the target; review again before any replacement. */
+  review_changed?: boolean
+}
+
+export interface ImportDuplicatePreview {
+  name: string
+  existing_preview: string
+  incoming_preview: string
+  suggested: 'override' | 'keep'
+  /** Local lore entry identity the review is bound to. */
+  existing_id?: string
+  /** Local lore entry version at preview time; a confirmed override must match it. */
+  existing_version?: string
 }
 
 export interface CharacterCardPreview {
@@ -648,6 +691,7 @@ interface NovelImportChapter {
 }
 
 export interface NovelImportPreview {
+  structure?: ChapterStructure
   title: string
   language?: string
   chapter_filename_format?: string

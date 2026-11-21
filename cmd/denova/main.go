@@ -35,6 +35,13 @@ func main() {
 		fmt.Println(buildinfo.Version)
 		return
 	}
+	if buildinfo.Distribution == "desktop" {
+		if err := runDesktop(); err != nil {
+			fmt.Fprintf(os.Stderr, "Desktop backend failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	startupStarted := time.Now()
 	ctx := context.Background()
 	logPath, logOutput, closeLog := setupLogging("./log")
@@ -102,6 +109,12 @@ func main() {
 	}
 
 	cfg.SkillsDir = resolveSkillsDir(cfg.SkillsDir)
+	releaseData, err := acquireDataDirectory(cfg.DataDir())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Cannot open Denova data: %v\n", err)
+		os.Exit(1)
+	}
+	defer releaseData()
 
 	// 初始化应用运行时
 	finishStage = observability.StartStartupStage(ctx, "application")
@@ -162,6 +175,10 @@ func main() {
 		}
 	})
 	slog.InfoContext(ctx, "startup_prepared", "duration_ms", float64(time.Since(startupStarted))/float64(time.Millisecond))
+	// Resolve engine readiness in the background so the first model menu already
+	// shows real state. Probes are serialized and cached per engine, and a
+	// long-lived container only pays for this once per start.
+	runBackground("agent-runtime-warmup", func() { application.WarmUpAgentRuntimes(ctx) })
 	srv.Run()
 }
 
@@ -262,7 +279,8 @@ func defaultFrontendPort(cfg *config.Config) string {
 func reserveBackendListener(host, preferred string, autoPick bool) (net.Listener, string, error) {
 	listener, err := listenOnPort(host, preferred)
 	if err == nil {
-		return listener, preferred, nil
+		_, actualPort, _ := net.SplitHostPort(listener.Addr().String())
+		return listener, actualPort, nil
 	}
 	if !autoPick {
 		return nil, preferred, err

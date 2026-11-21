@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"denova/internal/book/lore"
 	"denova/internal/revisionfile"
@@ -227,17 +228,57 @@ func (s *Service) stageLoreCollection(ctx context.Context, previewDir string, re
 	for _, member := range binding.Members {
 		reserved = append(reserved, lore.Item{ID: member.ID})
 	}
+	// Snapshot existing names before the merge loop so detail-aware duplicate
+	// resolution never matches an incoming item appended earlier in the loop.
+	existingByName := make(map[string]lore.Item, len(collection.Items))
+	for _, item := range collection.Items {
+		if key := lore.NameKey(item.Name); key != "" {
+			existingByName[key] = item
+		}
+	}
 	applied := map[string]bool{}
 	// Merge by receipt identity, never by name. Missing upstream items remain local.
 	for i := range incoming {
 		sourceID := incoming[i].ID
 		member, found := binding.Members[sourceID]
 		if !found {
-			member.ID, err = lore.NewItemID(reserved, incoming[i].Name)
-			if err != nil {
-				return err
+			reviewed, wasReviewed := review.confirmDuplicate(incoming[i].Name)
+			if existing, ok := existingByName[lore.NameKey(incoming[i].Name)]; ok && review.overrideByDetail {
+				duplicate := ImportDuplicate{
+					Name:            incoming[i].Name,
+					ExistingPreview: duplicatePreview(existing),
+					IncomingPreview: duplicatePreview(incoming[i]),
+					Suggested:       overrideResolution(moreDetailed(incoming[i], existing)),
+					ExistingID:      existing.ID,
+					ExistingVersion: loreDigest(existing),
+				}
+				review.duplicates = append(review.duplicates, duplicate)
+				switch {
+				case review.confirm == nil:
+					continue
+				case !wasReviewed || review.confirm.Choices[incoming[i].Name] == "":
+					review.unreviewed = append(review.unreviewed, incoming[i].Name)
+					continue
+				case reviewed.ExistingID != duplicate.ExistingID || reviewed.ExistingVersion != duplicate.ExistingVersion:
+					review.changed = append(review.changed, incoming[i].Name)
+					continue
+				case review.confirm.Choices[incoming[i].Name] != "override":
+					review.skipped = append(review.skipped, incoming[i].Name)
+					continue
+				}
+				review.overrides = append(review.overrides, incoming[i].Name)
+				member.ID = existing.ID
+			} else {
+				if wasReviewed {
+					review.changed = append(review.changed, incoming[i].Name)
+					continue
+				}
+				member.ID, err = lore.NewItemID(reserved, incoming[i].Name)
+				if err != nil {
+					return err
+				}
+				reserved = append(reserved, lore.Item{ID: member.ID})
 			}
-			reserved = append(reserved, lore.Item{ID: member.ID})
 		}
 		var payload struct {
 			Materials *portableMaterials `json:"materials"`
@@ -430,4 +471,51 @@ func remapLoreIndexItemOrder(orders map[string][]string, ids map[string]string) 
 		}
 	}
 	return result
+}
+
+// detailFields reports the detail measure of a lore item: the non-empty field
+// count recorded by the importer, falling back to 1 for any item with content
+// so hand-written or legacy entries still compare sensibly.
+func detailFields(item lore.Item) int {
+	if item.DetailFields > 0 {
+		return item.DetailFields
+	}
+	if strings.TrimSpace(item.Content) != "" {
+		return 1
+	}
+	return 0
+}
+
+// moreDetailed reports whether a carries a richer setting than b: more populated
+// detail fields win first, then a longer body. Equality is not "more detailed".
+func moreDetailed(a, b lore.Item) bool {
+	af, bf := detailFields(a), detailFields(b)
+	if af != bf {
+		return af > bf
+	}
+	return utf8.RuneCountInString(a.Content) > utf8.RuneCountInString(b.Content)
+}
+
+// overrideResolution renders a duplicate decision as the explicit choice value.
+func overrideResolution(override bool) string {
+	if override {
+		return "override"
+	}
+	return "keep"
+}
+
+// duplicatePreview renders a short human-readable digest of a lore entry for
+// duplicate confirmation: the populated detail count plus a truncated body.
+func duplicatePreview(item lore.Item) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d field(s)", detailFields(item))
+	if text := strings.TrimSpace(item.Content); text != "" {
+		runes := []rune(text)
+		if len(runes) > 80 {
+			text = string(runes[:80]) + "…"
+		}
+		b.WriteString(" · ")
+		b.WriteString(text)
+	}
+	return b.String()
 }

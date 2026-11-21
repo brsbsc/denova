@@ -1,5 +1,6 @@
-import { queryOptions } from '@tanstack/react-query'
+import { queryOptions, useQuery } from '@tanstack/react-query'
 import { jsonHeaders, requestJSON } from '@/lib/api-client/client'
+import { queryClient } from '@/lib/query-client'
 
 export interface RemoteAccessStatus {
   local: boolean
@@ -34,6 +35,16 @@ export const remoteAccessQuery = queryOptions({
     return requestJSON('/api/auth/pair', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ token }) })
   },
 })
+
+/** Reuse the access check completed by RemoteAccessGate before mounting the workbench. */
+export function useLocalAccess() {
+  return useQuery(remoteAccessQuery).data?.local === true
+}
+
+/** Synchronous form for request guards outside React render scope. */
+export function remoteAccessIsLocal(): boolean {
+  return queryClient.getQueryData<RemoteAccessStatus>(remoteAccessQuery.queryKey)?.local === true
+}
 
 export function loginRemoteAccess(username: string, password: string): Promise<RemoteAccessStatus> {
   return requestJSON('/api/auth/login', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ username, password }) })

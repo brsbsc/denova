@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { GLOBAL_SETTINGS_TARGET, settingsQueryOptions } from '@/features/settings/query'
 import type { CSSProperties, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { arrayMove } from '@dnd-kit/sortable'
 import { MobileWritingWorkspace } from './MobileWritingWorkspace'
-import { BookOpen, Bot, Clock3, Database, Gamepad2, History, Package, PanelLeft, PenLine, Route, Search, Settings, SlidersHorizontal, Sparkles, Terminal } from 'lucide-react'
+import { BarChart3, BookOpen, Bot, Clock3, Database, Gamepad2, History, Package, PanelLeft, PenLine, Route, Search, Settings, SlidersHorizontal, Sparkles, Terminal } from 'lucide-react'
 import { WorkspaceLayout } from '@/components/layout/workspace-layout'
 import { WorkspaceMobileLayout, type MobileNavItem } from '@/components/layout/workspace-mobile-layout'
 import { createStablePortalHost, StablePortalSlot } from '@/components/layout/stable-portal-slot'
@@ -13,12 +15,15 @@ import { closeMobilePanes } from '@/components/layout/mobile-pane-events'
 import { Button } from '@/components/ui/button'
 import { SidebarProvider } from '@/components/ui/sidebar'
 import { MessageCenterButton } from '@/features/messages/MessageCenter'
+import { requestUpdateNotes } from '@/features/settings/update-events'
 import type { AutomationMessageNavigation } from '@/features/messages/types'
 import { requestAutomationNavigation } from '@/features/automations/automation-navigation'
 import { setActivityMessageUnreadCount, useActivitySummary } from '@/features/activity/use-activity-summary'
 import { usePluginPages } from '@/features/platform/use-plugin-pages'
 import { localized } from '@/features/platform/api'
 import { useIsMobile } from '@/hooks/useIsMobile'
+import { desktopBridge } from '@/lib/desktop'
+import { cn } from '@/lib/utils'
 import type { BookRecord, WorkspaceSummary } from '@/lib/api'
 import { useWorkspaceStore, type WorkspaceMode } from '@/stores/workspace-store'
 import type { InteractiveSubmode } from '@/features/interactive/types'
@@ -80,7 +85,7 @@ export function WorkbenchShell({
   books,
   summary,
   projectVisible,
-  activityBarExpanded,
+  activityBarExpanded: storedActivityBarExpanded,
   settingsOpen,
   developerMode = false,
   sidebar,
@@ -101,10 +106,14 @@ export function WorkbenchShell({
   const { t, i18n } = useTranslation()
   const isMobile = useIsMobile()
   const pluginPages = usePluginPages()
+  const settings = useQuery(settingsQueryOptions(GLOBAL_SETTINGS_TARGET))
+  const statisticsEnabled = settings.data?.effective.statistics_enabled !== false
   const setCommandOpen = useWorkspaceStore((state) => state.setCommandOpen)
   const [activityOrders, setActivityOrders] = useState<Record<ActivityOrderScope, ActivityItemID[]>>(readStoredActivityOrders)
   const [hiddenActivityIDs, setHiddenActivityIDs] = useState<ActivityItemID[]>(readStoredHiddenActivityIDs)
-  const activityBarSizing = useActivityBarWidth(activityBarExpanded && !isMobile)
+  const activityBarSizing = useActivityBarWidth({ enabled: !isMobile, expanded: storedActivityBarExpanded, onToggle: onToggleActivityBarExpanded })
+  const activityBarExpanded = activityBarSizing.expanded
+  const compactDesktopNavigation = !activityBarExpanded && Boolean(desktopBridge())
   const activitySummary = useActivitySummary().data
   const messageUnread = activitySummary?.message_unread_count ?? 0
   const automationInboxUnread = activitySummary?.automation_inbox_unread_count ?? 0
@@ -222,7 +231,8 @@ export function WorkbenchShell({
   ]
 
   const sharedActivityItems: ActivityItem[] = [
-    { id: 'market', label: t('market.title'), onClick: () => openRoute('market'), active: mode === 'market' && !settingsOpen, icon: <Package className="size-4" /> },
+    { id: 'statistics', label: t('workbench.activity.statistics'), onClick: () => openRoute('statistics'), active: mode === 'statistics' && !settingsOpen, icon: <BarChart3 className="size-4" /> },
+    { id: 'market', label: t('workbench.activity.market'), onClick: () => openRoute('market'), active: mode === 'market' && !settingsOpen, icon: <Package className="size-4" /> },
     {
       id: 'agentchat',
       label: t('workbench.activity.agentchat'),
@@ -277,9 +287,9 @@ export function WorkbenchShell({
   const allActivityItems = useMemo(
     () => sortActivityItems([
       ...creationActivityItems,
-      ...sharedActivityItems,
+      ...sharedActivityItems.filter(item => item.id !== 'statistics' || statisticsEnabled),
     ], activityOrder, defaultActivityOrderForScope(activityOrderScope)),
-    [pluginPages.data, i18n.language, activityOrder, activityOrderScope, agentChatActive, agentsActive, automationInboxUnread, automationRunning, automationsActive, developerMode, ideModeActive, interactiveModeActive, loreActive, mode, presetsActive, settingsOpen, skillsActive, t, trajectoryActive, versionsActive],
+    [pluginPages.data, i18n.language, activityOrder, activityOrderScope, agentChatActive, agentsActive, automationInboxUnread, automationRunning, automationsActive, developerMode, ideModeActive, interactiveModeActive, loreActive, mode, presetsActive, settingsOpen, skillsActive, statisticsEnabled, t, trajectoryActive, versionsActive],
   )
   const effectiveHiddenActivityIDs = useMemo(() => {
     const hasVisibleItem = allActivityItems.some((item) => !hiddenActivityIDs.includes(item.id))
@@ -356,10 +366,10 @@ export function WorkbenchShell({
         <BookSwitcher
           books={books}
           currentBookName={currentBookName}
-          currentChapterCount={summary?.chapter_count}
+          currentStructure={summary?.structure} currentChapterCount={summary?.chapter_count}
           currentWordCount={summary?.total_words}
           workspace={workspace}
-          iconOnly={!activityBarExpanded}
+          iconOnly={!activityBarExpanded && !compactDesktopNavigation}
           onSwitchBook={onQuickSwitchBook}
           onManageBooks={manageBooks}
         />
@@ -368,14 +378,14 @@ export function WorkbenchShell({
         <WorkbenchNoticePill
           expanded={activityBarExpanded}
           notice={notice}
-          onOpenSettings={onToggleSettings}
+          onOpenUpdate={() => { if (notice?.kind === 'update') requestUpdateNotes({ fromVersion: notice.currentVersion, toVersion: notice.latestVersion }) }}
           onDismiss={onDismissNotice}
         />
       ) : undefined}
       messageCenter={(
         <MessageCenterButton
-          className={activityBarExpanded ? '' : '!h-9 !w-8 !min-w-8'}
-          showLabel={activityBarExpanded}
+          className={cn('nova-activity-message-button', compactDesktopNavigation ? 'h-12! w-full! min-w-0!' : !activityBarExpanded && 'h-9! w-8! min-w-8!')}
+          showLabel={activityBarExpanded || compactDesktopNavigation}
           unreadCount={messageUnread}
           onUnreadCountChange={setActivityMessageUnreadCount}
           onOpenAutomation={openAutomationNotification}
@@ -386,7 +396,6 @@ export function WorkbenchShell({
       settingsActive={settingsOpen}
       toggleLabel={activityBarExpanded ? t('workbench.activity.toggleCollapse') : t('workbench.activity.toggleExpand')}
       resizeLabel={t('layout.resize.activityBar')}
-      minWidth={activityBarSizing.minWidth}
       maxWidth={activityBarSizing.maxWidth}
       currentWidth={activityBarSizing.width}
       onOpenSettings={onToggleSettings}
@@ -420,7 +429,7 @@ export function WorkbenchShell({
           <span className="nova-mobile-section-label">{t('workbench.mobile.currentBook')}</span>
           <BookSwitcher
             books={books} currentBookName={currentBookName}
-            currentChapterCount={summary?.chapter_count} currentWordCount={summary?.total_words}
+            currentStructure={summary?.structure} currentChapterCount={summary?.chapter_count} currentWordCount={summary?.total_words}
             workspace={workspace} compact
             onSwitchBook={async (path) => { const switched = await onQuickSwitchBook(path); if (switched) closeMobilePanes(); return switched }}
             onManageBooks={() => { closeMobilePanes(); manageBooks() }}
@@ -432,7 +441,7 @@ export function WorkbenchShell({
           </Button>
           <MessageCenterButton showLabel className="!min-h-11 !w-full justify-center" unreadCount={messageUnread} onUnreadCountChange={setActivityMessageUnreadCount} onOpenAutomation={openAutomationNotification} />
         </div>
-        {notice && <WorkbenchNoticePill expanded notice={notice} starSecondaryText="description" onOpenSettings={() => { closeMobilePanes(); onToggleSettings() }} onDismiss={onDismissNotice} />}
+        {notice && <WorkbenchNoticePill expanded notice={notice} starSecondaryText="description" onOpenUpdate={() => { closeMobilePanes(); if (notice.kind === 'update') requestUpdateNotes({ fromVersion: notice.currentVersion, toVersion: notice.latestVersion }) }} onDismiss={onDismissNotice} />}
       </div>
     )
     const mobileActivityItems: MobileNavItem[] = allActivityItems
@@ -480,11 +489,10 @@ export function WorkbenchShell({
   return (
     <MobileWorkspaceHeaderProvider route={presentedLayout}>
       <SidebarProvider
-        ref={activityBarSizing.wrapperRef}
         open={activityBarExpanded}
         style={{
           '--sidebar-width': `${activityBarSizing.width}px`,
-          '--sidebar-width-icon': `${ACTIVITY_BAR_COLLAPSED_WIDTH}px`,
+          '--sidebar-width-icon': `var(--nova-desktop-navigation-width, ${ACTIVITY_BAR_COLLAPSED_WIDTH}px)`,
         } as CSSProperties}
       >
         <WorkspaceLayout

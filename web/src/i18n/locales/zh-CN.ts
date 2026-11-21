@@ -14,6 +14,7 @@ import sidebar from './zh-CN/sidebar'
 import tab from './zh-CN/tab'
 import command from './zh-CN/command'
 import home from './zh-CN/home'
+import bookStructure from './zh-CN/bookStructure'
 import importCard from './zh-CN/importCard'
 import novelImport from './zh-CN/novelImport'
 import router from './zh-CN/router'
@@ -46,6 +47,7 @@ import narrativeStyle from './zh-CN/narrativeStyle'
 import agentChat from './zh-CN/agentChat'
 import agentApproval from './zh-CN/agentApproval'
 import files from './zh-CN/files'
+import statistics from './zh-CN/statistics'
 import trajectory from './zh-CN/trajectory'
 
 const zhCN = {
@@ -65,6 +67,7 @@ const zhCN = {
   ...tab,
   ...command,
   ...home,
+  ...bookStructure,
   ...importCard,
   ...novelImport,
   ...router,
@@ -98,6 +101,7 @@ const zhCN = {
   ...agentApproval,
   ...files,
   ...trajectory,
+  ...statistics,
   'agents.tool.availability.runtimeCheck': '运行时检查',
 } as const
 

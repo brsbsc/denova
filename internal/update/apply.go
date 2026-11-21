@@ -9,9 +9,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	"denova/internal/buildinfo"
 )
 
 const applyRestartDelay = 500 * time.Millisecond
+const applyHandoffTimeout = 5 * time.Second
 
 type ApplyInvocation struct {
 	Executable string
@@ -96,6 +99,9 @@ func (s ApplyScheduler) Schedule(ctx context.Context) error {
 // Apply hands the observed staged transaction to the updater. expectedID must
 // match Status.ID; only an acknowledged handoff may trigger shutdown and exit.
 func (s *Service) Apply(ctx context.Context, shutdown func(), port int, expectedID string) (ApplyResult, error) {
+	if buildinfo.Distribution == "desktop" {
+		return ApplyResult{}, errors.New("desktop updates are managed by the desktop application")
+	}
 	if !updateOperation.TryLock() {
 		return ApplyResult{}, ErrUpdateBusy
 	}
@@ -157,10 +163,22 @@ func startApplyProcess(invocation ApplyInvocation) error {
 	if err := os.Remove(pathToManifest + ".accepted"); err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	manifest, err := readManifest(pathToManifest)
+	if err != nil {
+		return err
+	}
 	cmd := exec.Command(invocation.Executable, args...)
 	cmd.Env = invocation.Env
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// The updater outlives this launch terminal. Inherited stdout/stderr may be
+	// pipes whose reader is already gone, and a child's first write to such a pipe
+	// raises SIGPIPE and kills it before the handoff acknowledgement. Its output
+	// belongs in the transaction log, which also keeps failures diagnosable.
+	output, err := os.OpenFile(manifest.LogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open updater output log %s: %w", manifest.LogPath, err)
+	}
+	defer output.Close()
+	cmd.Stdout, cmd.Stderr = output, output
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -175,15 +193,10 @@ func startApplyProcess(invocation ApplyInvocation) error {
 			_ = cmd.Process.Release()
 		}
 	}()
-	path := invocation.Args[len(invocation.Args)-1]
-	manifest, err := readManifest(path)
-	if err != nil {
-		return err
-	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(applyHandoffTimeout)
 	for time.Now().Before(deadline) {
 		var id string
-		if err := readJSONFile(path+".accepted", &id); err == nil && id == manifest.ID {
+		if err := readJSONFile(pathToManifest+".accepted", &id); err == nil && id == manifest.ID {
 			accepted = true
 			return nil
 		}

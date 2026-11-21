@@ -2,17 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { useTheme } from 'next-themes'
-import { getUpdateStatus, fetchProjectSettings, fetchSettings, refreshProjectSettings, refreshSettings } from '@/features/settings/api'
+import { fetchProjectSettings, fetchSettings, refreshProjectSettings, refreshSettings } from '@/features/settings/api'
 import { subscribeSettingsTarget } from '@/features/settings/query'
 import { applyFontSettings, fontSettingsFromEffective } from '@/features/settings/font-variables'
-import { UPDATE_CHECK_RESULT_EVENT } from '@/features/settings/update-events'
-import type { UpdateCheckResult } from '@/features/settings/types'
-import { buildFrontendReloadURL } from '@/features/settings/update-reload'
-import { APP_VERSION } from '@/app-version'
+import { SoftwareUpdateMonitor } from '@/features/updates/SoftwareUpdateMonitor'
 import { AnalyticsNotice } from '@/features/analytics/AnalyticsPreferences'
 import { useAnalyticsActivity } from '@/features/analytics/use-analytics-activity'
-import { getProjectLoreItems, importCharacterCard, previewCharacterCard, setProjectChapterConfirmed, switchWorkspace, type CharacterCardPreview, type LoreItem, type WorkspaceSearchResult } from '@/lib/api'
-import { withErrorLogID } from '@/lib/api-client'
+import { getProjectLoreItems, importCharacterCard, previewCharacterCard, setProjectChapterConfirmed, switchWorkspace, type CharacterCardImportResult, type CharacterCardPreview, type ImportDuplicatePreview, type ImportDuplicateReviewEntry, type LoreItem, type WorkspaceSearchResult } from '@/lib/api'
+import { APIError, withErrorLogID } from '@/lib/api-client'
 import { CommandPalette } from '@/components/common/command-palette'
 import { useWorkspace } from '@/hooks/useWorkspace'
 import { useAgentChat } from '@/hooks/useAgentChat'
@@ -24,6 +21,8 @@ import { toast } from '@/lib/toast'
 import { setConfiguredLocale } from '@/i18n'
 import { NovaMotionProvider, normalizeMotionIntensity } from '@/features/motion/motion-preferences'
 import { ThinkingExpansionPreference } from '@/components/Chat/thinking-expansion-preference'
+import { AgentTraceDisplayProvider } from '@/components/Chat/agent-trace-display'
+import type { AgentTraceDisplay } from '@/features/settings/types'
 import {
   dedupeTabs,
   enforceTabLimit,
@@ -98,6 +97,7 @@ function App() {
   const [developerMode, setDeveloperMode] = useState<boolean | null>(null)
   const [motionIntensity, setMotionIntensity] = useState('system')
   const [autoExpandThinking, setAutoExpandThinking] = useState(false)
+  const [agentTraceDisplay, setAgentTraceDisplay] = useState<AgentTraceDisplay>('compact')
   const [novaDir, setNovaDir] = useState('')
   const [sidebarView, setSidebarView] = useState<SidebarView>('outline')
   const [editorSearchIntent, setEditorSearchIntent] = useState<{ path: string; query: string; line: number; nonce: number } | null>(null)
@@ -111,6 +111,9 @@ function App() {
   const [characterCardPreviewing, setCharacterCardPreviewing] = useState(false)
   const [characterCardImporting, setCharacterCardImporting] = useState(false)
   const [characterCardError, setCharacterCardError] = useState('')
+  const [characterCardPendingOverrides, setCharacterCardPendingOverrides] = useState<ImportDuplicatePreview[]>([])
+  const [characterCardReviewPlanId, setCharacterCardReviewPlanId] = useState('')
+  const [characterCardReviewNotice, setCharacterCardReviewNotice] = useState('')
   const [writingAgentConversation, setWritingAgentConversation] = useState<AgentChatConversationState>({
     sessionId: '',
     messages: [],
@@ -319,6 +322,7 @@ function App() {
       setTheme(normalizeAppTheme(effective?.theme))
       setMotionIntensity(normalizeMotionIntensity(effective?.motion_intensity))
       setAutoExpandThinking(effective?.auto_expand_thinking === true)
+      setAgentTraceDisplay(effective?.agent_trace_display === 'live' ? 'live' : 'compact')
       applyFontSettings(fontSettingsFromEffective(effective))
     }
     const reload = (fresh = false) => {
@@ -342,15 +346,6 @@ function App() {
   }, [projectId, setTheme, workspaceLoaded])
 
   useEffect(() => {
-    const onUpdateCheckResult = (event: Event) => {
-      const result = (event as CustomEvent<UpdateCheckResult>).detail
-      if (result) applyUpdateCheckResult(result)
-    }
-    window.addEventListener(UPDATE_CHECK_RESULT_EVENT, onUpdateCheckResult)
-    return () => window.removeEventListener(UPDATE_CHECK_RESULT_EVENT, onUpdateCheckResult)
-  }, [applyUpdateCheckResult])
-
-  useEffect(() => {
     const onConflictPreserved = (event: Event) => {
       const detail = (event as CustomEvent<AutosaveConflictPreservedDetail>).detail
       if (!detail?.id) return
@@ -361,32 +356,6 @@ function App() {
     window.addEventListener(AUTOSAVE_CONFLICT_PRESERVED_EVENT, onConflictPreserved)
     return () => window.removeEventListener(AUTOSAVE_CONFLICT_PRESERVED_EVENT, onConflictPreserved)
   }, [t])
-
-  useEffect(() => {
-    const controller = new AbortController()
-    let timer: ReturnType<typeof setTimeout>
-    const poll = async () => {
-      try {
-        const status = await getUpdateStatus(AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]))
-        if (!controller.signal.aborted) {
-          // Another tab can schedule an idle restart. Every open workbench
-          // must load the new bundle, even if Settings was never mounted here.
-          if (status.phase === 'succeeded' && status.id && status.version
-            && status.current_version.replace(/^v/, '') === status.version.replace(/^v/, '')
-            && status.current_version.replace(/^v/, '') !== APP_VERSION.replace(/^v/, '')) {
-            window.location.replace(buildFrontendReloadURL(status.version, Date.now(), window.location.href))
-            return
-          }
-          if (status.phase === 'staged' && status.version) {
-            applyUpdateCheckResult({ current_version: status.current_version, latest_version: status.version, update_available: true, can_install: false, platform: '', release_url: '', published_at: '' }, true)
-          } else if (status.check) applyUpdateCheckResult(status.check)
-        }
-      } catch (error) { if (!controller.signal.aborted) console.warn('[App.tsx] update status unavailable', error) }
-      if (!controller.signal.aborted) timer = setTimeout(() => void poll(), 15_000)
-    }
-    void poll()
-    return () => { controller.abort(); clearTimeout(timer) }
-  }, [applyUpdateCheckResult])
 
   useEffect(() => {
     if (activeTabKey) touchTab(activeTabKey)
@@ -621,6 +590,9 @@ function App() {
     setCharacterCardPreviewing(false)
     setCharacterCardImporting(false)
     setCharacterCardError('')
+    setCharacterCardPendingOverrides([])
+    setCharacterCardReviewPlanId('')
+    setCharacterCardReviewNotice('')
     if (characterCardInputRef.current) {
       characterCardInputRef.current.value = ''
     }
@@ -644,6 +616,9 @@ function App() {
     setCharacterCardBookTitle('')
     setCharacterCardUserName('')
     setCharacterCardError('')
+    setCharacterCardPendingOverrides([])
+    setCharacterCardReviewPlanId('')
+    setCharacterCardReviewNotice('')
     setCharacterCardPreviewing(true)
     try {
       const preview = await previewCharacterCard(file)
@@ -660,6 +635,33 @@ function App() {
     }
   }, [t])
 
+  const completeCharacterCardImport = useCallback(async (result: CharacterCardImportResult) => {
+    toast.success(result.message || t('importCard.importSuccess', { name: result.name }))
+    if (result.overridden?.length) {
+      toast.success(t('importCard.overriddenList', { names: result.overridden.join('、') }))
+    }
+    if (result.skipped?.length) {
+      toast.info(t('importCard.skippedList', { names: result.skipped.join('、') }))
+    }
+    if (characterCardTargetMode === 'new_book') {
+      await refreshAll()
+    } else {
+      await refresh()
+    }
+    setMode('lore')
+    window.setTimeout(() => {
+      notifyLoreUpdated({
+        projectId: result.project_id || projectId,
+        ids: result.item_ids,
+        source: 'character-card-import',
+      })
+    }, 0)
+    notifyVersionChange()
+    notifyProjectStructureChange()
+    setCharacterCardDialogOpen(false)
+    resetCharacterCardImport()
+  }, [characterCardTargetMode, notifyProjectStructureChange, notifyVersionChange, projectId, refresh, refreshAll, resetCharacterCardImport, setMode, t])
+
   const handleCharacterCardImport = useCallback(async () => {
     if (!characterCardFile) {
       setCharacterCardError(t('importCard.chooseFileFirst'))
@@ -669,6 +671,7 @@ function App() {
       setCharacterCardError(t('importCard.noCurrentBookImportNew'))
       return
     }
+    if (characterCardPendingOverrides.length > 0) return
     setCharacterCardImporting(true)
     setCharacterCardError('')
     try {
@@ -679,24 +682,14 @@ function App() {
         userCharacterName: characterCardPreview?.user_placeholder_found ? characterCardUserName.trim() : undefined,
         loreClassification: characterCardSemanticClassification ? 'semantic' : 'heuristic',
       })
-      toast.success(result.message || t('importCard.importSuccess', { name: result.name }))
-      if (characterCardTargetMode === 'new_book') {
-        await refreshAll()
-      } else {
-        await refresh()
+      // Same-name entries would be replaced; hold the import for review.
+      if (result.pending_overrides?.length) {
+        setCharacterCardPendingOverrides(result.pending_overrides)
+        setCharacterCardReviewPlanId(result.review_plan_id || '')
+        setCharacterCardReviewNotice('')
+        return
       }
-      setMode('lore')
-      window.setTimeout(() => {
-        notifyLoreUpdated({
-          projectId: result.project_id || projectId,
-          ids: result.item_ids,
-          source: 'character-card-import',
-        })
-      }, 0)
-      notifyVersionChange()
-      notifyProjectStructureChange()
-      setCharacterCardDialogOpen(false)
-      resetCharacterCardImport()
+      await completeCharacterCardImport(result)
     } catch (e) {
       const message = e instanceof Error ? e.message : t('importCard.importFailed')
       setCharacterCardError(message)
@@ -704,7 +697,68 @@ function App() {
     } finally {
       setCharacterCardImporting(false)
     }
-  }, [characterCardBookTitle, characterCardFile, characterCardPreview, characterCardSemanticClassification, characterCardTargetMode, characterCardUserName, notifyProjectStructureChange, notifyVersionChange, projectId, refresh, refreshAll, resetCharacterCardImport, setMode, t])
+  }, [characterCardBookTitle, characterCardFile, characterCardPendingOverrides, characterCardPreview, characterCardSemanticClassification, characterCardTargetMode, characterCardUserName, completeCharacterCardImport, projectId, t])
+
+  const handleConfirmCharacterCardOverrides = useCallback(async (choices: Record<string, string>) => {
+    if (!characterCardFile) return
+    setCharacterCardImporting(true)
+    setCharacterCardError('')
+    try {
+      // Each decision echoes the local identity and version shown in the
+      // preview, so a stale confirmation can never replace edited entries.
+      const overrideReview: ImportDuplicateReviewEntry[] = characterCardPendingOverrides.map((dup) => ({
+        name: dup.name,
+        existing_id: dup.existing_id,
+        existing_version: dup.existing_version,
+        choice: (choices[dup.name] ?? dup.suggested) as 'override' | 'keep',
+      }))
+      const result = await importCharacterCard(characterCardFile, {
+        targetMode: characterCardTargetMode,
+        projectId: characterCardTargetMode === 'current' ? projectId : undefined,
+        bookTitle: characterCardTargetMode === 'new_book' ? characterCardBookTitle.trim() : undefined,
+        userCharacterName: characterCardPreview?.user_placeholder_found ? characterCardUserName.trim() : undefined,
+        loreClassification: characterCardSemanticClassification ? 'semantic' : 'heuristic',
+        confirmOverrides: true,
+        reviewPlanId: characterCardReviewPlanId,
+        overrideReview,
+      })
+      // The target changed since the preview (entries edited, deleted or newly
+      // collided): nothing was written; stay in review on the fresh preview.
+      if (result.pending_overrides?.length) {
+        setCharacterCardPendingOverrides(result.pending_overrides)
+        setCharacterCardReviewPlanId(result.review_plan_id || '')
+        setCharacterCardReviewNotice(result.review_changed ? t('importCard.reviewChangedNotice') : '')
+        return
+      }
+      await completeCharacterCardImport(result)
+    } catch (e) {
+      // A held review that expired or targets another Book can never succeed:
+      // drop the pending review instead of trapping the user on a stale view.
+      if (e instanceof APIError && (e.code === 'api.characterCard.reviewExpired' || e.code === 'api.characterCard.reviewPlanRequired')) {
+        setCharacterCardPendingOverrides([])
+        setCharacterCardReviewPlanId('')
+        setCharacterCardReviewNotice('')
+      }
+      const message = e instanceof Error ? e.message : t('importCard.importFailed')
+      setCharacterCardError(message)
+      toast.error(message)
+    } finally {
+      setCharacterCardImporting(false)
+    }
+  }, [characterCardBookTitle, characterCardFile, characterCardPendingOverrides, characterCardPreview, characterCardReviewPlanId, characterCardSemanticClassification, characterCardTargetMode, characterCardUserName, completeCharacterCardImport, projectId, t])
+
+  const handleCharacterCardCancelOverrides = useCallback(() => {
+    setCharacterCardPendingOverrides([])
+    setCharacterCardReviewPlanId('')
+    setCharacterCardReviewNotice('')
+  }, [])
+
+  const handleCharacterCardTargetModeChange = useCallback((mode: CharacterCardTargetMode) => {
+    setCharacterCardTargetMode(mode)
+    setCharacterCardPendingOverrides([])
+    setCharacterCardReviewPlanId('')
+    setCharacterCardReviewNotice('')
+  }, [])
 
   const handleActivateTab = useCallback(async (tab: Tab) => {
     const key = tabKey(tab)
@@ -894,179 +948,186 @@ function App() {
 
   return (
     <ThinkingExpansionPreference value={autoExpandThinking}>
-      <NovaMotionProvider intensity={motionIntensity}>
-        <AnalyticsNotice onReadyChange={setAnalyticsReady} />
-        <ModeRouter
-          mode={mode}
-          lastCreationRoute={lastCreationRoute}
-          currentBookName={currentBookName}
-          workspace={workspace}
-          projectId={projectId}
-          summary={summary}
-          currentChapter={currentChapter}
-          isStreaming={writingAgentConversation.isStreaming}
-          sessionTransitionPending={sessionTransitionPending}
-          isExecutionActive={isExecutionActive}
-          runtimeProjection={runtimeProjection}
-          abortPending={abortPending}
-          commandSubmitting={commandSubmitting}
-          queueActionPendingCommandID={queueActionPendingCommandID}
-          projectVisible={projectVisible}
-          activityBarExpanded={activityBarExpanded}
-          rightPanel={rightPanel}
-          settingsOpen={settingsOpen}
-          developerMode={developerMode === true}
-          interactiveRightVisible={interactiveRightVisible}
-          novaDir={novaDir}
-          books={books}
-          bookSortMode={bookSortMode}
-          tree={tree}
-          loading={loading}
-          selectedFile={selectedFile}
-          fileDocument={fileDocument}
-          fileDocuments={fileDocuments}
-          openTabs={openTabs}
-          activeTabKey={activeTabKey}
-          sidebarView={sidebarView}
-          editorSearchIntent={editorSearchIntent}
-          saveSignal={saveSignal}
-          editorAutoSaveEnabled={editorAutoSaveEnabled}
-          editorAutoSaveDelayMs={editorAutoSaveDelayMs}
-          projectExplorerRefreshSignal={projectExplorerRefreshSignal}
-          versionRefreshSignal={versionRefreshSignal}
-          messages={messages}
-          sessions={sessions}
-          activeSessionId={activeSessionId}
-          activityContent={activityContent}
-          references={references}
-          loreReferences={loreReferences}
-          loreItems={loreItems}
-          styleScenes={styleScenes}
-          textSelections={textSelections}
-          writingAgentConversation={writingAgentConversation}
-          onWritingAgentConversationStateChange={setWritingAgentConversation}
-          onOpenWritingSubAgentSession={handleOpenWritingSubAgentSession}
-          chatPlanMode={planMode}
-          hasEarlierMessages={hasEarlierMessages}
-          isLoadingEarlierHistory={isLoadingEarlierHistory}
-          onSetMode={handleSetMode}
-          onToggleActivityBarExpanded={toggleActivityBarExpanded}
-          onToggleProjectVisible={toggleProjectVisible}
-          onSetRightPanel={handleSetRightPanel}
-          onToggleSettings={toggleSettings}
-          onCloseSettings={closeSettings}
-          notice={notice}
-          onDismissNotice={dismissNotice}
-          onToggleInteractiveRightPanel={toggleInteractiveRightPanel}
-          onSwitchBook={handleWorkspaceSwitch}
-          onQuickSwitchBook={handleQuickWorkspaceSwitch}
-          onBeforeWorkspaceSwitch={flushEditorDraft}
-          onBooksChange={refreshBooks}
-          onBookCreated={handleBookCreated}
-          onOpenCharacterCardImport={handleOpenCharacterCardImportFromBooks}
-          onSetSidebarView={setSidebarView}
-          onSelectSearchResult={handleSelectSearchResult}
-          onSelectFile={handleSelectFile}
-          onSetChapterConfirmed={handleSetChapterConfirmed}
-          onReferenceFile={addReference}
-          onCreateItem={handleCreateItem}
-          onDeleteItem={handleDeleteItem}
-          onRenameItem={handleRenameItem}
-          onCopyItem={handleCopyItem}
-          onMoveItem={handleMoveItem}
-          onRefreshWorkspace={refresh}
-          onActivateTab={handleActivateTab}
-          onCloseTab={handleCloseTab}
-          onToggleTabPin={handleToggleTabPin}
-          onMoveTab={handleMoveTab}
-          onOpenLoreTab={handleOpenLoreTab}
-          onSaveCurrentFile={handleSaveCurrentFile}
-          onEditorFlushHandlerChange={handleEditorFlushHandlerChange}
-          onWorkspaceChanged={handleReviewedWorkspaceChange}
-          onQuoteSelection={addTextSelection}
-          onCreateChatSession={createChatSession}
-          onSwitchChatSession={switchChatSession}
-          onRenameChatSession={renameChatSession}
-          onDeleteChatSession={deleteChatSession}
-          onLoadEarlierHistory={loadEarlierHistory}
-          onRefreshChatHistory={loadHistory}
-          onSend={send}
-          onAnalyzeContext={analyzeContext}
-          onStop={stop}
-          onSuspend={suspend}
-          onResumeTask={resumeTask}
-          recoveryFailed={recoveryFailed}
-          onRetryRecovery={() => { void resumeActiveChat() }}
-          onSteerQueuedCommand={steerQueuedCommand}
-          onDeleteQueuedCommand={deleteQueuedCommand}
-          onEditQueuedCommand={editQueuedCommand}
-          onReferenceRemove={removeReference}
-          onLoreReferenceAdd={addLoreReference}
-          onLoreReferenceRemove={removeLoreReference}
-          onStyleSceneAdd={addStyleScene}
-          onStyleSceneRemove={removeStyleScene}
-          onTextSelectionRemove={removeTextSelection}
-          onChatPlanModeChange={handleChatPlanModeChange}
-          onChatPlanModeToggle={handleChatPlanModeToggle}
-          onApproveProposedPlan={approveProposedPlan}
-          onExitChatPlanMode={exitPlanMode}
-        />
-        <CommandPalette
-          open={commandOpen}
-          isStreaming={writingAgentConversation.isStreaming}
-          onOpenChange={setCommandOpen}
-          onSave={triggerSave}
-          onOpenAgent={() => {
-            setMode('ide')
-            handleSetRightPanel('ai')
-          }}
-          onOpenVersions={handleOpenVersions}
-          onOpenSearch={handleOpenGlobalSearch}
-          onContinueWriting={continueWriting}
-          onToggleRightPanel={() => {
-            if (mode === 'interactive') {
-              setInteractiveRightVisible((value) => !value)
-              return
-            }
-            if (mode === 'ide') handleSetRightPanel(rightPanel ? null : 'ai')
-          }}
-        />
-        <CharacterCardImportDialog
-          open={characterCardDialogOpen}
-          workspace={workspace}
-          currentBookName={currentBookName}
-          novaDir={novaDir}
-          file={characterCardFile}
-          preview={characterCardPreview}
-          targetMode={characterCardTargetMode}
-          bookTitle={characterCardBookTitle}
-          userCharacterName={characterCardUserName}
-          semanticClassification={characterCardSemanticClassification}
-          previewing={characterCardPreviewing}
-          importing={characterCardImporting}
-          error={characterCardError}
-          fileInputRef={characterCardInputRef}
-          onOpenChange={handleCharacterCardDialogOpenChange}
-          onFileSelected={handleCharacterCardSelected}
-          onTargetModeChange={setCharacterCardTargetMode}
-          onBookTitleChange={setCharacterCardBookTitle}
-          onUserCharacterNameChange={setCharacterCardUserName}
-          onSemanticClassificationChange={setCharacterCardSemanticClassification}
-          onImport={handleCharacterCardImport}
-        />
-        <OnboardingGuide
-          workspaceReady={workspaceLoaded && booksLoaded && analyticsReady}
-          mode={mode}
-          rightPanel={rightPanel}
-          settingsOpen={settingsOpen}
-          workspace={workspace}
-          booksCount={books.length}
-          currentBookName={currentBookName}
-          messages={writingAgentConversation.messages}
-          isStreaming={writingAgentConversation.isStreaming}
-          onNavigate={handleOnboardingNavigate}
-        />
-      </NovaMotionProvider>
+    <NovaMotionProvider intensity={motionIntensity}>
+    <AgentTraceDisplayProvider value={agentTraceDisplay}>
+      <AnalyticsNotice onReadyChange={setAnalyticsReady} />
+      <ModeRouter
+        mode={mode}
+        lastCreationRoute={lastCreationRoute}
+        currentBookName={currentBookName}
+        workspace={workspace}
+        projectId={projectId}
+        summary={summary}
+        currentChapter={currentChapter}
+        isStreaming={writingAgentConversation.isStreaming}
+        sessionTransitionPending={sessionTransitionPending}
+        isExecutionActive={isExecutionActive}
+        runtimeProjection={runtimeProjection}
+        abortPending={abortPending}
+        commandSubmitting={commandSubmitting}
+        queueActionPendingCommandID={queueActionPendingCommandID}
+        projectVisible={projectVisible}
+        activityBarExpanded={activityBarExpanded}
+        rightPanel={rightPanel}
+        settingsOpen={settingsOpen}
+        developerMode={developerMode === true}
+        interactiveRightVisible={interactiveRightVisible}
+        novaDir={novaDir}
+        books={books}
+        bookSortMode={bookSortMode}
+        tree={tree}
+        loading={loading}
+        selectedFile={selectedFile}
+        fileDocument={fileDocument}
+        fileDocuments={fileDocuments}
+        openTabs={openTabs}
+        activeTabKey={activeTabKey}
+        sidebarView={sidebarView}
+        editorSearchIntent={editorSearchIntent}
+        saveSignal={saveSignal}
+        editorAutoSaveEnabled={editorAutoSaveEnabled}
+        editorAutoSaveDelayMs={editorAutoSaveDelayMs}
+        projectExplorerRefreshSignal={projectExplorerRefreshSignal}
+        versionRefreshSignal={versionRefreshSignal}
+        messages={messages}
+        sessions={sessions}
+        activeSessionId={activeSessionId}
+        activityContent={activityContent}
+        references={references}
+        loreReferences={loreReferences}
+        loreItems={loreItems}
+        styleScenes={styleScenes}
+        textSelections={textSelections}
+        writingAgentConversation={writingAgentConversation}
+        onWritingAgentConversationStateChange={setWritingAgentConversation}
+        onOpenWritingSubAgentSession={handleOpenWritingSubAgentSession}
+        chatPlanMode={planMode}
+        hasEarlierMessages={hasEarlierMessages}
+        isLoadingEarlierHistory={isLoadingEarlierHistory}
+        onSetMode={handleSetMode}
+        onToggleActivityBarExpanded={toggleActivityBarExpanded}
+        onToggleProjectVisible={toggleProjectVisible}
+        onSetRightPanel={handleSetRightPanel}
+        onToggleSettings={toggleSettings}
+        onCloseSettings={closeSettings}
+        notice={notice}
+        onDismissNotice={dismissNotice}
+        onToggleInteractiveRightPanel={toggleInteractiveRightPanel}
+        onSwitchBook={handleWorkspaceSwitch}
+        onQuickSwitchBook={handleQuickWorkspaceSwitch}
+        onBeforeWorkspaceSwitch={flushEditorDraft}
+        onBooksChange={refreshBooks}
+        onBookCreated={handleBookCreated}
+        onOpenCharacterCardImport={handleOpenCharacterCardImportFromBooks}
+        onSetSidebarView={setSidebarView}
+        onSelectSearchResult={handleSelectSearchResult}
+        onSelectFile={handleSelectFile}
+        onSetChapterConfirmed={handleSetChapterConfirmed}
+        onReferenceFile={addReference}
+        onCreateItem={handleCreateItem}
+        onDeleteItem={handleDeleteItem}
+        onRenameItem={handleRenameItem}
+        onCopyItem={handleCopyItem}
+        onMoveItem={handleMoveItem}
+        onRefreshWorkspace={refresh}
+        onActivateTab={handleActivateTab}
+        onCloseTab={handleCloseTab}
+        onToggleTabPin={handleToggleTabPin}
+        onMoveTab={handleMoveTab}
+        onOpenLoreTab={handleOpenLoreTab}
+        onSaveCurrentFile={handleSaveCurrentFile}
+        onEditorFlushHandlerChange={handleEditorFlushHandlerChange}
+        onWorkspaceChanged={handleReviewedWorkspaceChange}
+        onQuoteSelection={addTextSelection}
+        onCreateChatSession={createChatSession}
+        onSwitchChatSession={switchChatSession}
+        onRenameChatSession={renameChatSession}
+        onDeleteChatSession={deleteChatSession}
+        onLoadEarlierHistory={loadEarlierHistory}
+        onRefreshChatHistory={loadHistory}
+        onSend={send}
+        onAnalyzeContext={analyzeContext}
+        onStop={stop}
+        onSuspend={suspend}
+        onResumeTask={resumeTask}
+        recoveryFailed={recoveryFailed}
+        onRetryRecovery={() => { void resumeActiveChat() }}
+        onSteerQueuedCommand={steerQueuedCommand}
+        onDeleteQueuedCommand={deleteQueuedCommand}
+        onEditQueuedCommand={editQueuedCommand}
+        onReferenceRemove={removeReference}
+        onLoreReferenceAdd={addLoreReference}
+        onLoreReferenceRemove={removeLoreReference}
+        onStyleSceneAdd={addStyleScene}
+        onStyleSceneRemove={removeStyleScene}
+        onTextSelectionRemove={removeTextSelection}
+        onChatPlanModeChange={handleChatPlanModeChange}
+        onChatPlanModeToggle={handleChatPlanModeToggle}
+        onApproveProposedPlan={approveProposedPlan}
+        onExitChatPlanMode={exitPlanMode}
+      />
+      <CommandPalette
+        open={commandOpen}
+        isStreaming={writingAgentConversation.isStreaming}
+        onOpenChange={setCommandOpen}
+        onSave={triggerSave}
+        onOpenAgent={() => {
+          setMode('ide')
+          handleSetRightPanel('ai')
+        }}
+        onOpenVersions={handleOpenVersions}
+        onOpenSearch={handleOpenGlobalSearch}
+        onContinueWriting={continueWriting}
+        onToggleRightPanel={() => {
+          if (mode === 'interactive') {
+            setInteractiveRightVisible((value) => !value)
+            return
+          }
+          if (mode === 'ide') handleSetRightPanel(rightPanel ? null : 'ai')
+        }}
+      />
+      <CharacterCardImportDialog
+        open={characterCardDialogOpen}
+        workspace={workspace}
+        currentBookName={currentBookName}
+        novaDir={novaDir}
+        file={characterCardFile}
+        preview={characterCardPreview}
+        targetMode={characterCardTargetMode}
+        bookTitle={characterCardBookTitle}
+        userCharacterName={characterCardUserName}
+        semanticClassification={characterCardSemanticClassification}
+        previewing={characterCardPreviewing}
+        importing={characterCardImporting}
+        error={characterCardError}
+        fileInputRef={characterCardInputRef}
+        onOpenChange={handleCharacterCardDialogOpenChange}
+        onFileSelected={handleCharacterCardSelected}
+        onTargetModeChange={handleCharacterCardTargetModeChange}
+        onBookTitleChange={setCharacterCardBookTitle}
+        onUserCharacterNameChange={setCharacterCardUserName}
+        onSemanticClassificationChange={setCharacterCardSemanticClassification}
+        onImport={handleCharacterCardImport}
+        pendingOverrides={characterCardPendingOverrides}
+        notice={characterCardReviewNotice}
+        onConfirmOverrides={handleConfirmCharacterCardOverrides}
+        onCancelOverrides={handleCharacterCardCancelOverrides}
+      />
+      <SoftwareUpdateMonitor onCheckResult={applyUpdateCheckResult} />
+      <OnboardingGuide
+        workspaceReady={workspaceLoaded && booksLoaded && analyticsReady}
+        mode={mode}
+        rightPanel={rightPanel}
+        settingsOpen={settingsOpen}
+        workspace={workspace}
+        booksCount={books.length}
+        currentBookName={currentBookName}
+        messages={writingAgentConversation.messages}
+        isStreaming={writingAgentConversation.isStreaming}
+        onNavigate={handleOnboardingNavigate}
+      />
+    </AgentTraceDisplayProvider>
+    </NovaMotionProvider>
     </ThinkingExpansionPreference>
   )
 }

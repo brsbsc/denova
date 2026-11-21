@@ -84,6 +84,14 @@ func ApplySettingsMergePatch(existing Settings, changes json.RawMessage) (Settin
 			value := *role.changed.Codex
 			role.next.Codex = &value
 		}
+		if role.changed != nil && role.changed.Grok != nil {
+			value := *role.changed.Grok
+			role.next.Grok = &value
+		}
+		if role.changed != nil && role.changed.Antigravity != nil {
+			value := *role.changed.Antigravity
+			role.next.Antigravity = &value
+		}
 	}
 	if err := validateSettingsRuntimes(next); err != nil {
 		return Settings{}, fmt.Errorf("%w: %v", ErrInvalidSettingsPatch, err)
@@ -99,6 +107,11 @@ func ApplySettingsMergePatch(existing Settings, changes json.RawMessage) (Settin
 	}
 	if err := next.WebAccess.Validate(); err != nil {
 		return Settings{}, fmt.Errorf("%w: %v", ErrInvalidSettingsPatch, err)
+	}
+	switch next.InteractiveStageTheme {
+	case "", "light", "dark":
+	default:
+		return Settings{}, fmt.Errorf("%w: invalid stage theme %q", ErrInvalidSettingsPatch, next.InteractiveStageTheme)
 	}
 	switch next.InteractiveStageCharacterLayout {
 	case "", "center", "left", "right", "sides":

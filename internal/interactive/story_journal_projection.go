@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	// Version 19 adds canonical branch message locators without history bodies.
-	storyProjectionVersion      = 19
+	// Version 21 rebuilds turn-version selections with their shared parent state.
+	storyProjectionVersion      = 21
 	storyRecentTransactionLimit = 200
 	storyRecentCommitLimit      = 200
 	storyTurnAnchorEvery        = 256
@@ -94,12 +94,19 @@ func (projection *storyJournalProjection) Reset() error {
 func (projection *storyJournalProjection) Restore(data json.RawMessage) error {
 	expectedID := projection.expectedID
 	expectedGeneration := projection.expectedGeneration
+	// Check the version before decoding tuples whose shape can change.
+	var header struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return err
+	}
+	if header.Version != storyProjectionVersion {
+		return fmt.Errorf("%w: unsupported story projection version %d", conversationjournal.ErrProjectionCheckpointIncompatible, header.Version)
+	}
 	var restored storyJournalProjection
 	if err := json.Unmarshal(data, &restored); err != nil {
 		return err
-	}
-	if restored.Version != storyProjectionVersion {
-		return fmt.Errorf("%w: unsupported story projection version %d", conversationjournal.ErrProjectionCheckpointIncompatible, restored.Version)
 	}
 	if restored.StoryID != expectedID || restored.Generation != expectedGeneration {
 		return fmt.Errorf("story projection identity mismatch")
@@ -216,7 +223,7 @@ func (projection *storyJournalProjection) applyEvent(cursor conversationjournal.
 		// Turn or a creator edit invalidates checkpoints even when only archived
 		// bodies changed. Both markers are derived from existing event IDs.
 		switch record.Envelope.Type {
-		case StoryEventTypePlayerInput, StoryEventTypeModelContextBatch:
+		case StoryEventTypePlayerInput, StoryEventTypeModelContextBatch, StoryEventTypeTurnAbandoned:
 			branch.HistoryRevision = record.Envelope.ID
 		case StoryEventTypeTurn:
 			branch.HistoryRevision = record.Envelope.ID
@@ -298,6 +305,16 @@ func (projection *storyJournalProjection) applyEvent(cursor conversationjournal.
 			return err
 		}
 		branch.PendingInterruption = &event
+	case StoryEventTypeTurnAbandoned:
+		var event TurnAbandonedEvent
+		if err := mapToStruct(record.Raw, &event); err != nil {
+			return err
+		}
+		branch.consumePlayerInputs(event.PlayerInputID, nil)
+		delete(projection.TurnDrafts, turnDraftKey(event.BranchID, DomainCommitIdentity{CommandID: event.AgentCommandID, OperationID: event.AgentOperationID, Cycle: event.AgentCycle}))
+		if branch.PendingInterruption != nil && branch.PendingInterruption.PlayerInputID == event.PlayerInputID {
+			branch.PendingInterruption = nil
+		}
 	case StoryEventTypeModelContextBatch:
 		var event ModelContextBatchEvent
 		if err := mapToStruct(record.Raw, &event); err != nil {
@@ -373,15 +390,27 @@ func (projection *storyJournalProjection) applyEvent(cursor conversationjournal.
 		if err := mapToStruct(record.Raw, &event); err != nil {
 			return err
 		}
+		parentID := projection.ModelNodes[event.CurrentTurnID].Parent
+		samePosition := branch.LatestTurnID == event.ReplacedTurnID && branch.LatestTurnParentID == parentID
+		if event.ParentState != nil {
+			branch.StateBeforeLatest = cloneStoryState(event.ParentState)
+			branch.PlanBeforeLatest = cloneBranchPlan(event.ParentPlan)
+			branch.Depth = event.CurrentDepth
+		} else if !samePosition {
+			branch.StateBeforeLatest = nil
+			branch.PlanBeforeLatest = nil
+			branch.Depth = event.CurrentDepth
+		}
+		// A same-parent selection changes the latest turn's effects. Its input
+		// state and depth are still valid, including for released selection rows
+		// whose saved CurrentDepth described only a recent page of turns.
 		branch.Head = event.ProjectedHeadID
 		branch.LatestTurnID = event.CurrentTurnID
-		branch.Depth = event.CurrentDepth
+		branch.LatestTurnParentID = parentID
 		if event.CurrentState != nil {
 			branch.State = cloneStoryState(event.CurrentState)
 		}
-		branch.StateBeforeLatest = nil
 		branch.Plan = cloneBranchPlan(event.CurrentPlan)
-		branch.PlanBeforeLatest = nil
 	case StoryEventTypeTurnDraft:
 		var event TurnDraftEvent
 		if err := mapToStruct(record.Raw, &event); err != nil {

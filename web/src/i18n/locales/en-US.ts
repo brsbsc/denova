@@ -14,6 +14,7 @@ import sidebar from './en-US/sidebar'
 import tab from './en-US/tab'
 import command from './en-US/command'
 import home from './en-US/home'
+import bookStructure from './en-US/bookStructure'
 import importCard from './en-US/importCard'
 import novelImport from './en-US/novelImport'
 import router from './en-US/router'
@@ -46,6 +47,7 @@ import narrativeStyle from './en-US/narrativeStyle'
 import agentChat from './en-US/agentChat'
 import agentApproval from './en-US/agentApproval'
 import files from './en-US/files'
+import statistics from './en-US/statistics'
 import trajectory from './en-US/trajectory'
 
 const enUS = {
@@ -65,6 +67,7 @@ const enUS = {
   ...tab,
   ...command,
   ...home,
+  ...bookStructure,
   ...importCard,
   ...novelImport,
   ...router,
@@ -98,6 +101,7 @@ const enUS = {
   ...agentApproval,
   ...files,
   ...trajectory,
+  ...statistics,
   'agents.tool.availability.runtimeCheck': 'Runtime check',
 } as const
 

@@ -39,6 +39,33 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Missing checksum"):
                 sync.verify_assets(root)
 
+    def test_prepare_extracts_webui_named_linux_archives(self):
+        release = {"id": 1, "tag_name": "v0.8.0", "draft": False, "prerelease": False, "assets": []}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def fake_run(*args):
+                if args[:3] == ("gh", "release", "download"):
+                    assets_dir = Path(args[args.index("--dir") + 1])
+                    lines = []
+                    for package in ("x64", "arm64"):
+                        name = f"denova-webui-v0.8.0-linux-{package}.tar.gz"
+                        archive = assets_dir / name
+                        with tarfile.open(archive, "w:gz") as bundle:
+                            for file_name in ("denova/denova", "denova/denova-updater", "denova/LICENSE", "denova/skills/demo.md"):
+                                info = tarfile.TarInfo(file_name)
+                                info.size = 2
+                                bundle.addfile(info, io.BytesIO(b"ok"))
+                        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+                        lines.append(f"{digest}  {name}\n")
+                    (assets_dir / "checksums.txt").write_text("".join(lines))
+                return ""
+
+            with patch.object(sync, "api", return_value=release), patch.object(sync, "find_release", return_value=None), patch.object(sync, "run", side_effect=fake_run), patch.dict("os.environ", {}, clear=True):
+                sync.prepare(SimpleNamespace(tag="", repository="owner/repo", directory=root / "out", force=False))
+                self.assertTrue((root / "out/amd64/denova/denova").is_file())
+                self.assertTrue((root / "out/arm64/denova/denova").is_file())
+
     def test_extract_preserves_bundle_and_rejects_unsafe_members(self):
         for member_name, member_type in [("denova/web/index.html", tarfile.REGTYPE), ("../escape", tarfile.REGTYPE), ("denova/link", tarfile.SYMTYPE)]:
             with self.subTest(member=member_name), tempfile.TemporaryDirectory() as directory:

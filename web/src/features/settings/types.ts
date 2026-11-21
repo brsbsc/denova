@@ -76,8 +76,6 @@ export interface Settings {
   volume_dir_format?: string
   max_open_tabs?: number | null
   project_file_tree_entry_limit?: number | null
-  chapter_group_min?: number | null
-  chapter_group_max?: number | null
   version_timed_enabled?: boolean | null
   version_timed_interval_minutes?: number | null
   ui_font_family?: string
@@ -89,6 +87,8 @@ export interface Settings {
   theme?: string
   motion_intensity?: string
   auto_expand_thinking?: boolean | null
+  agent_trace_display?: AgentTraceDisplay
+  statistics_enabled?: boolean | null
   update_check_enabled?: boolean | null
   update_download_enabled?: boolean | null
   max_iteration?: number | null
@@ -118,8 +118,10 @@ export interface Settings {
   writing_skill_default?: string
   agent_quick_prompts?: AgentQuickPromptRegistry
   agent_quick_prompts_in_commands?: boolean | null
+  interactive_stage_theme?: StageTheme | null
   interactive_stage_font_size?: number | null
   interactive_stage_scrim_opacity?: number | null
+  interactive_stage_text_outline?: boolean | null
   interactive_stage_line_height?: number | null
   interactive_stage_text_max_width?: number | null
   interactive_stage_character_layout?: StageCharacterLayout | null
@@ -131,6 +133,7 @@ export interface LabSettings {
 }
 
 export type ShellEnvironmentMode = 'auto' | 'process'
+export type AgentTraceDisplay = 'compact' | 'live'
 
 export interface AgentApprovalRule {
   id: string
@@ -722,6 +725,8 @@ export interface UpdateInstallProgress {
 }
 
 export interface UpdateStatus {
+  distribution?: 'web' | 'desktop'
+  completed_update?: CompletedUpdate
   check?: UpdateCheckResult
   checked_at?: string
   operation?: 'checking' | 'downloading' | 'uploading'
@@ -739,5 +744,25 @@ export interface UpdateStatus {
   log_path?: string
 }
 
+export interface CompletedUpdate {
+  id: string
+  previous_version: string
+  version: string
+  completed_at: string
+}
+
+export interface UpdateNotesRange {
+  fromVersion?: string
+  toVersion: string
+}
+
+export interface UpdateNotesResult {
+  from_version?: string
+  to_version: string
+  complete: boolean
+  releases: Array<{ version: string; published_at?: string; summary?: string; brief: string; body?: string }>
+}
+
 /** Display-only arrangement; does not change the saved scene or Agent choices. */
 export type StageCharacterLayout = 'center' | 'left' | 'right' | 'sides'
+export type StageTheme = 'light' | 'dark'

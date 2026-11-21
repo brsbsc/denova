@@ -21,8 +21,15 @@ type UpdateItem struct {
 }
 
 type updateReview struct {
-	choices map[string]map[string]string
-	items   []UpdateItem
+	choices          map[string]map[string]string
+	items            []UpdateItem
+	overrideByDetail bool
+	confirm          *ConfirmReview
+	duplicates       []ImportDuplicate
+	overrides        []string
+	skipped          []string
+	changed          []string
+	unreviewed       []string
 }
 
 func (r *updateReview) decide(resource, member, name, sourceBase, sourceNext, localBase, localNow, localNext string) (apply, acknowledge bool) {
@@ -71,7 +78,32 @@ func (r *updateReview) validate() error {
 			}
 		}
 	}
+	if r.confirm != nil {
+		for name, choice := range r.confirm.Choices {
+			if choice != "keep" && choice != "override" {
+				return fmt.Errorf("invalid override choice for %s", name)
+			}
+			if _, ok := r.confirmDuplicate(name); !ok {
+				return fmt.Errorf("override choice for %s not present in the reviewed duplicates", name)
+			}
+		}
+	}
 	return nil
+}
+
+// confirmDuplicate returns the reviewed duplicate for a name. Review binding is
+// by name, matching the way preview duplicates are presented; identity and
+// version are validated when staging against the current local entry.
+func (r *updateReview) confirmDuplicate(name string) (ImportDuplicate, bool) {
+	if r.confirm == nil {
+		return ImportDuplicate{}, false
+	}
+	for _, dup := range r.confirm.Duplicates {
+		if dup.Name == name {
+			return dup, true
+		}
+	}
+	return ImportDuplicate{}, false
 }
 
 // Compare package metadata and the complete upstream resource set, not versions

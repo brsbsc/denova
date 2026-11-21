@@ -22,12 +22,11 @@ function createGitFixture(prefix) {
 }
 
 test('independent changes keep the required check without product jobs', () => {
-  const plan = planCI(['img/wechat.png', 'CONTRIBUTING.md', 'tools/creative-eval/run.mjs', 'scripts/eval-creative.sh'], false)
+  const plan = planCI(['img/wechat.png', 'CONTRIBUTING.md', '.gitignore'], false)
   assert.equal(plan.code, false)
   assert.deepEqual(plan.go_modules, [])
   assert.equal(plan.unit, false)
   assert.equal(plan.updater, false)
-  assert.equal(plan.creative_eval, true)
 })
 
 test('frontend changes do not run Go or updater suites', () => {
@@ -36,14 +35,24 @@ test('frontend changes do not run Go or updater suites', () => {
   assert.deepEqual(plan.go_modules, [])
   assert.equal(plan.unit, true)
   assert.equal(plan.updater, false)
-  assert.equal(plan.creative_eval, false)
-  assert.deepEqual(plan.browser_shards, [1])
+  // Every browser journey is reachable from frontend changes.
+  assert.equal(plan.browser_full, true)
+  assert.deepEqual(plan.browser_shards, [1, 2, 3])
+  assert.equal(plan.shard_count, 3)
 })
 
-test('documentation-only changes do not start the evaluation harness', () => {
-  const plan = planCI(['docs/guide.md', 'README.md'], false)
-  assert.equal(plan.code, false)
-  assert.equal(plan.creative_eval, false)
+test('backend-only changes keep the scoped smoke browser run', () => {
+  const plan = planCI(['internal/app/chat.go'], false)
+  assert.equal(plan.code, true)
+  assert.equal(plan.browser_full, false)
+  assert.deepEqual(plan.browser_shards, [1])
+  assert.equal(plan.shard_count, 1)
+})
+
+test('workflow changes verify the whole browser suite they describe', () => {
+  const plan = planCI(['.github/workflows/ci.yml'], false)
+  assert.equal(plan.browser_full, true)
+  assert.deepEqual(plan.browser_shards, [1, 2, 3])
 })
 
 test('Agent and dependency changes also verify the root module consumer', () => {
@@ -74,8 +83,8 @@ test('full verification covers every product suite even on a documentation commi
   assert.equal(plan.unit, true)
   assert.equal(plan.updater, true)
   assert.equal(plan.manifests, true)
-  assert.equal(plan.creative_eval, true)
   assert.deepEqual(plan.go_modules, ['.', 'agent'])
+  assert.equal(plan.browser_full, true)
   assert.deepEqual(plan.browser_shards, [1, 2, 3])
 })
 
@@ -140,6 +149,77 @@ test('a docs push still verifies product changes from a cancelled preceding push
   } finally {
     server.closeAllConnections()
     await new Promise(resolve => server.close(resolve))
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('explicit manual smoke wins over workflow path inference', () => {
+  const plan = planCI(['.github/workflows/ci.yml'], false, true)
+  assert.equal(plan.code, true)
+  assert.equal(plan.unit, true)
+  assert.equal(plan.updater, true)
+  assert.deepEqual(plan.go_modules, ['.', 'agent'])
+  assert.equal(plan.browser_full, false)
+  assert.deepEqual(plan.browser_shards, [1])
+  assert.equal(plan.shard_count, 1)
+})
+
+test('explicit manual full keeps every browser shard', () => {
+  const plan = planCI(['docs/guide.md'], true, true)
+  assert.equal(plan.browser_full, true)
+  assert.deepEqual(plan.browser_shards, [1, 2, 3])
+  assert.equal(plan.shard_count, 3)
+})
+
+test('explicit smoke dispatch without a base stays a single shard', () => {
+  const { directory, git, commit } = createGitFixture('denova-ci-smoke-')
+  try {
+    git('init', '-q')
+    writeFileSync(path.join(directory, 'README.md'), 'Fixture\n')
+    commit()
+    const output = path.join(directory, 'output')
+    execFileSync(process.execPath, [fileURLToPath(new URL('./ci-plan.mjs', import.meta.url))], {
+      cwd: directory,
+      env: { ...process.env, GITHUB_EVENT_NAME: 'workflow_dispatch', CI_SUITE: 'smoke', BASE: '', GITHUB_OUTPUT: output },
+    })
+    const plan = Object.fromEntries(readFileSync(output, 'utf8').trim().split('\n').map(line => {
+      const separator = line.indexOf('=')
+      return [line.slice(0, separator), JSON.parse(line.slice(separator + 1))]
+    }))
+    assert.equal(plan.code, true)
+    assert.deepEqual(plan.go_modules, ['.', 'agent'])
+    assert.equal(plan.unit, true)
+    assert.equal(plan.updater, true)
+    assert.equal(plan.browser_full, false)
+    assert.deepEqual(plan.browser_shards, [1])
+    assert.equal(plan.shard_count, 1)
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('explicit full dispatch without a base keeps every browser shard', () => {
+  const { directory, git, commit } = createGitFixture('denova-ci-full-')
+  try {
+    git('init', '-q')
+    writeFileSync(path.join(directory, 'README.md'), 'Fixture\n')
+    commit()
+    const output = path.join(directory, 'output')
+    execFileSync(process.execPath, [fileURLToPath(new URL('./ci-plan.mjs', import.meta.url))], {
+      cwd: directory,
+      env: { ...process.env, GITHUB_EVENT_NAME: 'workflow_dispatch', CI_SUITE: 'full', BASE: '', GITHUB_OUTPUT: output },
+    })
+    const plan = Object.fromEntries(readFileSync(output, 'utf8').trim().split('\n').map(line => {
+      const separator = line.indexOf('=')
+      return [line.slice(0, separator), JSON.parse(line.slice(separator + 1))]
+    }))
+    assert.equal(plan.browser_full, true)
+    assert.deepEqual(plan.browser_shards, [1, 2, 3])
+    assert.equal(plan.shard_count, 3)
+    assert.equal(plan.code, true)
+    assert.deepEqual(plan.go_modules, ['.', 'agent'])
+    assert.equal(plan.manifests, true)
+  } finally {
     rmSync(directory, { recursive: true, force: true })
   }
 })

@@ -10,6 +10,57 @@ Denova records only major user-visible features, important compatibility or data
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)。
 
+## [Unreleased]
+
+### Brief / 简要说明
+
+#### 中文
+
+- 同步上游 v0.7.0–v0.8.0：新增 Grok Build 与 Antigravity CLI 运行时、Codex/Claude 原生工具与提问、游戏叙事规则就地调优与 SillyTavern 预设导入、一至三层章节结构转换、本地图表统计、未发送草稿恢复与角色卡同名资料审阅。
+- 同步 MyGo 桌面分发与更新范围说明；本 fork 保持使用统计默认关闭、不弹出首次提示，且发布/同步流程适配新版 `denova-webui-*` 包命名。
+
+#### English
+
+- Syncs upstream v0.7.0–v0.8.0: adds Grok Build and Antigravity CLI runtimes, native tools and questions for Codex/Claude Code, in-place Game narrative rule tuning and SillyTavern preset import, 1–3 level manuscript structures, local chart statistics, unsent draft recovery, and duplicate review when importing character cards.
+- Brings in MyGo desktop distribution and multi-version update notes; this fork keeps usage statistics off by default with no first-run notice, and adapts release/mirror packaging to the new `denova-webui-*` archive naming.
+
+### Added / 新增
+
+- 写作、通用对话和游戏可按会话选择 Grok Build 或 Antigravity CLI，外部模型列表加载更快，Codex App Server 兼容性也有改善。
+- Choose Grok Build or Antigravity CLI per conversation in Writing, General Chat, and Game, with faster cached external model lists and improved Codex App Server compatibility.
+- Codex 与 Claude Code 可直接使用原生读取、检索和 Shell 工具，原生提问与工具结果接入会话记录；写作和通用对话可复用已配置的原生浏览器／MCP 能力，受管正文编辑和游戏提交保留原有审阅与事务边界。
+- Codex and Claude Code can use native read, research, and Shell tools, with questions and tool results preserved in conversation history. Writing and General can reuse configured native browser/MCP integrations while managed edits and Game submissions retain product review and transaction boundaries.
+- 聊天和游戏按会话或分支保存未发送的文字，刷新页面或切回后可以继续编辑。
+- Unsent text in chat and Game is saved per conversation or branch so you can keep editing after reloading or switching back.
+- 导入角色卡时，可以逐项确认保留或覆盖同名资料。
+- When importing a character card, choose whether to keep or replace each Lore entry with the same name.
+- 新增 MyGo 桌面分发，提供 macOS Apple Silicon DMG 与 Windows x64 EXE，复用 Web 的写作、游戏和数据目录，支持原生目录选择、后台任务和整包更新。
+- Adds a MyGo desktop distribution for macOS Apple Silicon (DMG) and Windows x64 (EXE), sharing Web writing, Game and data folders, with native folder selection, background tasks and whole-application updates.
+- 游戏控制台支持就地开关、编辑当前故事的叙事规则，可恢复预设或另存为共享风格。叙事风格目录兼容导入 SillyTavern 聊天补全预设：直接导入保留条目、顺序与默认启停，也可由 AI 整理；不执行宏或扩展脚本。
+- The Game console can toggle and edit story-specific narrative rules, restore preset defaults, or save a reusable style. The narrative style directory imports SillyTavern Chat Completion presets with their text, order, and default activation states, or optional AI adaptation; macros and extension scripts are not executed.
+- 新建和导入作品可选择一至三层章节结构，支持空卷、空章与分节编辑；已有作品可在书籍管理中预览转换，自动保存恢复版本，目录、Agent 阅读顺序与 TXT 导出保持一致。
+- New and imported books support one to three manuscript levels, empty volumes and chapters, and section editing. Book Management previews conversions and saves recovery versions; navigation, Agent reading order and TXT exports share the hierarchy.
+- 共通一级菜单新增「统计」，提供写作趋势、稿量分布、章节进度、游戏每日回合与故事线活动、模型调用与 Token 图表；稿量变化和模型用量从升级后开始记录，游戏活动从现存故事日志读取。可在常规设置中关闭本地统计，保留已有记录与创作内容。
+- A shared Statistics destination adds writing trends, manuscript and chapter charts, daily Game turns and story activity, model calls, and token breakdowns. Manuscript changes and model usage are recorded after upgrading; Game activity comes from retained story journals. Local statistics can be disabled in General settings while keeping existing records and creative content.
+
+### Changed / 变更
+
+- 游戏预设可以只定义状态表模板，由 Agent 在开局选择模板并创建状态对象；主角可以使用任意适用的模板。
+- Game presets can provide templates without initial state objects. The Agent chooses templates and creates those objects at the opening. The player character can use any applicable template.
+- 软件更新展示当前版本到目标版本的变化，按版本阅读简要说明和详情；更新完成后保留本次升级范围，并提供完整历史入口。
+- Software updates show changes from the current version to the target, with per-version summaries and details. Completed upgrades retain their comparison range and link to the full history.
+- 上游使用统计迁移至 PostHog；本 fork 仍保持默认关闭、不弹出首次提示，可在「设置 → 常规」中按需开启。
+- Upstream usage statistics migrated to PostHog; this fork keeps collection off by default with no first-run notice, opt-in under Settings → General.
+
+### Fixed / 修复
+
+- 修复游戏切换回合版本后重新生成时丢失早期状态和规划的问题，并改善外部引擎中断后的回合恢复。
+- Game retains earlier state and plans when regenerating after switching turn versions, and interrupted turns recover more reliably with external engines.
+- 改善 WebUI 自动更新的进程交接；局域网浏览时，需要在宿主机完成的管理操作会给出明确提示。
+- Improves WebUI update process handoff and identifies host-only management actions when browsing over the LAN.
+- 修复作品文件结构变化后目录与统计未刷新，以及重新连接会话后实时执行过程无法展开的问题。
+- Fixes stale navigation and statistics after project file structure changes, and live execution details that could not expand after reattaching to a conversation.
+
 ## [v0.6.3] - 2026-10-22
 
 ### Brief / 简要说明

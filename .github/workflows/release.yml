@@ -73,45 +73,119 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.target }}
-          path: dist/github-release/denova-${{ env.RELEASE_TAG }}-${{ matrix.target }}.*
+          path: dist/github-release/denova-webui-${{ env.RELEASE_TAG }}-*
           compression-level: 0
           if-no-files-found: error
       - uses: actions/upload-artifact@v7
         if: matrix.target == 'linux-x64'
         with:
           name: release-metadata
-          path: |
-            dist/github-release/RELEASE_NOTES.md
-            dist/github-release/install.sh
+          path: dist/github-release/RELEASE_NOTES.md
+
+  desktop:
+    name: Package Desktop (${{ matrix.os }})
+    needs: ci
+    if: vars.DENOVA_DESKTOP_UPDATE_PUBLIC_KEY != ''
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    env:
+      MAC_CERTIFICATE: ${{ secrets.MAC_CERTIFICATE }}
+      MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      MYGO_WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      DENOVA_DESKTOP_UPDATE_PUBLIC_KEY: ${{ vars.DENOVA_DESKTOP_UPDATE_PUBLIC_KEY }}
+      MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+      DENOVA_DESKTOP_RELEASE: 'true'
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.ci.outputs.sha }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            agent/go.sum
+      - uses: ./.github/actions/setup-web
+      - uses: actions/download-artifact@v8
+        with:
+          name: ci-distribution
+          run-id: ${{ needs.ci.outputs.run-id }}
+          github-token: ${{ github.token }}
+      - run: mkdir -p output && tar -xf ci-distribution.tar -C output
+      - name: Prepare optional platform signing and build the tested application
+        env:
+          DENOVA_RELEASE_FRONTEND_DIR: ${{ github.workspace }}/output/web
+          DENOVA_VERSION: ${{ env.RELEASE_TAG }}
+        run: |
+          node desktop/scripts/signing.mjs
+          pnpm --dir desktop build:backend
+      - name: Package the application with signed updates
+        run: pnpm --dir desktop package
+      - name: Exercise the production application
+        run: node desktop/test/package.mjs
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-desktop-${{ matrix.os }}
+          path: output/release-desktop/*
+          if-no-files-found: error
+          compression-level: 0
 
   publish:
     name: Publish verified release assets
-    needs: [ci, package]
+    needs: [ci, package, desktop]
+    if: always() && needs.ci.result == 'success' && needs.package.result == 'success' && (needs.desktop.result == 'success' || needs.desktop.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.ci.outputs.sha }}
       - uses: actions/download-artifact@v8
         with:
           pattern: release-*
           merge-multiple: true
           path: dist/github-release
       - name: Verify the complete platform set and publish
+        if: needs.desktop.result == 'success'
+        working-directory: dist/github-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_SOURCE_SHA: ${{ needs.ci.outputs.sha }}
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/publish-release.sh" "$RELEASE_TAG" "$RELEASE_SOURCE_SHA"
+      - name: Verify and publish WebUI release assets (fork without desktop signing)
+        if: needs.desktop.result == 'skipped'
         working-directory: dist/github-release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          for target in darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64; do
+          downloads=()
+          for target in macos-arm64 macos-x64 linux-arm64 linux-x64 windows-x64; do
             extension=tar.gz
             if [[ "$target" == windows-x64 ]]; then extension=zip; fi
-            test -s "denova-$RELEASE_TAG-$target.$extension"
+            file="denova-webui-$RELEASE_TAG-$target.$extension"
+            test -s "$file"
+            downloads+=("$file")
           done
-          sha256sum denova-* > checksums.txt
-          # Fork releases must install their own verified packages.
-          sed -i "s|REPOSITORY=\"alfredxw/denova\"|REPOSITORY=\"$GITHUB_REPOSITORY\"|" install.sh
-          sed -i "s|https://github.com/alfredxw/denova/releases/latest/download/install.sh|https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/install.sh|" RELEASE_NOTES.md
+          sha256sum "${downloads[@]}" > checksums.txt
+          downloads+=(checksums.txt)
+          # Fork releases link to their own verified packages.
+          sed -i "s|https://github.com/alfredxw/denova/releases/download/$RELEASE_TAG/|https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/|g" RELEASE_NOTES.md
+          sed -i "s|https://raw.githubusercontent.com/alfredxw/denova/$RELEASE_TAG/scripts/install.sh|https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$RELEASE_TAG/scripts/install.sh|g" RELEASE_NOTES.md
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             # Published assets are immutable: replacing them races clients that
             # already pinned this release's checksums.
@@ -120,9 +194,9 @@ jobs:
               exit 1
             fi
             gh release edit "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file RELEASE_NOTES.md
-            gh release upload "$RELEASE_TAG" denova-* checksums.txt install.sh --clobber
+            gh release upload "$RELEASE_TAG" "${downloads[@]}" --clobber
           else
-            gh release create "$RELEASE_TAG" --draft denova-* checksums.txt install.sh --title "$RELEASE_TAG" --notes-file RELEASE_NOTES.md
+            gh release create "$RELEASE_TAG" --draft "${downloads[@]}" --title "$RELEASE_TAG" --notes-file RELEASE_NOTES.md
           fi
           # Latest only points to this version once every archive and checksum
           # has finished uploading. Interrupted uploads leave a private draft.
@@ -153,7 +227,7 @@ jobs:
             target=linux-x64
             if [[ "$arch" == arm64 ]]; then target=linux-arm64; fi
             mkdir -p "dist/upstream/$arch"
-            tar -xzf "dist/github-release/denova-$RELEASE_TAG-$target.tar.gz" -C "dist/upstream/$arch"
+            tar -xzf "dist/github-release/denova-webui-$RELEASE_TAG-$target.tar.gz" -C "dist/upstream/$arch"
             test -x "dist/upstream/$arch/denova/denova"
             test -x "dist/upstream/$arch/denova/denova-updater"
           done

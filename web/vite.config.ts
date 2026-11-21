@@ -24,7 +24,7 @@ const domTests = [
   'src/features/interactive/components/director-console/persistence.test.ts',
 ]
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [react(), tailwindcss()],
   // Isolated browser-test servers must not replace a running dev server's
   // optimized modules while it still holds their previous metadata in memory.
@@ -36,6 +36,7 @@ export default defineConfig({
       'react', 'react-dom', 'react-dom/client',
       'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-i18next',
       'monaco-editor',
+      'recharts',
       '@pierre/diffs', '@pierre/diffs/react', '@pierre/trees', '@pierre/trees/react',
     ],
   },
@@ -84,6 +85,9 @@ export default defineConfig({
             // Keep asynchronously loaded grammars and themes behind their own entries.
             { name: 'shiki', test: /node_modules[\\/](?:shiki|@shikijs)[\\/]/, priority: 40, entriesAware: true },
             { name: 'monaco', test: /node_modules[\\/](?:monaco-editor|@monaco-editor)[\\/]/, priority: 30 },
+            // Chart/scale factories share module-level initialization; splitting
+            // this cluster can instantiate an uninitialized InternMap in production.
+            { name: 'charts', test: /node_modules[\\/](?:recharts|recharts-scale|@reduxjs[\\/]toolkit|redux|redux-thunk|react-redux|reselect|immer|victory-vendor|d3-[^\\/]+|internmap|decimal\.js-light|tiny-invariant|eventemitter3)[\\/]/, priority: 30 },
             // Radix primitives initialize shared contexts at module scope. Splitting
             // them by size can call those factories before their chunk initializes.
             { name: 'radix', test: /node_modules[\\/](?:radix-ui|@radix-ui)[\\/]/, priority: 25 },
@@ -100,7 +104,7 @@ export default defineConfig({
     // Test workspaces contain their own HTML/JS packages. Their writes must not
     // reload the host application in the middle of a browser interaction.
     watch: { ignored: ['**/test-results/**', '**/playwright-report/**'] },
-    proxy: {
+    proxy: mode === 'desktop' ? undefined : {
       '/api': {
         target: `http://127.0.0.1:${backendPort}`,
         // Without an agent the proxy sends Connection: close, forcing browsers
@@ -121,4 +125,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))

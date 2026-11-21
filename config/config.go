@@ -96,13 +96,12 @@ type Config struct {
 	ProjectFileTreeEntryLimit   int                       `toml:"project_file_tree_entry_limit"`
 	ChapterFilenameFormat       string                    `toml:"-"`
 	VolumeDirFormat             string                    `toml:"-"`
-	ChapterGroupMin             int                       `toml:"-"`
-	ChapterGroupMax             int                       `toml:"-"`
 	VersionTimedEnabled         bool                      `toml:"-"`
 	VersionTimedIntervalMinutes int                       `toml:"-"`
 	InteractiveReplyTargetChars int                       `toml:"-"`
 	ResumeLastWorkspace         bool                      `toml:"-"`
 	UpdateCheckEnabled          bool                      `toml:"-"`
+	StatisticsEnabled           bool                      `toml:"-"`
 }
 
 // LoadWithWorkspace 在已知 workspace 时读取分层配置（默认 < 用户级 < 工作区级 < 环境变量）。
@@ -186,13 +185,12 @@ func configFromLayered(novaDir, workspace string, layered LayeredSettings) *Conf
 		TraceRetentionRuns:          settingsInt(s.TraceRetentionRuns, DefaultTraceRetentionRuns),
 		ChapterFilenameFormat:       s.ChapterFilenameFormat,
 		VolumeDirFormat:             s.VolumeDirFormat,
-		ChapterGroupMin:             settingsInt(s.ChapterGroupMin, 3),
-		ChapterGroupMax:             settingsInt(s.ChapterGroupMax, 8),
 		VersionTimedEnabled:         settingsBool(s.VersionTimedEnabled, true),
 		VersionTimedIntervalMinutes: settingsInt(s.VersionTimedIntervalMinutes, 10),
 		InteractiveReplyTargetChars: 2000,
 		ResumeLastWorkspace:         true,
 		UpdateCheckEnabled:          settingsBool(s.UpdateCheckEnabled, true),
+		StatisticsEnabled:           settingsBool(s.StatisticsEnabled, true),
 	}
 
 	// 环境变量始终最高优先级
@@ -452,13 +450,12 @@ func Load() *Config {
 			TraceRetentionRuns:          settingsInt(d.TraceRetentionRuns, DefaultTraceRetentionRuns),
 			ChapterFilenameFormat:       d.ChapterFilenameFormat,
 			VolumeDirFormat:             d.VolumeDirFormat,
-			ChapterGroupMin:             settingsInt(d.ChapterGroupMin, 3),
-			ChapterGroupMax:             settingsInt(d.ChapterGroupMax, 8),
 			VersionTimedEnabled:         settingsBool(d.VersionTimedEnabled, true),
 			VersionTimedIntervalMinutes: settingsInt(d.VersionTimedIntervalMinutes, 10),
 			InteractiveReplyTargetChars: 2000,
 			ResumeLastWorkspace:         true,
 			UpdateCheckEnabled:          settingsBool(d.UpdateCheckEnabled, true),
+			StatisticsEnabled:           settingsBool(d.StatisticsEnabled, true),
 		}
 		overrideFromEnv(cfg)
 		if cfg.Workspace != "" {

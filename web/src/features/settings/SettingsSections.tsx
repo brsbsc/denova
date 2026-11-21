@@ -1,7 +1,8 @@
+import { desktopBridge } from '@/lib/desktop'
 import { DecisionSettingsEditor, EMPTY_DECISION_SETTINGS } from './DecisionSettingsEditor'
 import { EMPTY_SPEECH_SETTINGS, SpeechSettingsEditor } from './SpeechSettingsEditor'
 import { WebAccessSettingsEditor } from './WebAccessSettingsEditor'
-import { memo, useEffect, useState, useCallback } from 'react'
+import { memo, useState, useCallback } from 'react'
 import type { Dispatch, ReactNode, SetStateAction } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from '@/lib/toast'
@@ -9,12 +10,11 @@ import { withErrorLogID } from '@/lib/api-client'
 import type { ImageAPIEndpointSettings, ImageAPIProfileSettings, LabSettings, LayeredSettings, ModelEndpointSettings, ModelProfileSettings, Settings } from './types'
 import { revokeAgentApprovalRule } from './api'
 import { FontPicker } from './FontPicker'
-import { getInteractiveTellers } from '@/features/interactive/api'
-import type { Teller } from '@/features/interactive/types'
 import { SettingsFieldRow } from '@/components/forms/settings-field-row'
 import { SettingsPageVisibility } from './SettingsPageFrame'
 import { AnalyticsSettings } from '@/features/analytics/AnalyticsPreferences'
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import { DEFAULT_MODEL_PROFILE_ID, modelEndpointsWithDefault, modelProfilesWithDefault } from './model-profiles'
 import { ModelProfilesEditor } from './ModelProfilesEditor'
 import { DEFAULT_IMAGE_API_PROFILE_ID, imageAPIEndpointsWithDefault, imageAPIProfilesWithDefault } from './image-profiles'
@@ -35,9 +35,10 @@ import { TextSizeControl } from './TextSizeControl'
 import { LANAccessSettings } from './LANAccessSettings'
 import { UpdateSettings } from './UpdateSettings'
 import { MarketSettings } from './MarketSettings'
+import { DataDirectorySetting } from './DataDirectorySetting'
 import { SETTINGS_SECTIONS, type SettingsFieldRequest, type SettingsSectionId } from './settings-sections'
 import { modelProfilesForEditor, modelEndpointsForEditor, imageAPIProfilesForEditor, imageAPIEndpointsForEditor } from './settings-editor-draft'
-import { FieldRow, TextSizeRow, ReadOnly, Text, Num, BoolTri, AgentApprovalModeSelect, ShellEnvironmentSelect, TraceCaptureSelect, TraceExporterSelect, LanguageSelect, ThemeSelect, MotionIntensitySelect, TellerSelect } from './SettingsFields'
+import { FieldRow, TextSizeRow, ReadOnly, Text, Num, BoolTri, AgentApprovalModeSelect, ShellEnvironmentSelect, TraceCaptureSelect, TraceExporterSelect, LanguageSelect, ThemeSelect, MotionIntensitySelect, AgentTraceDisplaySelect } from './SettingsFields'
 
 interface SettingsSectionsProps {
   layered: LayeredSettings
@@ -45,20 +46,14 @@ interface SettingsSectionsProps {
   setDraft: Dispatch<SetStateAction<Settings>>
   fieldRequest?: SettingsFieldRequest
   onSelectSection: (id: SettingsSectionId) => void
+  onSave: () => Promise<unknown>
 }
 
 /** Keep the form independent of route visibility, navigation, and autosave status. */
-export const SettingsSections = memo(function SettingsSections({ layered, draft, setDraft, fieldRequest, onSelectSection }: SettingsSectionsProps) {
+export const SettingsSections = memo(function SettingsSections({ layered, draft, setDraft, fieldRequest, onSelectSection, onSave }: SettingsSectionsProps) {
   const { t } = useTranslation()
   const approval = useAgentApprovalMode()
-  const [availableTellers, setAvailableTellers] = useState<Teller[]>([])
   const [revokingApprovalRuleID, setRevokingApprovalRuleID] = useState('')
-
-  useEffect(() => {
-    getInteractiveTellers()
-      .then((items) => setAvailableTellers(items))
-      .catch((e) => console.warn('[settings] Failed to load the director list', e))
-  }, [])
 
   const effective = layered?.effective ?? {}
   const inherited = layered?.inherited?.user ?? {}
@@ -153,6 +148,8 @@ export const SettingsSections = memo(function SettingsSections({ layered, draft,
                  inherited={inherited.auto_expand_thinking}
                  onChange={(value) => setField('auto_expand_thinking', value)} />
         <p className="text-xs text-[var(--nova-text-muted)]">{t('settings.appearance.autoExpandThinkingHelp')}</p>
+        <AgentTraceDisplaySelect value={draft.agent_trace_display}
+                                 onChange={(v) => setField('agent_trace_display', v)} />
         <FieldRow label={t('settings.appearance.uiFont')}>
           <FontPicker value={draft.ui_font_family}
                       inherited={inherited.ui_font_family}
@@ -223,6 +220,11 @@ export const SettingsSections = memo(function SettingsSections({ layered, draft,
             </Button>
           </SettingsFieldRow>
         </div>
+        <div data-settings-field="settings.statistics.enabled">
+          <SettingsFieldRow title={t('settings.statistics.enabled')} description={t('settings.statistics.description')} htmlFor="statistics-enabled" controlClassName="shrink-0">
+            <Switch id="statistics-enabled" checked={draft.statistics_enabled ?? effective.statistics_enabled ?? true} onCheckedChange={enabled => setField('statistics_enabled', enabled)} />
+          </SettingsFieldRow>
+        </div>
         <AnalyticsSettings />
       </>
     ),
@@ -243,22 +245,6 @@ export const SettingsSections = memo(function SettingsSections({ layered, draft,
         <Num label={t('settings.ide.maxOpenTabs')} value={draft.max_open_tabs ?? null}
              placeholder={placeholderFor('max_open_tabs')}
              onChange={(v) => setField('max_open_tabs', v)} />
-        <Num label={t('settings.ide.chapterGroupMin')} value={draft.chapter_group_min ?? null}
-             placeholder={placeholderFor('chapter_group_min')}
-             onChange={(v) => setField('chapter_group_min', v)} />
-        <Num label={t('settings.ide.chapterGroupMax')} value={draft.chapter_group_max ?? null}
-             placeholder={placeholderFor('chapter_group_max')}
-             onChange={(v) => setField('chapter_group_max', v)} />
-        <TellerSelect
-          label={t('settings.ide.defaultTeller')}
-          value={draft.ide_story_teller_id}
-          inherited={inherited.ide_story_teller_id}
-          tellers={availableTellers}
-          onChange={(v) => setField('ide_story_teller_id', v)}
-        />
-        <Text label={t('settings.agent.writingSkillDefault')} value={draft.writing_skill_default}
-              placeholder={placeholderFor('writing_skill_default')}
-              onChange={(v) => setField('writing_skill_default', v)} />
       </>
     ),
     'model': (
@@ -373,7 +359,7 @@ export const SettingsSections = memo(function SettingsSections({ layered, draft,
       <>
         <Text label={t('settings.paths.skillsDir')} value={draft.skills_dir} placeholder={placeholderFor('skills_dir')}
               onChange={(v) => setField('skills_dir', v)} />
-        <ReadOnly label={t('settings.paths.novaDir')} value={layered?.paths?.denova_dir || layered?.paths?.nova_dir} />
+        <DataDirectorySetting value={layered?.paths?.denova_dir || layered?.paths?.nova_dir} onBeforeChange={onSave} />
         <ReadOnly label={t('settings.paths.userConfig')} value={layered?.paths?.user_config} />
       </>
     ),
@@ -396,6 +382,7 @@ export const SettingsSections = memo(function SettingsSections({ layered, draft,
     ),
     'updates': (
       <>
+        {!desktopBridge() && <>
         <BoolTri label={t('settings.updates.autoCheck')} value={draft.update_check_enabled ?? null}
                  inherited={inherited.update_check_enabled}
                  onChange={(v) => setField('update_check_enabled', v)} />
@@ -403,6 +390,7 @@ export const SettingsSections = memo(function SettingsSections({ layered, draft,
                  inherited={inherited.update_download_enabled}
                  onChange={(v) => setField('update_download_enabled', v)} />
         <p className="text-xs text-[var(--nova-text-muted)]">{t('settings.updates.autoHint')}</p>
+        </>}
         <UpdateSettings />
       </>
     ),

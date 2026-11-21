@@ -158,6 +158,12 @@ func (s *Service) Create(relPath, itemType, content string) error {
 		if err := os.MkdirAll(absPath, 0o755); err != nil {
 			return err
 		}
+		// Track empty manuscript containers in ordinary content snapshots.
+		if strings.HasPrefix(filepath.ToSlash(relPath), "chapters/") {
+			if err := os.WriteFile(filepath.Join(absPath, ".keep"), nil, 0o644); err != nil {
+				return err
+			}
+		}
 		s.InvalidateSummary([]string{relPath}, false)
 		return nil
 	}
@@ -211,7 +217,11 @@ func (s *Service) Rename(relPath, newName string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	to := filepath.Join(filepath.Dir(from), newName)
+	toRel := filepath.ToSlash(filepath.Join(filepath.Dir(relPath), newName))
+	to, err := SafePath(s.workspace, toRel)
+	if err != nil {
+		return "", err
+	}
 	if _, err := os.Stat(to); err == nil {
 		return "", os.ErrExist
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -220,7 +230,6 @@ func (s *Service) Rename(relPath, newName string) (string, error) {
 	if err := os.Rename(from, to); err != nil {
 		return "", err
 	}
-	toRel := filepath.ToSlash(filepath.Join(filepath.Dir(relPath), newName))
 	s.InvalidateSummary([]string{relPath, toRel}, false)
 	return toRel, nil
 }

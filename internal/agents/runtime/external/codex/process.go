@@ -57,14 +57,22 @@ func Connect(ctx context.Context, options ProcessOptions) (*Client, error) {
 	if err := os.MkdirAll(options.Home, 0o700); err != nil {
 		return nil, err
 	}
+	selectedHome, err := os.Stat(options.Home)
+	if err != nil {
+		return nil, fmt.Errorf("read selected Codex home: %w", err)
+	}
 	cwd, err := os.MkdirTemp("", "denova-engine-")
 	if err != nil {
 		return nil, err
 	}
 	// Denova supplies its filtered Skill catalog and loader. Ambient discovery
 	// must not inject a second catalog that bypasses the library's opt-in.
-	args := []string{"app-server", "-c", `web_search="disabled"`, "-c", "project_doc_max_bytes=0", "-c", "skills.include_instructions=false"}
-	for _, feature := range []string{"shell_tool", "unified_exec", "apply_patch_freeform", "multi_agent", "apps", "browser_use", "browser_use_external", "computer_use", "in_app_browser", "image_generation", "plugins", "hooks", "goals", "memories", "workspace_dependencies", "shell_snapshot"} {
+	args := []string{"app-server", "-c", "project_doc_max_bytes=0", "-c", "skills.include_instructions=false"}
+	// General tools and configured browser/MCP integrations belong to the engine.
+	// Product commits, child-session ownership and scheduled goals remain host-owned.
+	// Prefer the native foreground shell when the App Server supports the
+	// switch. PTY tool results may arrive without command lifecycle items.
+	for _, feature := range []string{"unified_exec", "apply_patch_freeform", "multi_agent", "hooks", "goals", "memories", "image_generation"} {
 		args = append(args, "-c", "features."+feature+"=false")
 	}
 	environment := sharedEnvironment(os.Environ(), options.Home)
@@ -123,7 +131,12 @@ func Connect(ctx context.Context, options ProcessOptions) (*Client, error) {
 		_ = c.Close()
 		return nil, err
 	}
-	if filepath.Clean(initialized.CodexHome) != filepath.Clean(options.Home) {
+	// App Server can canonicalize an alias such as /var on macOS.
+	var reportedHome os.FileInfo
+	if filepath.IsAbs(initialized.CodexHome) {
+		reportedHome, _ = os.Stat(initialized.CodexHome)
+	}
+	if reportedHome == nil || !os.SameFile(selectedHome, reportedHome) {
 		_ = c.Close()
 		return nil, errors.New("App Server did not use the selected Codex home")
 	}

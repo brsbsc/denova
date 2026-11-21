@@ -32,6 +32,7 @@ import (
 	resourcecatalogapp "denova/internal/app/resourcecatalog"
 	"denova/internal/app/resourceexchange"
 	settingsapp "denova/internal/app/settings"
+	statisticsapp "denova/internal/app/statistics"
 	apptask "denova/internal/app/task"
 	"denova/internal/book"
 	"denova/internal/concurrency"
@@ -111,6 +112,7 @@ type App struct {
 	modelsApp          *modelsapp.Service
 	imageApp           *imageapp.Service
 	projectBook        *projectbookapp.Service
+	statisticsApp      *statisticsapp.Service
 	projectFiles       *projectfilesapp.Service
 	servicesOnce       sync.Once
 	platform           *platform.Manager
@@ -330,6 +332,10 @@ var ErrNoWorkspaceOpen = settingsapp.ErrProjectRequired
 // root operation.
 var ErrAgentOperationActive = agentruntime.ErrOperationActive
 
+// ErrAgentOperationPaused rejects a new root start while a suspended operation
+// still owns the conversation. Callers must resume or discard that operation.
+var ErrAgentOperationPaused = agentruntime.ErrOperationPaused
+
 // ErrWorkspaceTransition prevents a task from binding half to an old
 // workspace and half to a newly constructed runtime.
 var ErrWorkspaceTransition = appagentruntime.ErrWorkspaceTransition
@@ -355,7 +361,7 @@ func (a *App) ensureServices() {
 		if a.cfg != nil {
 			dataDir = a.cfg.DataDir()
 		}
-		a.activityApp = activityapp.NewService(dataDir, a.automationApp)
+		a.activityApp = activityapp.NewService(dataDir, a.automationApp, a.updates)
 		a.bookApp = bookapp.NewService(dataDir, a.projectRegistry, a.bookMetaStore)
 		a.resourceCatalog = resourcecatalogapp.NewService(dataDir, resourceCatalogHost{app: a})
 		a.resourceMarket = resourceexchange.NewMarket(dataDir)
@@ -365,6 +371,10 @@ func (a *App) ensureServices() {
 		a.imageApp = imageapp.NewService(imageHost{app: a})
 		a.loreApp = loreapp.NewService(loreHost{app: a}, a.imageApp)
 		a.projectBook = projectbookapp.NewService(a.projectRegistry)
+		a.statisticsApp = statisticsapp.New(a.projectRegistry, a.projectBook)
+		if a.cfg != nil {
+			a.statisticsApp.SetEnabled(a.cfg.StatisticsEnabled)
+		}
 		if a.workspaceFiles != nil {
 			a.workspaceFiles.SetObserver(a.observeProjectFileChange)
 		}
@@ -397,6 +407,23 @@ func (a *App) AgentChat() *agentchatapp.Service {
 func (a *App) AgentEngines() *agentruntime.Engines {
 	a.ensureServices()
 	return a.agentEngines
+}
+
+// WarmUpAgentRuntimes populates the cached status and model catalog for each
+// external engine once after startup.
+func (a *App) WarmUpAgentRuntimes(ctx context.Context) {
+	engines := a.AgentEngines()
+	for _, id := range []config.RuntimeID{config.RuntimeCodex, config.RuntimeClaude, config.RuntimeGrok, config.RuntimeAntigravity} {
+		if ctx.Err() != nil {
+			return
+		}
+		descriptor, err := engines.Check(ctx, id)
+		if err != nil {
+			slog.InfoContext(ctx, "[agent-runtime] startup probe incomplete", "runtime", id, "error", err)
+		} else if descriptor.Status != "ready" {
+			slog.InfoContext(ctx, "[agent-runtime] startup probe incomplete", "runtime", id, "status", descriptor.Status, "reason", descriptor.ReasonKey)
+		}
+	}
 }
 
 // ProjectBook exposes Book resources through stable Project identity without
@@ -531,6 +558,9 @@ func (a *App) Close() {
 		}
 		if workspaceFiles != nil {
 			workspaceFiles.Close()
+		}
+		if a.statisticsApp != nil {
+			a.statisticsApp.Close()
 		}
 		if a.terminals != nil {
 			a.terminals.CloseAll()

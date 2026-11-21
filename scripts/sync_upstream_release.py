@@ -65,7 +65,12 @@ def verify_assets(directory):
         if not match or match[2] in checksums or match[2] in (".", ".."):
             raise ValueError("Invalid or duplicate checksum entry")
         checksums[match[2]] = match[1].lower()
-    archives = list(directory.glob("denova-*.tar.gz")) + list(directory.glob("denova-*.zip"))
+    archives = (
+        list(directory.glob("denova-*.tar.gz"))
+        + list(directory.glob("denova-*.zip"))
+        + list(directory.glob("denova-*.dmg"))
+        + list(directory.glob("denova-*.exe"))
+    )
     if not archives:
         raise ValueError("No release archives found")
     for archive in archives:
@@ -116,7 +121,10 @@ def prepare(args):
         run("gh", "release", "download", tag, "--repo", UPSTREAM, "--dir", str(assets))
         verify_assets(assets)
         for architecture, package in (("amd64", "x64"), ("arm64", "arm64")):
-            extract_bundle(assets / f"denova-{tag}-linux-{package}.tar.gz", args.directory / architecture)
+            archive = assets / f"denova-webui-{tag}-linux-{package}.tar.gz"
+            if not archive.is_file():
+                archive = assets / f"denova-{tag}-linux-{package}.tar.gz"
+            extract_bundle(archive, args.directory / architecture)
             root = args.directory / architecture / "denova"
             # The frontend is embedded in the binary; web/ may be an empty directory.
             for required in ("denova", "denova-updater", "LICENSE"):

@@ -5,13 +5,18 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/lib/toast'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { ANALYTICS_PREFERENCES_CHANGED, fetchAnalyticsPreferences, setAnalyticsEnabled, type AnalyticsPreferences } from './api'
+import { ANALYTICS_PREFERENCES_CHANGED, fetchAnalyticsPreferences, recordAppOpened, setAnalyticsEnabled, type AnalyticsPreferences } from './api'
 
 function useAnalyticsPreferences() {
   const { t } = useTranslation()
   const [preferences, setPreferences] = useState<AnalyticsPreferences | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(false)
+  useEffect(() => {
+    if (preferences?.available && preferences.enabled && preferences.notice_seen) {
+      void recordAppOpened().catch(cause => console.warn('[analytics] Failed to record the application opening', cause))
+    }
+  }, [preferences?.available, preferences?.enabled, preferences?.notice_seen])
   useEffect(() => {
     let active = true
     void fetchAnalyticsPreferences().then(value => { if (active) setPreferences(value) })
@@ -73,7 +78,7 @@ export function AnalyticsSettings() {
   return (
     <div data-settings-field="settings.analytics.enabled" className="flex flex-col gap-2">
       <SettingsFieldRow title={t('settings.analytics.enabled')} description={t('settings.analytics.settingsDescription')} controlClassName="shrink-0">
-        <Switch aria-label={t('settings.analytics.enabled')} checked={preferences?.enabled ?? false} disabled={!preferences || saving || !preferences.available} onCheckedChange={enabled => void update(enabled)} />
+        <Switch aria-label={t('settings.analytics.enabled')} checked={preferences?.available === true && preferences.enabled} disabled={!preferences || saving || !preferences.available} onCheckedChange={enabled => void update(enabled)} />
       </SettingsFieldRow>
       <p className="text-xs text-muted-foreground">{t('settings.analytics.privacyDescription')}</p>
       {preferences && !preferences.available && <p className="text-xs text-muted-foreground">{t('settings.analytics.developmentDisabled')}</p>}

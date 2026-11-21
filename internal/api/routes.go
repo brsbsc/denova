@@ -19,7 +19,10 @@ import (
 // registerRoutes 注册 HTTP API 和静态文件路由。
 func (s *Server) registerRoutes(h *hertzserver.Hertz) {
 	apiHandlers := handlers.New(s.app)
-	h.Any("/api/platform/manage/*path", localHostEffectMiddleware, apiHandlers.HandlePlatformManagement)
+	// Management reads back the workbench UI for authenticated LAN browsers.
+	// Only actions that depend on this host stay loopback-only; see
+	// platformManagementLocalHostMiddleware.
+	h.Any("/api/platform/manage/*path", platformManagementLocalHostMiddleware, apiHandlers.HandlePlatformManagement)
 	api := h.Group("/api")
 	{
 		api.POST("/autosave-conflicts", apiHandlers.HandleAutosaveConflictCreate)
@@ -45,6 +48,7 @@ func (s *Server) registerRoutes(h *hertzserver.Hertz) {
 		api.POST("/resource-exchange/installations/:id/policy", localHostEffectMiddleware, apiHandlers.HandleResourceUpdateMode)
 		api.POST("/resource-market/catalog/refresh", localHostEffectMiddleware, apiHandlers.HandleResourceMarketRefresh)
 		api.GET("/agent-runs", apiHandlers.HandleGlobalAgentRunTraces)
+		api.GET("/statistics", apiHandlers.HandleStatistics)
 		api.GET("/agent-runtimes", apiHandlers.HandleAgentEngines)
 		api.POST("/agent-runtimes/:id/check", apiHandlers.HandleAgentEngineCheck)
 		api.GET("/agent-runtimes/:id/models", apiHandlers.HandleAgentEngineModels)
@@ -60,6 +64,8 @@ func (s *Server) registerRoutes(h *hertzserver.Hertz) {
 		projects.POST("/files/operations", apiHandlers.HandleProjectFileOperations)
 		projects.POST("/files/reveal", localHostEffectMiddleware, apiHandlers.HandleProjectFileReveal)
 		projects.GET("/book", apiHandlers.HandleProjectBookSnapshot)
+		projects.POST("/book/structure/preview", apiHandlers.HandleBookStructure)
+		projects.PUT("/book/structure", apiHandlers.HandleBookStructure)
 		projects.GET("/book/tree", apiHandlers.HandleProjectBookTree)
 		projects.GET("/book/summary", apiHandlers.HandleProjectBookSummary)
 		projects.PATCH("/book/chapter-status", apiHandlers.HandleProjectBookChapterStatus)
@@ -267,6 +273,8 @@ func (s *Server) registerRoutes(h *hertzserver.Hertz) {
 		api.GET("/analytics", apiHandlers.HandleAnalyticsGet)
 		api.PATCH("/analytics", apiHandlers.HandleAnalyticsPatch)
 		api.POST("/analytics/activity", apiHandlers.HandleAnalyticsActivity)
+		api.POST("/analytics/open", apiHandlers.HandleAnalyticsOpen)
+		api.POST("/analytics/error", apiHandlers.HandleAnalyticsError)
 		api.PATCH("/settings", apiHandlers.HandleSettingsPatch)
 		api.POST("/settings/web-search/test", apiHandlers.HandleWebSearchTest)
 		api.DELETE("/settings/agent-approval-rules/:id", apiHandlers.HandleAgentApprovalRuleDelete)
@@ -282,6 +290,7 @@ func (s *Server) registerRoutes(h *hertzserver.Hertz) {
 		api.PATCH("/conversation-config", apiHandlers.HandleConversationConfigPatch)
 		api.GET("/update/status", apiHandlers.HandleUpdateStatus)
 		api.GET("/update/check", apiHandlers.HandleUpdateCheck)
+		api.GET("/update/notes", apiHandlers.HandleUpdateNotes)
 		api.POST("/update/install", apiHandlers.HandleUpdateInstall)
 		api.POST("/update/install/stream", apiHandlers.HandleUpdateInstallStream)
 		api.POST("/update/upload", apiHandlers.HandleUpdateUpload)

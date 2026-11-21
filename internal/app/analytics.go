@@ -38,17 +38,21 @@ func analyticsEngine(cfg config.Config) analytics.Engine {
 		return analytics.Codex
 	case config.RuntimeClaude:
 		return analytics.Claude
+	case config.RuntimeGrok:
+		return analytics.Grok
+	case config.RuntimeAntigravity:
+		return analytics.Antigravity
 	}
 	slog.Error("analytics_runtime_unknown", "runtime", cfg.ActiveAgentRuntime.Kind)
 	return ""
 }
 
-func finishAnalyticsRun(run analytics.Run, status agentrun.OutcomeStatus) {
-	switch status {
+func finishAnalyticsRun(run analytics.Run, outcome agentrun.Outcome) {
+	switch outcome.Status {
 	case agentrun.OutcomeCompleted:
 		run.Finish(analytics.Success)
 	case agentrun.OutcomeFailed:
-		run.Finish(analytics.Failure)
+		run.Fail(outcome.Error)
 	case agentrun.OutcomeAborted:
 		run.Finish(analytics.Cancelled)
 	case agentrun.OutcomePreempted:
@@ -56,6 +60,6 @@ func finishAnalyticsRun(run analytics.Run, status agentrun.OutcomeStatus) {
 	case agentrun.OutcomeSuspended:
 		run.Finish(analytics.Suspended)
 	default:
-		slog.Error("analytics_outcome_unknown", "status", status)
+		slog.Error("analytics_outcome_unknown", "status", outcome.Status)
 	}
 }
