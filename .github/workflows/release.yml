@@ -184,7 +184,7 @@ jobs:
           sha256sum "${downloads[@]}" > checksums.txt
           downloads+=(checksums.txt)
           # Fork releases link to their own verified packages.
-          sed -i "s|https://github.com/alfredxw/denova/releases/download/$RELEASE_TAG/|https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/|g" RELEASE_NOTES.md
+          sed -i "s|https://github.com/alfredxw/denova/releases/download/$RELEASE_TAG/denova-webui-|https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/denova-webui-|g" RELEASE_NOTES.md
           sed -i "s|https://raw.githubusercontent.com/alfredxw/denova/$RELEASE_TAG/scripts/install.sh|https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$RELEASE_TAG/scripts/install.sh|g" RELEASE_NOTES.md
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             # Published assets are immutable: replacing them races clients that
