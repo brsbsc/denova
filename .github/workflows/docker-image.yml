@@ -1,0 +1,97 @@
+name: Publish Docker image
+
+# Builds the Linux bundles of an existing release tag and publishes only the
+# GHCR image. It runs entirely on Linux runners, so it does not wait on the
+# desktop packaging or macOS runners that gate the full Release workflow.
+# The tag's commit is expected to have passed CI already.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing Git tag to publish, for example v0.8.0fix1'
+        required: true
+        type: string
+      latest:
+        description: 'Also move ghcr.io/brsbsc/denova:latest to this tag'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-image-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    name: Build, smoke-test and publish ${{ inputs.tag }}
+    if: github.repository == 'brsbsc/denova'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Require a release tag name
+        run: '[[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(fix[0-9]*)?$ ]]'
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            agent/go.sum
+      - uses: ./.github/actions/setup-web
+      - name: Build Linux release bundles
+        run: |
+          set -euo pipefail
+          # The first build prepares the frontend; the second reuses it.
+          bash scripts/build-github-release.sh "$RELEASE_TAG" linux-x64
+          DENOVA_RELEASE_FRONTEND_DIR="$GITHUB_WORKSPACE/web/dist" \
+            bash scripts/build-github-release.sh "$RELEASE_TAG" linux-arm64
+          for arch in amd64 arm64; do
+            target=linux-x64
+            if [[ "$arch" == arm64 ]]; then target=linux-arm64; fi
+            mkdir -p "dist/upstream/$arch"
+            tar -xzf "dist/github-release/denova-webui-$RELEASE_TAG-$target.tar.gz" -C "dist/upstream/$arch"
+            test -x "dist/upstream/$arch/denova/denova"
+            test -x "dist/upstream/$arch/denova/denova-updater"
+          done
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - name: Build and smoke-test both architectures
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            docker buildx build --load --platform "linux/$arch" \
+              --file docker/Dockerfile --tag "denova-image-smoke:$arch" \
+              --build-arg "VERSION=$RELEASE_TAG" \
+              --build-arg "SOURCE_REPOSITORY=$GITHUB_REPOSITORY" .
+            bash docker/smoke-test.sh "denova-image-smoke:$arch" "linux/$arch" "$RELEASE_TAG"
+          done
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Publish the tested image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/brsbsc/denova:${{ inputs.tag }}
+            ${{ inputs.latest && 'ghcr.io/brsbsc/denova:latest' || '' }}
+          build-args: |
+            VERSION=${{ inputs.tag }}
+            SOURCE_REPOSITORY=${{ github.repository }}
+      - name: Report publication
+        run: |
+          echo "Published ghcr.io/brsbsc/denova:$RELEASE_TAG (latest: ${{ inputs.latest }}) for linux/amd64 and linux/arm64." >> "$GITHUB_STEP_SUMMARY"
