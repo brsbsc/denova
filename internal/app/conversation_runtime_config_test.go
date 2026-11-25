@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"denova/config"
@@ -526,16 +525,10 @@ func TestGameStaleRuntimeSwitchPreservesSuspendedControllerAndResumePath(t *test
 		t.Fatalf("failed switches cleared recovery input: %+v err=%v", recoveryInput, err)
 	}
 
-	// Same-process retry is still rejected: the in-process journal handle is
-	// deliberately poisoned after an unknown append failure until reopened.
-	_, err = application.PatchConversationConfig(t.Context(), binding, stalePatch, saved.Revision)
-	requireReopenJournalError(t, err)
-	// Reopen the Story journal over the untouched canonical file: rebuilding
-	// the product runtime drops the poisoned handle and replays the unchanged
-	// journal. All following assertions run against the reopened runtime.
-	application = reopenConversationTestApp(t, application)
-
-	// Confirm valid revision commits config + controller detach in one transaction while retaining the canonical interruption.
+	// ErrCommitUnknown evicts the poisoned in-process Story journal handle, so a
+	// valid same-process retry reopens the untouched canonical file cleanly and
+	// commits config + controller detach in one transaction while retaining the
+	// canonical interruption.
 	switched, err := application.PatchConversationConfig(t.Context(), binding, stalePatch, saved.Revision)
 	if err != nil {
 		t.Fatalf("valid switch after failed switches: %v", err)
@@ -632,28 +625,12 @@ func TestGameFailedSwitchAllowsOriginalSuspendedTurnToResumeToCompletion(t *test
 	}
 
 	// Resume the original suspended turn after both stale conflict and write failure.
+	// ErrCommitUnknown evicted the poisoned in-process Story journal handle, so
+	// resuming on the same runtime reopens the untouched canonical file cleanly.
 	view := application.InteractiveAgentActiveView(t.Context(), story.ID, "main")
 	actions := agentexecution.RuntimeRecoveryActions(view.Runtime)
 	if len(actions) == 0 || actions[0].Kind != agentexecution.RuntimeRecoveryResume {
 		t.Fatalf("missing resume action after failed switch: %+v", actions)
-	}
-	// Same-process resume is still rejected: the in-process journal handle is
-	// deliberately poisoned after an unknown append failure until reopened.
-	_, err = controller.Resume(t.Context(), actions[0], func(_ context.Context, cycleInput agentruntime.ExternalCycleInput, _ func(agentrun.Event), _ func(context.Context, *external.RuntimeSession) error) (agentruntime.ExternalCycle, error) {
-		return nil, context.Canceled
-	}, nil)
-	requireReopenJournalError(t, err)
-	// Reopen the Story journal over the untouched canonical file: rebuilding
-	// the product runtime drops the poisoned handle and replays the unchanged
-	// journal, then the recovered turn resumes on the reopened runtime.
-	application = reopenConversationTestApp(t, application)
-	_, options, err = application.interactiveSessionRuntime(binding)
-	if err != nil {
-		t.Fatal(err)
-	}
-	controller, selected, err = application.externalController(options)
-	if err != nil || !selected {
-		t.Fatalf("externalController after reopen failed: selected=%t err=%v", selected, err)
 	}
 	resumedCmd := ""
 	resumedRun, err := controller.Resume(t.Context(), actions[0], func(_ context.Context, cycleInput agentruntime.ExternalCycleInput, _ func(agentrun.Event), _ func(context.Context, *external.RuntimeSession) error) (agentruntime.ExternalCycle, error) {
@@ -676,30 +653,6 @@ func TestGameFailedSwitchAllowsOriginalSuspendedTurnToResumeToCompletion(t *test
 type testExternalCycleFunc func(context.Context) agentrun.Outcome
 
 func (fn testExternalCycleFunc) Wait(ctx context.Context) agentrun.Outcome { return fn(ctx) }
-
-// reopenConversationTestApp rebuilds the product runtime over the same data
-// directory. This is the way a poisoned Story journal handle is reopened: the
-// fresh Store replays the unchanged canonical file, dropping the deliberately
-// invalid in-process projection.
-func reopenConversationTestApp(t *testing.T, application *App) *App {
-	t.Helper()
-	application.mu.RLock()
-	workspace := application.workspace
-	application.mu.RUnlock()
-	// The reopened runtime must see the same settings layer, so it binds to
-	// the same isolated data directory regardless of the caller's env setup.
-	t.Setenv("DENOVA_DIR", workspace)
-	t.Setenv("NOVA_DIR", workspace)
-	reopened, err := New(t.Context(), &config.Config{
-		OpenAIModel: "test-model", NovaDir: workspace, Workspace: workspace,
-		OpenAIBaseURL: "http://127.0.0.1:1/v1",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(reopened.Close)
-	return reopened
-}
 
 // interactiveStoryJournalPath locates the canonical Story journal backing a
 // game, matching interactive.Store.storyPath without crossing the package
@@ -746,15 +699,5 @@ func restoreStoryJournalWritable(t *testing.T, path string) {
 	t.Helper()
 	if err := os.Chmod(path, 0o644); err != nil {
 		t.Fatal(err)
-	}
-}
-
-// requireReopenJournalError asserts the deliberate poison contract of one
-// Story journal handle: after an actual append failure, every same-process
-// write is rejected until the journal is reopened.
-func requireReopenJournalError(t *testing.T, err error) {
-	t.Helper()
-	if err == nil || !strings.Contains(err.Error(), "reopen the journal") {
-		t.Fatalf("operation after append failure must require reopening the journal: %v", err)
 	}
 }
