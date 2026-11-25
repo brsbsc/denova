@@ -95,7 +95,14 @@ func imageFromAPIItem(ctx context.Context, client *http.Client, item imagesAPIIt
 }
 
 func downloadImageURL(ctx context.Context, client *http.Client, target string) ([]byte, string, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	parsed, err := url.Parse(strings.TrimSpace(target))
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
+		return nil, "", fmt.Errorf("invalid image download URL %q", target)
+	}
+	if client == nil {
+		client = newPublicImageDownloadClient(defaultImageDownloadTimeout)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
 	if err != nil {
 		return nil, "", err
 	}

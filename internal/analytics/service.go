@@ -27,7 +27,7 @@ type queuedEvent struct {
 	generation uint64
 }
 
-var versionPattern = regexp.MustCompile(`^v?\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$`)
+var versionPattern = regexp.MustCompile(`^v?\d+\.\d+\.\d+(?:fix[1-9]\d*|fix)?(?:[-+][A-Za-z0-9.-]+)?$`)
 
 type Service struct {
 	mu              sync.Mutex

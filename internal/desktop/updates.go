@@ -2,8 +2,10 @@ package desktop
 
 import (
 	"context"
+	"strings"
 	"time"
 
+	"denova/internal/buildinfo"
 	"denova/internal/update"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/plugins/updater"
@@ -46,7 +48,15 @@ func (b *Bridge) UpdateStatus(ctx context.Context) (update.Status, error) {
 	b.shell.preferencesMu.Unlock()
 	status := update.Status{Distribution: "desktop", Phase: "idle", CurrentVersion: mygo.App.Version(), CheckedAt: updater.LastCheck(), CompletedUpdate: completed}
 	if version := updater.AvailableVersion(); version != "" {
-		status.Check = &update.CheckResult{CurrentVersion: status.CurrentVersion, LatestVersion: version, UpdateAvailable: true, ReleaseURL: "https://github.com/alfredxw/denova/releases/tag/v" + version, PublishedAt: time.Time{}}
+		status.Check = &update.CheckResult{CurrentVersion: status.CurrentVersion, LatestVersion: version, UpdateAvailable: true, ReleaseURL: desktopReleaseURL(buildinfo.Repository, version), PublishedAt: time.Time{}}
 	}
 	return status, nil
+}
+
+func desktopReleaseURL(repository, version string) string {
+	repo := strings.Trim(strings.TrimSpace(repository), "/")
+	if repo == "" {
+		repo = "alfredxw/denova"
+	}
+	return "https://github.com/" + repo + "/releases/tag/v" + strings.TrimPrefix(strings.TrimSpace(version), "v")
 }

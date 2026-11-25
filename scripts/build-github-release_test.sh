@@ -131,8 +131,19 @@ unpack_hotfix() {
 GITHUB_REPOSITORY=owner/fork bash "${TEST_ROOT}/scripts/build-github-release.sh" v0.5.1fix linux-x64 > /dev/null
 unpack_hotfix fork
 grep -q -- '-X denova/internal/buildinfo.Repository=owner/fork' "${TEST_ROOT}/fork/denova/denova"
+grep -Fq 'https://github.com/owner/fork/releases/download/v0.5.1fix/denova-webui-v0.5.1fix-linux-x64.tar.gz' "${assets}/RELEASE_NOTES.md"
+grep -Fq 'https://raw.githubusercontent.com/owner/fork/v0.5.1fix/scripts/install.sh' "${assets}/RELEASE_NOTES.md"
+if grep -Fq 'denova-desktop-' "${assets}/RELEASE_NOTES.md"; then exit 1; fi
+if grep -Fq 'alfredxw/denova' "${assets}/RELEASE_NOTES.md"; then exit 1; fi
+GITHUB_REPOSITORY=owner/fork DENOVA_RELEASE_DESKTOP=true bash "${TEST_ROOT}/scripts/build-github-release.sh" v0.5.1fix linux-x64 > /dev/null
+grep -Fq 'https://github.com/owner/fork/releases/download/v0.5.1fix/denova-desktop-v0.5.1fix-macos-arm64.dmg' "${assets}/RELEASE_NOTES.md"
+grep -Fq 'https://github.com/owner/fork/releases/download/v0.5.1fix/denova-desktop-v0.5.1fix-windows-x64-setup.exe' "${assets}/RELEASE_NOTES.md"
+if grep -Fq 'alfredxw/denova' "${assets}/RELEASE_NOTES.md"; then exit 1; fi
+env -u GITHUB_REPOSITORY DENOVA_RELEASE_DESKTOP=false bash "${TEST_ROOT}/scripts/build-github-release.sh" v0.5.1fix linux-x64 > /dev/null
+if grep -Fq 'denova-desktop-' "${assets}/RELEASE_NOTES.md"; then exit 1; fi
 env -u GITHUB_REPOSITORY bash "${TEST_ROOT}/scripts/build-github-release.sh" v0.5.1fix linux-x64 > /dev/null
 unpack_hotfix default
 if grep -q 'buildinfo.Repository' "${TEST_ROOT}/default/denova/denova"; then exit 1; fi
 if GITHUB_REPOSITORY='owner/fork -X main.injected=1' bash "${TEST_ROOT}/scripts/build-github-release.sh" v0.5.1fix linux-x64 > /dev/null 2>&1; then exit 1; fi
+if DENOVA_RELEASE_DESKTOP=invalid bash "${TEST_ROOT}/scripts/build-github-release.sh" v0.5.1fix linux-x64 > /dev/null 2>&1; then exit 1; fi
 printf 'Release packaging tests passed.\n'

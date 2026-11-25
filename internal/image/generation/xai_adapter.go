@@ -17,7 +17,7 @@ type XAIAdapter struct {
 
 func NewXAIAdapter(httpClient *http.Client) *XAIAdapter {
 	if httpClient == nil {
-		httpClient = &http.Client{}
+		httpClient = defaultHTTPClient()
 	}
 	return &XAIAdapter{httpClient: httpClient}
 }
@@ -73,7 +73,7 @@ func (adapter *XAIAdapter) Generate(ctx context.Context, profile config.Resolved
 	}
 	request.Size = ""
 	request.OutputFormat = ""
-	return imagesResultFromResponse(ctx, adapter.httpClient, profile.ProfileID, profile.Provider, profile.Model, request, response)
+	return imagesResultFromResponse(ctx, imageDownloadClient(adapter.httpClient, profile.BaseURL), profile.ProfileID, profile.Provider, profile.Model, request, response)
 }
 
 type xaiImageInput struct {

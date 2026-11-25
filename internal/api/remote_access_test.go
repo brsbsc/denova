@@ -14,6 +14,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	hertzserver "github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/common/ut"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func testRemoteAccess(t *testing.T) (*remoteAccessGate, *hertzserver.Hertz, *config.RemoteAccessConfig) {
@@ -191,7 +192,6 @@ func TestRemoteAccessLocalTrustRequiresLoopbackClientAndHost(t *testing.T) {
 
 func TestRemoteAccessLoginSlowsRepeatedFailures(t *testing.T) {
 	gate, h, _ := testRemoteAccess(t)
-	// A wrong username fails before the password hash is computed, keeping the test fast.
 	wrong, right := `{"username":"intruder","password":"guess"}`, `{"username":"reader","password":"secret"}`
 	for attempt := 1; attempt <= loginFailureLimit; attempt++ {
 		if res := remoteRequest(h, "POST", "/api/auth/login", wrong, ""); res.Code != 401 {
@@ -235,5 +235,39 @@ func TestRemoteAccessCorruptStoreFailsClosed(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	if string(data) != "broken" {
 		t.Fatal("corrupt store was overwritten")
+	}
+}
+
+func TestRemoteAccessLoginTrimsPasswordAndRunsBcryptOnWrongUsername(t *testing.T) {
+	_, h, access := testRemoteAccess(t)
+	padded := remoteRequest(h, "POST", "/api/auth/login", `{"username":"reader","password":"  secret \n"}`, "")
+	if padded.Code != 200 {
+		t.Fatalf("whitespace-padded password rejected: %d %s", padded.Code, padded.Body.String())
+	}
+
+	slowHash, err := bcrypt.GenerateFromPassword([]byte("secret"), 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	access.PasswordHash = string(slowHash)
+	start := time.Now()
+	wrongUser := ut.PerformRequest(h.Engine, "POST", "/api/auth/login",
+		&ut.Body{Body: strings.NewReader(`{"username":"nonexistent","password":"guess"}`), Len: len(`{"username":"nonexistent","password":"guess"}`)},
+		ut.Header{Key: "X-Forwarded-For", Value: "192.168.1.40"},
+		ut.Header{Key: "Content-Type", Value: "application/json"},
+	)
+	elapsed := time.Since(start)
+	if wrongUser.Code != 401 || elapsed < 15*time.Millisecond {
+		t.Fatalf("wrong-username login short-circuited bcrypt: status=%d elapsed=%v", wrongUser.Code, elapsed)
+	}
+
+	access.PasswordHash = ""
+	emptyHash := ut.PerformRequest(h.Engine, "POST", "/api/auth/login",
+		&ut.Body{Body: strings.NewReader(`{"username":"reader","password":"secret"}`), Len: len(`{"username":"reader","password":"secret"}`)},
+		ut.Header{Key: "X-Forwarded-For", Value: "192.168.1.41"},
+		ut.Header{Key: "Content-Type", Value: "application/json"},
+	)
+	if emptyHash.Code != 401 {
+		t.Fatalf("empty password hash login = %d, want 401", emptyHash.Code)
 	}
 }

@@ -15,7 +15,7 @@ type ArkAdapter struct {
 
 func NewArkAdapter(httpClient *http.Client) *ArkAdapter {
 	if httpClient == nil {
-		httpClient = &http.Client{}
+		httpClient = defaultHTTPClient()
 	}
 	return &ArkAdapter{httpClient: httpClient}
 }
@@ -74,7 +74,7 @@ func (adapter *ArkAdapter) Generate(ctx context.Context, profile config.Resolved
 		return Result{}, ErrImageDataMissing
 	}
 	request.N = len(combined.Data)
-	result, err := imagesResultFromResponse(ctx, adapter.httpClient, profile.ProfileID, profile.Provider, profile.Model, request, combined)
+	result, err := imagesResultFromResponse(ctx, imageDownloadClient(adapter.httpClient, profile.BaseURL), profile.ProfileID, profile.Provider, profile.Model, request, combined)
 	if err != nil {
 		return Result{}, err
 	}

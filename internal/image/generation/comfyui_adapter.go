@@ -22,7 +22,7 @@ type ComfyUIAdapter struct {
 
 func NewComfyUIAdapter(httpClient *http.Client) *ComfyUIAdapter {
 	if httpClient == nil {
-		httpClient = &http.Client{}
+		httpClient = defaultHTTPClient()
 	}
 	return &ComfyUIAdapter{httpClient: httpClient}
 }

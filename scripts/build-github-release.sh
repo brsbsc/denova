@@ -20,13 +20,29 @@ fi
 
 # A fork's release updates from the fork's own releases. GitHub Actions sets
 # GITHUB_REPOSITORY; other builds keep the default compiled into the binary.
+RELEASE_REPOSITORY="${GITHUB_REPOSITORY:-alfredxw/denova}"
+if [[ ! "${RELEASE_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+  echo "Error: invalid GITHUB_REPOSITORY: ${RELEASE_REPOSITORY}" >&2
+  exit 1
+fi
 REPOSITORY_LDFLAG=""
 if [[ -n "${GITHUB_REPOSITORY:-}" ]]; then
-  if [[ ! "${GITHUB_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
-    echo "Error: invalid GITHUB_REPOSITORY: ${GITHUB_REPOSITORY}" >&2
-    exit 1
-  fi
   REPOSITORY_LDFLAG=" -X denova/internal/buildinfo.Repository=${GITHUB_REPOSITORY}"
+fi
+
+INCLUDE_DESKTOP="${DENOVA_RELEASE_DESKTOP:-}"
+if [[ -z "${INCLUDE_DESKTOP}" ]]; then
+  if [[ -n "${DENOVA_DESKTOP_UPDATE_PUBLIC_KEY:-}" ]]; then
+    INCLUDE_DESKTOP="true"
+  elif [[ -n "${GITHUB_REPOSITORY:-}" && "${GITHUB_REPOSITORY}" != "alfredxw/denova" ]]; then
+    INCLUDE_DESKTOP="false"
+  else
+    INCLUDE_DESKTOP="true"
+  fi
+fi
+if [[ "${INCLUDE_DESKTOP}" != "true" && "${INCLUDE_DESKTOP}" != "false" ]]; then
+  echo "Error: invalid DENOVA_RELEASE_DESKTOP: ${INCLUDE_DESKTOP}" >&2
+  exit 1
 fi
 
 TARGETS=(
@@ -128,14 +144,15 @@ EOF
   release_tag="v$(release_version_without_prefix)"
   {
     echo "# Denova ${release_tag}"
-    cat <<'EOF'
+    if [[ "${INCLUDE_DESKTOP}" == "true" ]]; then
+      cat <<'EOF'
 
 ## Desktop / 桌面版（推荐）
 
 | System / 系统 | Download / 下载 |
 | --- | --- |
-| macOS Apple Silicon | [Download DMG / 下载 DMG](https://github.com/alfredxw/denova/releases/download/@TAG@/denova-desktop-@TAG@-macos-arm64.dmg) |
-| Windows x64 | [Download installer / 下载安装器](https://github.com/alfredxw/denova/releases/download/@TAG@/denova-desktop-@TAG@-windows-x64-setup.exe) |
+| macOS Apple Silicon | [Download DMG / 下载 DMG](https://github.com/@REPO@/releases/download/@TAG@/denova-desktop-@TAG@-macos-arm64.dmg) |
+| Windows x64 | [Download installer / 下载安装器](https://github.com/@REPO@/releases/download/@TAG@/denova-desktop-@TAG@-windows-x64-setup.exe) |
 
 macOS 13 or later (Apple Silicon): open the DMG and drag Denova into Applications. Windows x64: run the EXE installer.
 
@@ -155,6 +172,14 @@ This Beta has no platform code signing or macOS notarization. Your system may re
 
 <details>
 <summary>WebUI · Browser interface / 浏览器版</summary>
+EOF
+    else
+      cat <<'EOF'
+
+## WebUI · Browser interface / 浏览器版
+EOF
+    fi
+    cat <<'EOF'
 
 Run the downloaded program on your computer or server, then open its address in a browser. WebUI is a downloadable application, not a hosted website.
 
@@ -162,29 +187,32 @@ Run the downloaded program on your computer or server, then open its address in 
 
 | System / 系统 | Download / 下载 |
 | --- | --- |
-| macOS Apple Silicon | [tar.gz](https://github.com/alfredxw/denova/releases/download/@TAG@/denova-webui-@TAG@-macos-arm64.tar.gz) |
-| macOS Intel | [tar.gz](https://github.com/alfredxw/denova/releases/download/@TAG@/denova-webui-@TAG@-macos-x64.tar.gz) |
-| Windows x64 | [zip](https://github.com/alfredxw/denova/releases/download/@TAG@/denova-webui-@TAG@-windows-x64.zip) |
-| Linux x64 | [tar.gz](https://github.com/alfredxw/denova/releases/download/@TAG@/denova-webui-@TAG@-linux-x64.tar.gz) |
-| Linux ARM64 | [tar.gz](https://github.com/alfredxw/denova/releases/download/@TAG@/denova-webui-@TAG@-linux-arm64.tar.gz) |
+| macOS Apple Silicon | [tar.gz](https://github.com/@REPO@/releases/download/@TAG@/denova-webui-@TAG@-macos-arm64.tar.gz) |
+| macOS Intel | [tar.gz](https://github.com/@REPO@/releases/download/@TAG@/denova-webui-@TAG@-macos-x64.tar.gz) |
+| Windows x64 | [zip](https://github.com/@REPO@/releases/download/@TAG@/denova-webui-@TAG@-windows-x64.zip) |
+| Linux x64 | [tar.gz](https://github.com/@REPO@/releases/download/@TAG@/denova-webui-@TAG@-linux-x64.tar.gz) |
+| Linux ARM64 | [tar.gz](https://github.com/@REPO@/releases/download/@TAG@/denova-webui-@TAG@-linux-arm64.tar.gz) |
 
 macOS / Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/alfredxw/denova/@TAG@/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/@REPO@/@TAG@/scripts/install.sh | sh
 ```
 
 Or verify the archive against `checksums.txt`, extract it, and run `denova` (`denova.exe` on Windows).
 
 也可以使用 `checksums.txt` 校验压缩包，解压后运行 `denova`（Windows 为 `denova.exe`）。
-
-</details>
+EOF
+    if [[ "${INCLUDE_DESKTOP}" == "true" ]]; then
+      printf '\n</details>\n'
+    fi
+    cat <<'EOF'
 
 ## Changes / 变化
 
 EOF
     extract_release_brief "${release_tag}" < CHANGELOG.md
-  } | sed "s/@TAG@/${release_tag}/g" > "${DIST_DIR}/RELEASE_NOTES.md"
+  } | sed -e "s|@REPO@|${RELEASE_REPOSITORY}|g" -e "s|@TAG@|${release_tag}|g" > "${DIST_DIR}/RELEASE_NOTES.md"
 }
 
 require_command go

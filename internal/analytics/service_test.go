@@ -376,4 +376,24 @@ func TestSourceBuildsAndUnreadableStateNeverCollect(t *testing.T) {
 	if string(data) != "invalid preserved state" {
 		t.Fatal("corrupt state changed")
 	}
+
+	for _, version := range []string{"0.8.0fix1", "v0.8.0fix1", "0.5.1fix"} {
+		hotfix, err := Open(Options{Version: version, StatePath: filepath.Join(t.TempDir(), "analytics.json")})
+		if err != nil {
+			t.Fatalf("Open(%q) error = %v", version, err)
+		}
+		available := hotfix.Preferences().Available
+		hotfix.Close()
+		if !available {
+			t.Fatalf("hotfix release version %q was not treated as available", version)
+		}
+	}
+	invalidFix, err := Open(Options{Version: "0.8.0fix0", StatePath: filepath.Join(t.TempDir(), "analytics.json")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer invalidFix.Close()
+	if invalidFix.Preferences().Available {
+		t.Fatal("0.8.0fix0 should not be treated as a valid release version")
+	}
 }

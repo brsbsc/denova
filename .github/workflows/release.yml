@@ -68,6 +68,7 @@ jobs:
       - name: Package the tested frontend for this platform
         env:
           DENOVA_RELEASE_FRONTEND_DIR: ${{ github.workspace }}/output/web
+          DENOVA_RELEASE_DESKTOP: ${{ vars.DENOVA_DESKTOP_UPDATE_PUBLIC_KEY != '' && 'true' || 'false' }}
           RELEASE_TARGET: ${{ matrix.target }}
         run: bash scripts/build-github-release.sh "$RELEASE_TAG" "$RELEASE_TARGET"
       - uses: actions/upload-artifact@v7
@@ -172,45 +173,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_SOURCE_SHA: ${{ needs.ci.outputs.sha }}
-        run: |
-          set -euo pipefail
-          [[ "$RELEASE_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          downloads=()
-          for target in macos-arm64 macos-x64 linux-arm64 linux-x64 windows-x64; do
-            extension=tar.gz
-            if [[ "$target" == windows-x64 ]]; then extension=zip; fi
-            file="denova-webui-$RELEASE_TAG-$target.$extension"
-            test -s "$file"
-            downloads+=("$file")
-          done
-          sha256sum "${downloads[@]}" > checksums.txt
-          downloads+=(checksums.txt)
-          # Fork releases link to their own verified packages.
-          sed -i "s|https://github.com/alfredxw/denova/releases/download/$RELEASE_TAG/denova-webui-|https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/denova-webui-|g" RELEASE_NOTES.md
-          sed -i "s|https://raw.githubusercontent.com/alfredxw/denova/$RELEASE_TAG/scripts/install.sh|https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$RELEASE_TAG/scripts/install.sh|g" RELEASE_NOTES.md
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            # Published assets are immutable: replacing them races clients that
-            # already pinned this release's checksums.
-            if [[ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" != true ]]; then
-              tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)"
-              release_target="$(gh release view "$RELEASE_TAG" --json targetCommitish --jq .targetCommitish)"
-              existing="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | LC_ALL=C sort)"
-              expected="$(printf '%s\n' "${downloads[@]}" | LC_ALL=C sort)"
-              if [[ "$tag_sha" == "$RELEASE_SOURCE_SHA" && "$release_target" == "$RELEASE_SOURCE_SHA" && "$existing" == "$expected" ]]; then
-                echo "Release $RELEASE_TAG is already published for $RELEASE_SOURCE_SHA with the expected assets; keeping published assets untouched."
-                exit 0
-              fi
-              echo "Refusing to reuse or replace published release $RELEASE_TAG (tag=$tag_sha, target=$release_target, expected=$RELEASE_SOURCE_SHA); publish a new version instead." >&2
-              exit 1
-            fi
-            gh release edit "$RELEASE_TAG" --target "$RELEASE_SOURCE_SHA" --title "$RELEASE_TAG" --notes-file RELEASE_NOTES.md
-            gh release upload "$RELEASE_TAG" "${downloads[@]}" --clobber
-          else
-            gh release create "$RELEASE_TAG" --draft --target "$RELEASE_SOURCE_SHA" "${downloads[@]}" --title "$RELEASE_TAG" --notes-file RELEASE_NOTES.md
-          fi
-          # Latest only points to this version once every archive and checksum
-          # has finished uploading. Interrupted uploads leave a private draft.
-          gh release edit "$RELEASE_TAG" --draft=false
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/publish-release.sh" --webui-only "$RELEASE_TAG" "$RELEASE_SOURCE_SHA"
 
   container:
     name: Publish verified source Docker images
@@ -274,6 +237,8 @@ jobs:
           labels: |
             org.opencontainers.image.revision=${{ needs.ci.outputs.sha }}
       - name: Report source publication
+        env:
+          RELEASE_SOURCE_SHA: ${{ needs.ci.outputs.sha }}
         run: |
-          echo 'Published ghcr.io/brsbsc/denova:${{ env.RELEASE_TAG }} and latest from verified source.' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Source: ${{ needs.ci.outputs.sha }}; platforms: linux/amd64, linux/arm64.' >> "$GITHUB_STEP_SUMMARY"
+          echo "Published ghcr.io/brsbsc/denova:$RELEASE_TAG and latest from verified source." >> "$GITHUB_STEP_SUMMARY"
+          echo "Source: $RELEASE_SOURCE_SHA; platforms: linux/amd64, linux/arm64." >> "$GITHUB_STEP_SUMMARY"

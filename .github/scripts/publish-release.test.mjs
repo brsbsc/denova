@@ -86,7 +86,7 @@ function fixture(t) {
   writeFileSync(path.join(directory, 'denova-v0.7.2-darwin-arm64.tar.gz'), 'Unrelated legacy copy\n')
   const run = () => execFileSync('bash', [script, tag, sha], {
     cwd: directory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, PATH: `${path.join(directory, 'bin')}:${process.env.PATH}`, GH_REPO: 'example/denova', RELEASE_TEST_STATE: statePath },
+    env: { ...process.env, PATH: `${path.join(directory, 'bin')}${path.delimiter}${process.env.PATH}`, GH_REPO: 'example/denova', RELEASE_TEST_STATE: statePath },
   })
   return { directory, state, save, run }
 }
@@ -139,4 +139,40 @@ test('rejects an update manifest pointing at the primary download release', t =>
   writeFileSync(manifestPath, JSON.stringify(manifest))
   assert.throws(f.run)
   assert.equal(f.state().calls.length, 0)
+})
+
+test('publishes fixN hotfix releases and WebUI-only fork releases with digest checks', t => {
+  const hotfixTag = 'v0.8.0fix1'
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'denova-publish-webui-'))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  mkdirSync(path.join(directory, 'bin'))
+  writeFileSync(path.join(directory, 'bin', 'gh'), fakeGh, { mode: 0o755 })
+  const statePath = path.join(directory, 'state.json')
+  const state = () => JSON.parse(readFileSync(statePath, 'utf8'))
+  writeFileSync(statePath, JSON.stringify({ releases: {}, calls: [] }))
+  const webuiDownloads = ['macos-arm64', 'macos-x64', 'linux-arm64', 'linux-x64', 'windows-x64'].map(target =>
+    `denova-webui-${hotfixTag}-${target}.${target === 'windows-x64' ? 'zip' : 'tar.gz'}`)
+  for (const name of webuiDownloads) writeFileSync(path.join(directory, name), `fixture ${name}\n`)
+  writeFileSync(path.join(directory, 'RELEASE_NOTES.md'), 'Fork WebUI release fixture\n')
+
+  const runArgs = args => execFileSync('bash', [script, ...args], {
+    cwd: directory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, PATH: `${path.join(directory, 'bin')}${path.delimiter}${process.env.PATH}`, GH_REPO: 'fork/denova', RELEASE_TEST_STATE: statePath },
+  })
+
+  assert.throws(() => runArgs(['--webui-only', 'v0.8.0-rc.1', sha]))
+  runArgs(['--webui-only', hotfixTag, sha])
+
+  const { releases } = state()
+  assert.deepEqual(Object.keys(releases), [hotfixTag])
+  assert.deepEqual(releases[hotfixTag].assets.map(a => a.name).sort(), [...webuiDownloads, 'checksums.txt'].sort())
+  assert.equal(releases[hotfixTag].draft, false)
+  assert.equal(releases[hotfixTag].latest, true)
+
+  // Resumed run on identical bytes is a safe no-op.
+  runArgs(['--webui-only', hotfixTag, sha])
+
+  // Mutating an archive after publication fails SHA-256 verification.
+  writeFileSync(path.join(directory, webuiDownloads[0]), 'tampered archive\n')
+  assert.throws(() => runArgs(['--webui-only', hotfixTag, sha]), /unexpected assets or checksums/)
 })

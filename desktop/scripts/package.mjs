@@ -10,6 +10,8 @@ const platforms = { 'darwin-arm64': 'darwin/arm64', 'win32-x64': 'windows/amd64'
 if (!platforms[target]) throw new Error(`Unsupported desktop target: ${target}`)
 const version = JSON.parse(readFileSync(path.join(desktop, 'package.json'))).version
 const publicKey = process.env.DENOVA_DESKTOP_UPDATE_PUBLIC_KEY || ''
+const repository = process.env.GITHUB_REPOSITORY || 'alfredxw/denova'
+if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new Error(`Invalid GITHUB_REPOSITORY: ${repository}`)
 const release = process.env.DENOVA_DESKTOP_RELEASE === 'true'
 if (release && (!publicKey || !process.env.MYGO_UPDATER_PRIVATE_KEY)) throw new Error('Release builds require both desktop update signing keys')
 const config = {
@@ -24,7 +26,7 @@ const config = {
   },
   windows: { ...(process.env.DENOVA_WINDOWS_CERTIFICATE ? { certificate: process.env.DENOVA_WINDOWS_CERTIFICATE } : {}) },
   // Keep machine update files out of the primary release's download list.
-  ...(publicKey ? { updates: { publicKey, github: 'alfredxw/denova', tagPrefix: 'desktop-updates-v', deltas: 0, changelog: 'CHANGELOG.md' } } : {}),
+  ...(publicKey ? { updates: { publicKey, github: repository, tagPrefix: 'desktop-updates-v', deltas: 0, changelog: 'CHANGELOG.md' } } : {}),
 }
 mkdirSync(path.join(desktop, 'build'), { recursive: true })
 writeFileSync(path.join(root, 'mygo.json'), JSON.stringify(config, null, 2) + '\n')

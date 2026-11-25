@@ -1,4 +1,4 @@
-import { spawn, execFileSync } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -14,13 +14,31 @@ const env = { ...process.env, MYGO_DEV: '1', DENOVA_DESKTOP_RESOURCES: path.join
 try {
   for (;;) {
     const child = spawn(binary, ['--dev-mode'], { stdio: 'inherit', env })
-    const stop = () => child.kill('SIGTERM')
+    let stopping = false
+    let forceKillTimer = null
+    const forceKill = () => {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM')
+    }
+    const stop = () => {
+      if (process.platform !== 'win32' || stopping || !child.pid) {
+        stopping = true
+        forceKill()
+        return
+      }
+      stopping = true
+      forceKillTimer = setTimeout(forceKill, 15000)
+      forceKillTimer.unref()
+      execFile(binary, [`--quit-pid=${child.pid}`], { env, windowsHide: true }, error => {
+        if (error) forceKill()
+      })
+    }
     process.on('SIGINT', stop)
     process.on('SIGTERM', stop)
     const [code] = await once(child, 'exit')
+    if (forceKillTimer) clearTimeout(forceKillTimer)
     process.off('SIGINT', stop)
     process.off('SIGTERM', stop)
-    if (code !== 75) { process.exitCode = code || 0; break }
+    if (stopping || code !== 75) { process.exitCode = code || 0; break }
     // MyGo requests a relaunch after selecting another data directory. Keep
     // the renderer alive and let the saved selection replace the initial env.
     delete env.DENOVA_DIR

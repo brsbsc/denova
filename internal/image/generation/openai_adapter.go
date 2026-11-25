@@ -14,7 +14,7 @@ type OpenAIAdapter struct {
 
 func NewOpenAIAdapter(httpClient *http.Client) *OpenAIAdapter {
 	if httpClient == nil {
-		httpClient = &http.Client{}
+		httpClient = defaultHTTPClient()
 	}
 	return &OpenAIAdapter{httpClient: httpClient}
 }
@@ -70,7 +70,7 @@ func (adapter *OpenAIAdapter) Generate(ctx context.Context, profile config.Resol
 		return Result{}, err
 	}
 	request.Size = size
-	return imagesResultFromResponse(ctx, adapter.httpClient, profile.ProfileID, profile.Provider, profile.Model, request, response)
+	return imagesResultFromResponse(ctx, imageDownloadClient(adapter.httpClient, profile.BaseURL), profile.ProfileID, profile.Provider, profile.Model, request, response)
 }
 
 func openAIImageSize(size, aspectRatio string) string {

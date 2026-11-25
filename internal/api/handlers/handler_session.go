@@ -2,8 +2,6 @@ package handlers
 
 import (
 	"context"
-	"fmt"
-	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -13,7 +11,6 @@ import (
 
 	"denova/internal/api/agentui"
 	appsvc "denova/internal/app"
-	"denova/internal/restart"
 )
 
 // sessionDTO 会话摘要 DTO。
@@ -195,18 +192,6 @@ func (h *Handlers) HandleSessionDelete(ctx context.Context, c *app.RequestContex
 type statusResponse struct {
 	HasState bool   `json:"has_state"`
 	Context  string `json:"context"`
-}
-
-var scheduleRestart = restart.ScheduleCurrentProcess
-
-// handleRestart POST /api/restart — 重启 Nova 服务并重新加载配置。
-func (h *Handlers) HandleRestart(ctx context.Context, c *app.RequestContext) {
-	if err := scheduleRestart(ctx, restart.DefaultDelay); err != nil {
-		slog.ErrorContext(ctx, fmt.Sprintf("[restart] schedule failed err=%v", err))
-		writeError(c, consts.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(c, consts.StatusOK, map[string]string{"status": "restarting"})
 }
 
 // handleStatus GET /api/status — 返回作品状态。

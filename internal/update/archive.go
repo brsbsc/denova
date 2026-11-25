@@ -22,15 +22,24 @@ func extractArchive(archivePath, targetDir string) error {
 	return fmt.Errorf("unsupported update archive format: %s", filepath.Base(archivePath))
 }
 
+const (
+	maxArchiveExpandedBytes uint64 = 2 << 30
+	maxArchiveEntries              = 30000
+)
+
 func extractZip(archivePath, targetDir string) error {
 	reader, err := zip.OpenReader(archivePath)
 	if err != nil {
 		return fmt.Errorf("open zip update archive: %w", err)
 	}
 	defer reader.Close()
+	if len(reader.File) > maxArchiveEntries {
+		return errors.New("update archive exceeds extraction limits or contains special files")
+	}
 	var expandedBytes uint64
 	for _, f := range reader.File {
-		if f.UncompressedSize64 > (2<<30)-expandedBytes || len(reader.File) > 30000 || (!f.Mode().IsRegular() && !f.FileInfo().IsDir()) {
+		remaining := maxArchiveExpandedBytes - expandedBytes
+		if f.UncompressedSize64 > remaining || (!f.Mode().IsRegular() && !f.FileInfo().IsDir()) {
 			return errors.New("update archive exceeds extraction limits or contains special files")
 		}
 		expandedBytes += f.UncompressedSize64
@@ -48,11 +57,15 @@ func extractZip(archivePath, targetDir string) error {
 		if err != nil {
 			return err
 		}
-		if err := writeExtractedFile(target, rc, f.FileInfo().Mode()); err != nil {
+		entryLimit := int64(min(remaining, f.UncompressedSize64))
+		if err := writeExtractedFile(target, rc, f.FileInfo().Mode(), entryLimit); err != nil {
 			rc.Close()
 			return err
 		}
-		rc.Close()
+		if err := rc.Close(); err != nil {
+			_ = os.Remove(target)
+			return err
+		}
 	}
 	return nil
 }
@@ -80,7 +93,7 @@ func extractTarGz(archivePath, targetDir string) error {
 			return err
 		}
 		entries++
-		if header.Size < 0 || header.Size > (2<<30)-expandedBytes || entries > 30000 {
+		if header.Size < 0 || header.Size > int64(maxArchiveExpandedBytes)-expandedBytes || entries > maxArchiveEntries {
 			return errors.New("update archive exceeds extraction limits")
 		}
 		expandedBytes += header.Size
@@ -94,7 +107,7 @@ func extractTarGz(archivePath, targetDir string) error {
 				return err
 			}
 		case tar.TypeReg, tar.TypeRegA:
-			if err := writeExtractedFile(target, reader, header.FileInfo().Mode()); err != nil {
+			if err := writeExtractedFile(target, reader, header.FileInfo().Mode(), header.Size); err != nil {
 				return err
 			}
 		default:
@@ -119,7 +132,7 @@ func safeJoin(root, name string) (string, error) {
 	return target, nil
 }
 
-func writeExtractedFile(target string, reader io.Reader, mode os.FileMode) error {
+func writeExtractedFile(target string, reader io.Reader, mode os.FileMode, maxBytes int64) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
 	}
@@ -127,7 +140,19 @@ func writeExtractedFile(target string, reader io.Reader, mode os.FileMode) error
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-	_, err = io.Copy(out, reader)
-	return err
+	written, copyErr := io.Copy(out, io.LimitReader(reader, maxBytes+1))
+	closeErr := out.Close()
+	if copyErr != nil {
+		_ = os.Remove(target)
+		return copyErr
+	}
+	if written > maxBytes {
+		_ = os.Remove(target)
+		return errors.New("update archive exceeds extraction limits")
+	}
+	if closeErr != nil {
+		_ = os.Remove(target)
+		return closeErr
+	}
+	return nil
 }

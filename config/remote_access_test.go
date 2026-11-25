@@ -3,6 +3,8 @@ package config
 import (
 	"net"
 	"testing"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestSelectLANAddress(t *testing.T) {
@@ -28,5 +30,37 @@ func TestSelectLANAddress(t *testing.T) {
 				t.Fatalf("selected LAN address = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestRemoteAccessPasswordTrimmingAndDummyHash(t *testing.T) {
+	cost, err := bcrypt.Cost([]byte(dummyRemoteAccessPasswordHash))
+	if err != nil || cost != bcrypt.DefaultCost {
+		t.Fatalf("dummy bcrypt hash cost = %d, err = %v, want %d", cost, err, bcrypt.DefaultCost)
+	}
+	hash, err := HashRemoteAccessPassword("  secret-pass \n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !CheckRemoteAccessPassword(hash, "secret-pass") {
+		t.Fatal("trimmed password failed check")
+	}
+	if !CheckRemoteAccessPassword(hash, "\t secret-pass  ") {
+		t.Fatal("password with surrounding whitespace failed check")
+	}
+	for _, invalid := range []struct {
+		hash     string
+		password string
+	}{
+		{hash, "wrong"},
+		{hash, ""},
+		{hash, "   \t\n"},
+		{"", "secret-pass"},
+		{"", "secret"},
+		{"malformed-hash", "secret-pass"},
+	} {
+		if CheckRemoteAccessPassword(invalid.hash, invalid.password) {
+			t.Fatalf("CheckRemoteAccessPassword(%q, %q) unexpectedly succeeded", invalid.hash, invalid.password)
+		}
 	}
 }

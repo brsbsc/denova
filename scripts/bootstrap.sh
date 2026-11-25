@@ -241,10 +241,6 @@ case "$MODE" in
     echo "==> Starting the Denova backend development server"
     echo "  The final URL will be shown after the server starts"
     echo ""
-
-    echo "==> Resolving Go dependencies"
-    go mod tidy
-
     echo "  Press Ctrl+C to stop"
     exec go run ./cmd/denova --dev-mode --no-open
     ;;
@@ -263,9 +259,6 @@ case "$MODE" in
         echo "==> Installing frontend dependencies"
         (cd web && pnpm install)
     fi
-
-    echo "==> Resolving Go dependencies"
-    go mod tidy
 
     echo "==> Starting the frontend and backend"
     echo "  Press Ctrl+C to stop"

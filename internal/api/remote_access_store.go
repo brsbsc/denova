@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -135,7 +136,7 @@ var errPairingInvalid = errors.New("pairing link is invalid or expired")
 func (s *browserSessions) exchangePairing(token string, access config.RemoteAccessConfig) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if token == "" || s.pairingDigest != browserTokenDigest(token) || !s.pairing.valid(access, time.Now()) {
+	if token == "" || s.pairingDigest == "" || subtle.ConstantTimeCompare([]byte(s.pairingDigest), []byte(browserTokenDigest(token))) != 1 || !s.pairing.valid(access, time.Now()) {
 		return "", errPairingInvalid
 	}
 	credential, err := s.issueLocked(access)

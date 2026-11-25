@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { launch, workspace, until, root } from './driver.mjs'
 
@@ -161,8 +161,34 @@ try {
   await app.close(); app = null
   console.log(`Desktop smoke passed (${process.platform}/${process.arch})`)
 } finally {
-  if (app) { try { console.error('Renderer diagnostics', await app.evaluate(() => ({ errors: window.smokeErrors, text: document.body.innerText.slice(0, 2000), resources: performance.getEntriesByType('resource').filter(r => r.duration > 5000).map(r => r.name) }))); await app.screenshot(path.join(artifacts, 'last-screen.png')); await app.close() } catch (error) { console.error(error); process.kill(app.pid, 'SIGTERM') } }
-  cpSync(path.join(directory, 'shell/log'), path.join(artifacts, 'log'), { recursive: true })
-  model.kill(); await once(model, 'exit')
-  if (process.env.DENOVA_KEEP_TEST_DATA !== 'true') rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); else console.log(directory)
+  if (app) {
+    try {
+      console.error('Renderer diagnostics', await app.evaluate(() => ({ errors: window.smokeErrors, text: document.body.innerText.slice(0, 2000), resources: performance.getEntriesByType('resource').filter(r => r.duration > 5000).map(r => r.name) })))
+      await app.screenshot(path.join(artifacts, 'last-screen.png'))
+      await app.close()
+    } catch (error) {
+      console.error(error)
+      try { if (app.pid) process.kill(app.pid, 'SIGTERM') } catch (killError) { console.error(killError) }
+    }
+  }
+  try {
+    const logDir = path.join(directory, 'shell/log')
+    if (existsSync(logDir)) cpSync(logDir, path.join(artifacts, 'log'), { recursive: true })
+  } catch (error) {
+    console.error(error)
+  }
+  try {
+    if (model.exitCode === null && model.signalCode === null) {
+      model.kill()
+      await once(model, 'exit')
+    }
+  } catch (error) {
+    console.error(error)
+  }
+  try {
+    if (process.env.DENOVA_KEEP_TEST_DATA !== 'true') rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    else console.log(directory)
+  } catch (error) {
+    console.error(error)
+  }
 }

@@ -127,6 +127,10 @@ func PrepareUserSettingsForWrite(existing, incoming Settings) (Settings, error) 
 	return out, nil
 }
 
+// Precomputed DefaultCost bcrypt hash so missing/invalid stored hashes still pay
+// the full password-verification work factor and never leak account existence.
+const dummyRemoteAccessPasswordHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+
 func HashRemoteAccessPassword(password string) (string, error) {
 	password = strings.TrimSpace(password)
 	if password == "" {
@@ -134,14 +138,20 @@ func HashRemoteAccessPassword(password string) (string, error) {
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		return "", fmt.Errorf("生成远程访问密码哈希失败: %w", err)
+		return "", fmt.Errorf("hash remote access password: %w", err)
 	}
 	return string(hash), nil
 }
 
 func CheckRemoteAccessPassword(hash, password string) bool {
-	if hash == "" || password == "" {
-		return false
+	password = strings.TrimSpace(password)
+	targetHash := hash
+	if targetHash == "" {
+		targetHash = dummyRemoteAccessPasswordHash
 	}
-	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
+	err := bcrypt.CompareHashAndPassword([]byte(targetHash), []byte(password))
+	if err != nil && !errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+		_ = bcrypt.CompareHashAndPassword([]byte(dummyRemoteAccessPasswordHash), []byte(password))
+	}
+	return hash != "" && password != "" && err == nil
 }

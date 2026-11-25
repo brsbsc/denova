@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
 	"log/slog"
@@ -210,7 +211,11 @@ func (g *remoteAccessGate) login(ctx context.Context, c *app.RequestContext) {
 		abortWithLocalizedError(c, consts.StatusTooManyRequests, "api.access.tooManyAttempts")
 		return
 	}
-	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(input.Username)), []byte(access.Username)) != 1 || !config.CheckRemoteAccessPassword(access.PasswordHash, input.Password) {
+	inputUserDigest := sha256.Sum256([]byte(strings.TrimSpace(input.Username)))
+	expectedUserDigest := sha256.Sum256([]byte(access.Username))
+	usernameMatch := subtle.ConstantTimeCompare(inputUserDigest[:], expectedUserDigest[:]) == 1
+	passwordMatch := config.CheckRemoteAccessPassword(access.PasswordHash, input.Password)
+	if !usernameMatch || !passwordMatch {
 		g.logins.failed(client, time.Now())
 		slog.InfoContext(ctx, "remote_login_rejected", "client_ip", client)
 		abortWithLocalizedError(c, consts.StatusUnauthorized, "api.access.invalidCredentials")

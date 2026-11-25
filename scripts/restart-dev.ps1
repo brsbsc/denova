@@ -113,24 +113,6 @@ function Find-RepoDevProcessIds {
         }
     }
 
-    # A live backend plus its go run parent identifies backend-only bootstrap
-    # trees that have neither a state file nor a Vite child.
-    foreach ($backend in $Snapshot | Where-Object {
-        $_.Name -eq 'denova.exe' -and
-        $_.CommandLine -and
-        $_.CommandLine -match '(?i)(?:^|\s)--dev-mode(?:\s|$)'
-    }) {
-        $root = $null
-        $current = $processById[[int]$backend.ParentProcessId]
-        while ($current -and (Test-DenovaGoRunProcess -Process $current)) {
-            $root = $current
-            $current = $processById[[int]$current.ParentProcessId]
-        }
-        if ($root) {
-            [void]$roots.Add([int]$root.ProcessId)
-        }
-    }
-
     foreach ($viteProcessId in Find-RepoViteProcessIds -Snapshot $Snapshot) {
         $current = $processById[[int]$viteProcessId]
         $root = $null
@@ -175,7 +157,7 @@ function Stop-RepoDevProcesses {
     foreach ($processId in $allProcessIds | Sort-Object -Descending) {
         $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
         if ($process) {
-            Stop-Process -InputObject $process -Force
+            Stop-Process -InputObject $process -Force -ErrorAction SilentlyContinue
             $stoppedProcesses += $process
         }
     }

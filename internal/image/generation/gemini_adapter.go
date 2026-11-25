@@ -19,7 +19,7 @@ type GeminiAdapter struct {
 
 func NewGeminiAdapter(httpClient *http.Client) *GeminiAdapter {
 	if httpClient == nil {
-		httpClient = &http.Client{}
+		httpClient = defaultHTTPClient()
 	}
 	return &GeminiAdapter{httpClient: httpClient}
 }

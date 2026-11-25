@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -396,11 +399,24 @@ func allowedTerminalOrigin(c *hertzapp.RequestContext) bool {
 }
 
 func isLocalDevOrigin(origin string) bool {
-	lowered := strings.ToLower(origin)
-	for _, prefix := range []string{"http://localhost:", "http://127.0.0.1:", "https://localhost:", "https://127.0.0.1:"} {
-		if strings.HasPrefix(lowered, prefix) {
-			return true
-		}
+	parsed, err := url.Parse(strings.TrimSpace(origin))
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return false
 	}
-	return false
+	if parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	hostname := parsed.Hostname()
+	if !strings.EqualFold(hostname, "localhost") && hostname != "127.0.0.1" {
+		return false
+	}
+	port := parsed.Port()
+	if port == "" {
+		return false
+	}
+	portNum, err := strconv.Atoi(port)
+	if err != nil || portNum < 1 || portNum > 65535 {
+		return false
+	}
+	return strings.EqualFold(parsed.Host, net.JoinHostPort(hostname, port))
 }
