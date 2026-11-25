@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -266,5 +267,115 @@ func TestServiceDeleteRemovesDirectory(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(workspace, "chapters", "volume")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("删除后目录应不存在，实际错误: %v", err)
+	}
+}
+
+func TestServiceRejectsSymlinkLeavesOnReadWriteCreateCopy(t *testing.T) {
+	workspace := t.TempDir()
+	outsideDir := t.TempDir()
+	outsideExisting := filepath.Join(outsideDir, "secret.md")
+	if err := os.WriteFile(outsideExisting, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outsideDangling := filepath.Join(outsideDir, "escaped.md")
+
+	if err := os.MkdirAll(filepath.Join(workspace, "chapters"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	existingLink := filepath.Join(workspace, "chapters", "link.md")
+	if err := os.Symlink(outsideExisting, existingLink); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	danglingLink := filepath.Join(workspace, "chapters", "dangling.md")
+	if err := os.Symlink(outsideDangling, danglingLink); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	service := NewService(workspace)
+	if _, err := service.ReadFile("chapters/link.md"); err == nil {
+		t.Fatal("ReadFile should reject symlink leaf")
+	}
+	if err := service.WriteFile("chapters/dangling.md", "escaped"); err == nil {
+		t.Fatal("WriteFile should reject dangling symlink leaf")
+	}
+	if err := service.WriteBinaryFile("chapters/dangling.md", []byte("escaped")); err == nil {
+		t.Fatal("WriteBinaryFile should reject dangling symlink leaf")
+	}
+	if err := service.Create("chapters/dangling.md", "file", "escaped"); err == nil {
+		t.Fatal("Create should reject dangling symlink leaf")
+	}
+	if err := service.Copy("chapters/link.md", "chapters/copied.md"); err == nil {
+		t.Fatal("Copy should reject symlink source")
+	}
+	if _, err := os.Stat(outsideDangling); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dangling symlink target was created outside workspace: %v", err)
+	}
+	if got, err := os.ReadFile(outsideExisting); err != nil || string(got) != "secret" {
+		t.Fatalf("external symlink target was modified: got=%q err=%v", got, err)
+	}
+}
+
+func TestServiceCopyAndMoveRejectSelfOrDescendantTargets(t *testing.T) {
+	workspace := t.TempDir()
+	service := NewService(workspace)
+	if err := service.Create("chapters/ch01.md", "file", "chapter 1"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, target := range []string{"chapters", "chapters/backup", "CHAPTERS/nested/backup"} {
+		if err := service.Copy("chapters", target); err == nil {
+			t.Fatalf("Copy(chapters, %q) should fail", target)
+		}
+		if err := service.Move("chapters", target); err == nil {
+			t.Fatalf("Move(chapters, %q) should fail", target)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "chapters", "nested")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected Move created nested directories inside source: %v", err)
+	}
+	if err := service.Move("chapters/missing.md", "archive/sub/missing.md"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Move missing source = %v, want os.ErrNotExist", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "archive")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Move missing source should not create destination parent dirs: %v", err)
+	}
+}
+
+func TestServiceWriteFileIfRevisionConcurrentCAS(t *testing.T) {
+	workspace := t.TempDir()
+	service := NewService(workspace)
+	if err := service.Create("chapters/ch01.md", "file", "base"); err != nil {
+		t.Fatal(err)
+	}
+	baseRev, err := service.FileRevision("chapters/ch01.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const writers = 8
+	var wg sync.WaitGroup
+	successes := 0
+	conflicts := 0
+	var mu sync.Mutex
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		content := strings.Repeat("x", 1024) + string(rune('A'+i))
+		go func(body string) {
+			defer wg.Done()
+			_, writeErr := service.WriteFileIfRevision("chapters/ch01.md", body, baseRev)
+			mu.Lock()
+			defer mu.Unlock()
+			if writeErr == nil {
+				successes++
+			} else if errors.Is(writeErr, ErrFileRevisionConflict) {
+				conflicts++
+			} else {
+				t.Errorf("unexpected concurrent write error: %v", writeErr)
+			}
+		}(content)
+	}
+	wg.Wait()
+	if successes != 1 || conflicts != writers-1 {
+		t.Fatalf("expected exactly 1 CAS winner and %d conflicts, got successes=%d conflicts=%d", writers-1, successes, conflicts)
 	}
 }

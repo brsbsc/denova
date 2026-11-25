@@ -33,6 +33,9 @@ type Service struct {
 	groups             map[string]*ChangeGroup
 	changeSets         map[string]*ChangeSet
 	comments           map[string]*Comment
+	groupChangeIDs     map[string][]string
+	groupCommentIDs    map[string][]string
+	replaying          bool
 	prepared           map[string]preparedChange
 	operations         map[string]preparedOperation
 	operationTerminals map[string]string
@@ -131,6 +134,21 @@ func forWorkspaceAt(workspace, stateRoot string) (*Service, error) {
 		return nil, err
 	}
 	workspaceServices.Lock()
+	if existing := workspaceServices.items[abs]; existing != nil {
+		workspaceServices.Unlock()
+		if stateRoot != "" && filepath.Clean(existing.stateRoot) != stateRoot {
+			return nil, newError(ErrorCodeConflict, "workspace change state root does not match the active Project", map[string]any{
+				"workspace": abs, "expected_state_root": stateRoot, "actual_state_root": existing.stateRoot,
+			})
+		}
+		return existing, nil
+	}
+	workspaceServices.Unlock()
+
+	unlockWorkspace := workspaceExclusiveLocks.Lock(abs)
+	defer unlockWorkspace()
+
+	workspaceServices.Lock()
 	defer workspaceServices.Unlock()
 	if existing := workspaceServices.items[abs]; existing != nil {
 		if stateRoot != "" && filepath.Clean(existing.stateRoot) != stateRoot {
@@ -219,6 +237,8 @@ func newServiceAtWithDurability(workspace, stateRoot string, durability *durabil
 		groups:             map[string]*ChangeGroup{},
 		changeSets:         map[string]*ChangeSet{},
 		comments:           map[string]*Comment{},
+		groupChangeIDs:     map[string][]string{},
+		groupCommentIDs:    map[string][]string{},
 		prepared:           map[string]preparedChange{},
 		operations:         map[string]preparedOperation{},
 		operationTerminals: map[string]string{},
@@ -384,10 +404,16 @@ func (s *Service) load() error {
 	if err != nil {
 		return err
 	}
+	s.replaying = true
 	for _, event := range events {
 		if err := s.applyEvent(event); err != nil {
+			s.replaying = false
 			return fmt.Errorf("replay workspace change ledger event %q: %w", event.Type, err)
 		}
+	}
+	s.replaying = false
+	for groupID := range s.groups {
+		s.refreshGroup(groupID)
 	}
 	return nil
 }
@@ -458,16 +484,22 @@ func (s *Service) applyEvent(event ledgerEvent) error {
 			return errors.New("comment event is missing comment")
 		}
 		comment := *event.Comment
+		s.indexGroupComment(comment)
 		s.comments[comment.ID] = &comment
 		s.refreshGroup(comment.GroupID)
 	case eventCommentsUpserted:
 		if len(event.Comments) == 0 {
 			return errors.New("comments event is missing comments")
 		}
+		refreshed := make(map[string]struct{}, len(event.Comments))
 		for i := range event.Comments {
 			comment := event.Comments[i]
+			s.indexGroupComment(comment)
 			s.comments[comment.ID] = &comment
-			s.refreshGroup(comment.GroupID)
+			refreshed[comment.GroupID] = struct{}{}
+		}
+		for groupID := range refreshed {
+			s.refreshGroup(groupID)
 		}
 	case eventHistoryState:
 		s.applyHistoryState(event.GroupID, event.HistoryState)
@@ -646,20 +678,37 @@ func (s *Service) addProjectedChange(change ChangeSet, metadata ChangeMetadata) 
 	// inherit the group's thread even when an older Review/Undo caller omitted
 	// the newer metadata field.
 	copy.ReviewThreadID = firstNonEmpty(group.ReviewThreadID, group.ID)
+	if _, existed := s.changeSets[copy.ID]; !existed {
+		s.groupChangeIDs[group.ID] = append(s.groupChangeIDs[group.ID], copy.ID)
+	}
 	s.changeSets[copy.ID] = &copy
 	group.ChangeSets = append(group.ChangeSets, copy)
 	s.refreshGroup(group.ID)
 }
 
+func (s *Service) indexGroupComment(comment Comment) {
+	existing := s.comments[comment.ID]
+	if existing == nil {
+		s.groupCommentIDs[comment.GroupID] = append(s.groupCommentIDs[comment.GroupID], comment.ID)
+		return
+	}
+	if existing.GroupID != comment.GroupID {
+		s.groupCommentIDs[comment.GroupID] = append(s.groupCommentIDs[comment.GroupID], comment.ID)
+	}
+}
+
 func (s *Service) refreshGroup(groupID string) {
+	if s.replaying {
+		return
+	}
 	group := s.groups[groupID]
 	if group == nil {
 		return
 	}
 	group.ReviewThreadID = firstNonEmpty(group.ReviewThreadID, group.ID)
 	group.ChangeSets = group.ChangeSets[:0]
-	for _, change := range s.changeSets {
-		if change.GroupID == groupID {
+	for _, id := range s.groupChangeIDs[groupID] {
+		if change := s.changeSets[id]; change != nil && change.GroupID == groupID {
 			group.ChangeSets = append(group.ChangeSets, cloneChangeSet(*change))
 		}
 	}
@@ -667,8 +716,8 @@ func (s *Service) refreshGroup(groupID string) {
 		return group.ChangeSets[i].Sequence < group.ChangeSets[j].Sequence
 	})
 	group.Comments = group.Comments[:0]
-	for _, comment := range s.comments {
-		if comment.GroupID == groupID {
+	for _, id := range s.groupCommentIDs[groupID] {
+		if comment := s.comments[id]; comment != nil && comment.GroupID == groupID {
 			group.Comments = append(group.Comments, *comment)
 		}
 	}

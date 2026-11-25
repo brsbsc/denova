@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"denova/internal/concurrency"
+	"denova/internal/localfs"
 )
 
 const MissingRevision = "missing"
@@ -20,7 +21,7 @@ const MissingRevision = "missing"
 // no longer matches the exact bytes on disk.
 var ErrRevisionConflict = errors.New("file revision conflict")
 
-var mutationLocks = concurrency.NewKeyedLock(canonicalPath)
+var mutationLocks = concurrency.NewKeyedLock(localfs.CanonicalPath)
 
 // Options controls permissions used when a mutation creates a new path.
 // Existing file permissions are preserved.

@@ -2,6 +2,7 @@ package versions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -55,13 +56,23 @@ func (s *Service) ConfigureAutoVersion(settings VersionAutoSettings) {
 	}
 }
 
-// Close stops pending automatic version work for this workspace.
+// Close stops pending automatic version work for this workspace and waits for
+// any in-flight background snapshot to finish before returning.
 func (s *Service) Close() {
 	s.autoMu.Lock()
-	defer s.autoMu.Unlock()
 	s.autoClosed = true
 	s.autoGeneration++
 	s.stopAutoTimerLocked()
+	cancel := s.autoRunCancel
+	done := s.autoDone
+	s.autoMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
 }
 
 func (s *Service) resetAutoTimerLocked(delay time.Duration, generation uint64) {
@@ -83,42 +94,50 @@ func (s *Service) stopAutoTimerLocked() {
 }
 
 func (s *Service) runScheduledAutoVersion(generation uint64) {
-	started := false
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			slog.ErrorContext(context.Background(), fmt.Sprintf("[versions] Automatic version background task panicked workspace=%q panic=%v", s.workspace, recovered))
-			if started {
-				s.finishScheduledAutoVersion(generation, 0)
-			}
-		}
-	}()
-
 	s.autoMu.Lock()
 	if s.autoClosed || s.autoRunning || generation != s.autoGeneration {
 		s.autoMu.Unlock()
 		return
 	}
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	s.autoTimer = nil
 	s.autoRunning = true
+	s.autoRunCancel = cancel
+	s.autoDone = done
 	settings := s.autoSettings
-	started = true
 	s.autoMu.Unlock()
 
-	result, err := s.MaybeCreateTimed(settings)
+	var retryAfter time.Duration
+	defer func() {
+		cancel()
+		if recovered := recover(); recovered != nil {
+			slog.ErrorContext(context.Background(), fmt.Sprintf("[versions] Automatic version background task panicked workspace=%q panic=%v", s.workspace, recovered))
+			retryAfter = 0
+		}
+		s.finishScheduledAutoVersion(generation, retryAfter, done)
+	}()
+
+	result, err := s.maybeCreateTimed(runCtx, settings)
+	retryAfter = result.RetryAfter
 	if err != nil {
-		slog.ErrorContext(context.Background(), fmt.Sprintf("[versions] Automatic version creation failed workspace=%q err=%v", s.workspace, err))
+		if !errors.Is(err, context.Canceled) {
+			slog.ErrorContext(context.Background(), fmt.Sprintf("[versions] Automatic version creation failed workspace=%q err=%v", s.workspace, err))
+		}
 	} else if result.Skipped {
 		slog.WarnContext(context.Background(), fmt.Sprintf("[versions] Automatic version creation skipped workspace=%q reason=%q", s.workspace, result.Reason))
 	} else if result.Version != nil {
 		slog.InfoContext(context.Background(), fmt.Sprintf("[versions] Automatic version created workspace=%q id=%s", s.workspace, result.Version.ID))
 	}
-	s.finishScheduledAutoVersion(generation, result.RetryAfter)
 }
 
-func (s *Service) finishScheduledAutoVersion(generation uint64, retryAfter time.Duration) {
+func (s *Service) finishScheduledAutoVersion(generation uint64, retryAfter time.Duration, done chan struct{}) {
 	s.autoMu.Lock()
 	defer s.autoMu.Unlock()
 	s.autoRunning = false
+	s.autoRunCancel = nil
+	s.autoDone = nil
+	close(done)
 	if s.autoClosed {
 		return
 	}

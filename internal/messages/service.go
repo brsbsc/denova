@@ -1,6 +1,7 @@
 package messages
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"denova/internal/revisionfile"
 )
 
 const stateFileName = "state.json"
@@ -157,15 +160,15 @@ func (s *Service) readState() (map[string]time.Time, error) {
 	if err != nil {
 		return state, nil
 	}
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return state, nil
-	}
+	snapshot, err := revisionfile.Read(context.Background(), path)
 	if err != nil {
 		return nil, fmt.Errorf("read message state failed: %w", err)
 	}
+	if !snapshot.Exists {
+		return state, nil
+	}
 	var file stateFile
-	if err := json.Unmarshal(data, &file); err != nil {
+	if err := json.Unmarshal(snapshot.Content, &file); err != nil {
 		return nil, fmt.Errorf("parse message state failed: %w", err)
 	}
 	for id, value := range file.Read {
@@ -190,14 +193,15 @@ func (s *Service) writeState(state map[string]time.Time) error {
 		}
 		file.Read[id] = value.UTC().Format(time.RFC3339Nano)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o644)
+	_, err = revisionfile.ReplaceIfRevision(context.Background(), path, "", append(data, '\n'), revisionfile.Options{
+		FileMode:      0o644,
+		DirectoryMode: 0o755,
+	})
+	return err
 }
 
 func (s *Service) statePath() (string, error) {

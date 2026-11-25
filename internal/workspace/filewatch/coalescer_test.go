@@ -71,24 +71,15 @@ func TestChangeCoalescer(t *testing.T) {
 	}
 }
 
-func TestHiddenPathDetection(t *testing.T) {
-	for _, path := range []string{".git/config", "chapters/.draft.md", "setting/.cache/item"} {
-		if !hasHiddenSegment(path) {
-			t.Fatalf("hasHiddenSegment(%q) = false", path)
-		}
-	}
-	if hasHiddenSegment("chapters/draft.md") {
-		t.Fatal("visible path was classified as hidden")
-	}
-}
-
 func TestIgnoredPathDetection(t *testing.T) {
-	for _, path := range []string{"node_modules/pkg/index.js", "app/dist/bundle.js", "vendor/module.go"} {
+	for _, path := range []string{".git/config", "chapters/.draft.md", "setting/.cache/item", "node_modules/pkg/index.js", "app/dist/bundle.js", "vendor/module.go"} {
 		if !isIgnoredPath(path) {
 			t.Fatalf("isIgnoredPath(%q) = false", path)
 		}
 	}
-	if isIgnoredPath("chapters/building-a-world.md") {
-		t.Fatal("visible path was classified as ignored")
+	for _, path := range []string{"chapters/draft.md", "chapters/building-a-world.md"} {
+		if isIgnoredPath(path) {
+			t.Fatalf("visible path %q was classified as ignored", path)
+		}
 	}
 }

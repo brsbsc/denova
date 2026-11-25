@@ -359,7 +359,7 @@ func TestLoreStoreNameRosterIsBoundedAndOmitsResidentBodies(t *testing.T) {
 		}
 	}
 
-	roster, err := store.NameRosterMarkdown(1024, true)
+	roster, err := store.NameCatalogMarkdown(NameCatalogOptions{MaxBytes: 1024, ExcludeResident: true, OmitWhenEmpty: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +374,7 @@ func TestLoreStoreNameRosterIsBoundedAndOmitsResidentBodies(t *testing.T) {
 		}
 	}
 
-	bounded, err := store.NameRosterMarkdown(128, false)
+	bounded, err := store.NameCatalogMarkdown(NameCatalogOptions{MaxBytes: 128, ExcludeResident: false, OmitWhenEmpty: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +408,7 @@ func TestLoreStoreNameRosterUsesThe64KiBDiscoveryBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	roster, err := store.NameRosterMarkdown(IndexDefaultMaxBytes, true)
+	roster, err := store.NameCatalogMarkdown(NameCatalogOptions{MaxBytes: IndexDefaultMaxBytes, ExcludeResident: true, OmitWhenEmpty: true})
 	if err != nil {
 		t.Fatal(err)
 	}

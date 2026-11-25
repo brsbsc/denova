@@ -1,6 +1,7 @@
 package versions
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -18,6 +19,8 @@ type Service struct {
 	autoGeneration       uint64
 	autoRunning          bool
 	autoClosed           bool
+	autoRunCancel        context.CancelFunc
+	autoDone             chan struct{}
 	autoSettings         VersionAutoSettings
 	autoVersionIdleDelay time.Duration
 }

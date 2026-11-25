@@ -24,7 +24,6 @@ type reviewFeedbackResolver interface {
 	Resolve(ctx context.Context, runtime Runtime, threadID string, commentIDs []string, feedback *agentreview.Context) error
 	Validate(ctx context.Context, sessionID, threadID string, commentIDs []string, effectID string) error
 	Consume(ctx context.Context, sessionID, threadID string, commentIDs []string, effectID string) (reviewFeedbackConsumption, error)
-	Consumed(ctx context.Context, sessionID, threadID string, commentIDs []string, effectID string) (bool, error)
 	Restore(ctx context.Context, sessionID, threadID string, consumption reviewFeedbackConsumption) error
 }
 
@@ -95,10 +94,6 @@ func (r workspaceChangeReviewFeedbackResolver) Consume(ctx context.Context, sess
 		source: agentreview.SourceWorkspaceChange, threadID: threadID, commentIDs: commentIDs,
 		workspaceComments: comments,
 	}, err
-}
-
-func (r workspaceChangeReviewFeedbackResolver) Consumed(ctx context.Context, sessionID, threadID string, commentIDs []string, effectID string) (bool, error) {
-	return r.changes.ReviewCommentsConsumed(ctx, threadID, sessionID, commentIDs, effectID)
 }
 
 func (r workspaceChangeReviewFeedbackResolver) Restore(ctx context.Context, sessionID, threadID string, consumption reviewFeedbackConsumption) error {
@@ -174,10 +169,6 @@ func (r documentReviewFeedbackResolver) Consume(ctx context.Context, sessionID, 
 		source: agentreview.SourceDocument, threadID: threadID, commentIDs: commentIDs,
 		documentComments: comments,
 	}, err
-}
-
-func (r documentReviewFeedbackResolver) Consumed(ctx context.Context, _ string, threadID string, commentIDs []string, effectID string) (bool, error) {
-	return r.documents.ReviewCommentsConsumed(ctx, threadID, commentIDs, effectID)
 }
 
 func (r documentReviewFeedbackResolver) Restore(ctx context.Context, sessionID, threadID string, consumption reviewFeedbackConsumption) error {

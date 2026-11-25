@@ -173,10 +173,6 @@ func normalizeLoreID(id string) string {
 	return sb.String()
 }
 
-func (item Item) EffectiveKeywords() []string {
-	return normalizeLoreKeywords(append(append([]string{item.Name}, item.Tags...), item.Keywords...))
-}
-
 // NormalizeType normalizes a category reference. Membership belongs to the
 // collection, not a global enum, so custom IDs survive all read projections.
 func NormalizeType(t string) string {

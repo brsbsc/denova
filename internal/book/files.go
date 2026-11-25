@@ -1,9 +1,9 @@
 package book
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"denova/internal/portablepath"
+	"denova/internal/revisionfile"
 )
 
 // ErrFileRevisionConflict 表示保存时文件已被其他来源更新，调用方应重新读取后再写入。
@@ -64,19 +65,25 @@ func (s *Service) ReadFileWithRevision(relPath string) (string, string, error) {
 		return "", "", err
 	}
 
-	info, err := os.Stat(absPath)
+	info, err := os.Lstat(absPath)
 	if err != nil {
 		return "", "", err
 	}
 	if info.IsDir() {
 		return "", "", errors.New("路径是目录而非文件")
 	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return "", "", fmt.Errorf("路径不是普通文件: %s", relPath)
+	}
 
-	data, err := os.ReadFile(absPath)
+	snapshot, err := revisionfile.Read(context.Background(), absPath)
 	if err != nil {
 		return "", "", err
 	}
-	return string(data), contentRevision(data), nil
+	if !snapshot.Exists {
+		return "", "", os.ErrNotExist
+	}
+	return string(snapshot.Content), snapshot.Revision, nil
 }
 
 // FileRevision returns a content-addressed revision used to reject stale writes.
@@ -92,16 +99,24 @@ func (s *Service) WriteFile(relPath, content string) error {
 }
 
 // WriteBinaryFile writes binary content inside the workspace using the same
-// path boundary as text file writes.
+// path boundary and atomic replacement lock as text file writes.
 func (s *Service) WriteBinaryFile(relPath string, data []byte) error {
 	absPath, err := SafePath(s.workspace, relPath)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(absPath, data, 0o644); err != nil {
+	_, err = revisionfile.Mutate(context.Background(), absPath, revisionfile.Options{FileMode: 0o644, DirectoryMode: 0o755}, func(_ revisionfile.Snapshot) ([]byte, error) {
+		if info, statErr := os.Lstat(absPath); statErr == nil && !info.Mode().IsRegular() {
+			if info.IsDir() {
+				return nil, errors.New("路径是目录而非文件")
+			}
+			return nil, fmt.Errorf("路径不是普通文件: %s", relPath)
+		} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return nil, statErr
+		}
+		return data, nil
+	})
+	if err != nil {
 		return err
 	}
 	s.InvalidateSummary([]string{relPath}, false)
@@ -114,28 +129,30 @@ func (s *Service) WriteFileIfRevision(relPath, content, expectedRevision string)
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
-		return "", err
-	}
-	if expectedRevision != "" {
-		data, err := os.ReadFile(absPath)
-		if err != nil {
-			return "", err
+	res, err := revisionfile.Mutate(context.Background(), absPath, revisionfile.Options{FileMode: 0o644, DirectoryMode: 0o755}, func(current revisionfile.Snapshot) ([]byte, error) {
+		if info, statErr := os.Lstat(absPath); statErr == nil && !info.Mode().IsRegular() {
+			if info.IsDir() {
+				return nil, errors.New("路径是目录而非文件")
+			}
+			return nil, fmt.Errorf("路径不是普通文件: %s", relPath)
+		} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return nil, statErr
 		}
-		if contentRevision(data) != expectedRevision {
-			return "", ErrFileRevisionConflict
+		if expectedRevision != "" {
+			if !current.Exists {
+				return nil, os.ErrNotExist
+			}
+			if current.Revision != expectedRevision {
+				return nil, ErrFileRevisionConflict
+			}
 		}
-	}
-	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
+		return []byte(content), nil
+	})
+	if err != nil {
 		return "", err
 	}
 	s.InvalidateSummary([]string{relPath}, false)
-	return contentRevision([]byte(content)), nil
-}
-
-func contentRevision(content []byte) string {
-	hash := sha256.Sum256(content)
-	return "sha256:" + hex.EncodeToString(hash[:])
+	return res.Revision, nil
 }
 
 // Create 新建 workspace 内文件或目录。
@@ -148,30 +165,67 @@ func (s *Service) Create(relPath, itemType, content string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(absPath); err == nil {
+	if _, err := os.Lstat(absPath); err == nil {
+		return os.ErrExist
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(s.workspace, 0o755); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(s.workspace)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	cleanRel := filepath.Clean(filepath.FromSlash(relPath))
+	if _, err := root.Lstat(cleanRel); err == nil {
 		return os.ErrExist
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 
 	if itemType == "dir" {
-		if err := os.MkdirAll(absPath, 0o755); err != nil {
+		if parent := filepath.Dir(cleanRel); parent != "." {
+			if err := root.MkdirAll(parent, 0o755); err != nil {
+				return err
+			}
+		}
+		if err := root.Mkdir(cleanRel, 0o755); err != nil {
 			return err
 		}
 		// Track empty manuscript containers in ordinary content snapshots.
-		if strings.HasPrefix(filepath.ToSlash(relPath), "chapters/") {
-			if err := os.WriteFile(filepath.Join(absPath, ".keep"), nil, 0o644); err != nil {
+		if strings.HasPrefix(filepath.ToSlash(cleanRel), "chapters/") {
+			keepFile, err := root.OpenFile(filepath.Join(cleanRel, ".keep"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+			if err != nil {
+				return err
+			}
+			if err := keepFile.Close(); err != nil {
 				return err
 			}
 		}
 		s.InvalidateSummary([]string{relPath}, false)
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+
+	if parent := filepath.Dir(cleanRel); parent != "." {
+		if err := root.MkdirAll(parent, 0o755); err != nil {
+			return err
+		}
+	}
+	file, err := root.OpenFile(cleanRel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
-		return err
+	if _, writeErr := file.Write([]byte(content)); writeErr != nil {
+		_ = file.Close()
+		_ = root.Remove(cleanRel)
+		return writeErr
+	}
+	if closeErr := file.Close(); closeErr != nil {
+		_ = root.Remove(cleanRel)
+		return closeErr
 	}
 	s.InvalidateSummary([]string{relPath}, false)
 	return nil
@@ -179,7 +233,7 @@ func (s *Service) Create(relPath, itemType, content string) error {
 
 // Delete 直接删除 workspace 内文件或目录；恢复依赖 Nova 版本历史。
 func (s *Service) Delete(relPath string) error {
-	absPath, err := SafePath(s.workspace, relPath)
+	absPath, err := safeLeafPath(s.workspace, relPath)
 	if err != nil {
 		return err
 	}
@@ -213,7 +267,7 @@ func (s *Service) Rename(relPath, newName string) (string, error) {
 		return "", err
 	}
 
-	from, err := SafePath(s.workspace, relPath)
+	from, err := safeLeafPath(s.workspace, relPath)
 	if err != nil {
 		return "", err
 	}
@@ -222,7 +276,10 @@ func (s *Service) Rename(relPath, newName string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := os.Stat(to); err == nil {
+	if _, err := os.Lstat(from); err != nil {
+		return "", err
+	}
+	if _, err := os.Lstat(to); err == nil {
 		return "", os.ErrExist
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
@@ -244,7 +301,13 @@ func (s *Service) Copy(fromRel, toRel string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(to); err == nil {
+	if isSameOrDescendantRelPath(fromRel, toRel) {
+		return errors.New("不能将目录或文件复制到自身或其子目录中")
+	}
+	if _, err := os.Lstat(from); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(to); err == nil {
 		return os.ErrExist
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -258,7 +321,7 @@ func (s *Service) Copy(fromRel, toRel string) error {
 
 // Move 移动 workspace 内文件或目录。
 func (s *Service) Move(fromRel, toRel string) error {
-	from, err := SafePath(s.workspace, fromRel)
+	from, err := safeLeafPath(s.workspace, fromRel)
 	if err != nil {
 		return err
 	}
@@ -266,7 +329,13 @@ func (s *Service) Move(fromRel, toRel string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(to); err == nil {
+	if isSameOrDescendantRelPath(fromRel, toRel) {
+		return errors.New("不能将目录或文件移动到自身或其子目录中")
+	}
+	if _, err := os.Lstat(from); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(to); err == nil {
 		return os.ErrExist
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -303,8 +372,18 @@ func (s *Service) InvalidateSummary(paths []string, resync bool) {
 	}
 }
 
-// SafePath 将相对路径解析为 workspace 内的绝对路径，并禁止访问隐藏目录。
+// SafePath 将相对路径解析为 workspace 内的绝对路径，并禁止访问隐藏目录或符号链接。
 func SafePath(workspace, relPath string) (string, error) {
+	return resolveSafePath(workspace, relPath, true)
+}
+
+// safeLeafPath validates an existing leaf target for link-safe rename/move/delete
+// while still rejecting symlink ancestors and case-folded collisions.
+func safeLeafPath(workspace, relPath string) (string, error) {
+	return resolveSafePath(workspace, relPath, false)
+}
+
+func resolveSafePath(workspace, relPath string, rejectSymlinkLeaf bool) (string, error) {
 	if strings.TrimSpace(relPath) == "" {
 		return "", errors.New("路径不能为空")
 	}
@@ -329,8 +408,14 @@ func SafePath(workspace, relPath string) (string, error) {
 	if err := portablepath.Validate(portableRelative); err != nil {
 		return "", err
 	}
-	if err := portablepath.CheckNoCollision(workspace, portableRelative); err != nil {
-		return "", err
+	if rejectSymlinkLeaf {
+		if err := portablepath.CheckPath(workspace, portableRelative); err != nil {
+			return "", err
+		}
+	} else {
+		if err := portablepath.CheckNoCollision(workspace, portableRelative); err != nil {
+			return "", err
+		}
 	}
 
 	cleanWorkspace := filepath.Clean(workspace)
@@ -339,6 +424,27 @@ func SafePath(workspace, relPath string) (string, error) {
 		return "", errors.New("路径不在 workspace 范围内")
 	}
 	return absPath, nil
+}
+
+func isSameOrDescendantRelPath(fromRel, toRel string) bool {
+	fromFold := foldRelativePath(fromRel)
+	toFold := foldRelativePath(toRel)
+	if fromFold == "" || toFold == "" {
+		return false
+	}
+	return toFold == fromFold || strings.HasPrefix(toFold, fromFold+"/")
+}
+
+func foldRelativePath(relPath string) string {
+	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(strings.TrimSpace(relPath))))
+	if clean == "" || clean == "." {
+		return ""
+	}
+	parts := strings.Split(clean, "/")
+	for i, part := range parts {
+		parts[i] = portablepath.FoldKey(part)
+	}
+	return strings.Join(parts, "/")
 }
 
 // BuildFileTree 递归构建文件树，跳过隐藏文件和隐藏目录。

@@ -2,6 +2,7 @@ package character
 
 import (
 	"bytes"
+	"compress/zlib"
 	"denova/internal/book/lore"
 	"encoding/base64"
 	"encoding/binary"
@@ -587,4 +588,64 @@ func appendPNGChunk(dst []byte, chunkType string, chunkData []byte) []byte {
 	dst = append(dst, chunkData...)
 	dst = append(dst, 0, 0, 0, 0)
 	return dst
+}
+
+func compressTestZlib(t *testing.T, raw []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	writer, err := zlib.NewWriterLevel(&buf, zlib.BestSpeed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write(raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func makeTestPNGWithChunk(chunkType string, chunkData []byte) []byte {
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		panic(err)
+	}
+	base := encoded.Bytes()
+	base = base[:len(base)-12]
+	base = appendPNGChunk(base, chunkType, chunkData)
+	base = appendPNGChunk(base, "IEND", nil)
+	return base
+}
+
+func TestParseTavernCharacterCardCompressedZTXtAndITXt(t *testing.T) {
+	payload := base64.StdEncoding.EncodeToString([]byte(`{"name":"苏璃","description":"炼丹师"}`))
+	compressed := compressTestZlib(t, []byte(payload))
+
+	ztxtChunk := append([]byte("chara\x00\x00"), compressed...)
+	card, err := parseTavernCharacterCard("ztxt.png", makeTestPNGWithChunk("zTXt", ztxtChunk))
+	if err != nil || card.Name != "苏璃" || card.Description != "炼丹师" {
+		t.Fatalf("valid zTXt card failed: card=%#v err=%v", card, err)
+	}
+
+	itxtChunk := append([]byte("ccv3\x00\x01\x00\x00\x00"), compressed...)
+	card, err = parseTavernCharacterCard("itxt.png", makeTestPNGWithChunk("iTXt", itxtChunk))
+	if err != nil || card.Name != "苏璃" || card.Description != "炼丹师" {
+		t.Fatalf("valid iTXt card failed: card=%#v err=%v", card, err)
+	}
+}
+
+func TestParseTavernCharacterCardRejectsZlibBombChunks(t *testing.T) {
+	oversized := bytes.Repeat([]byte{'A'}, maxPNGTextPayloadBytes+1024)
+	compressed := compressTestZlib(t, oversized)
+
+	ztxtBomb := makeTestPNGWithChunk("zTXt", append([]byte("chara\x00\x00"), compressed...))
+	if _, err := parseTavernCharacterCard("bomb-ztxt.png", ztxtBomb); err == nil || !strings.Contains(err.Error(), "上限") {
+		t.Fatalf("expected zTXt zlib bomb to fail size limit, got %v", err)
+	}
+
+	itxtBomb := makeTestPNGWithChunk("iTXt", append([]byte("ccv3\x00\x01\x00\x00\x00"), compressed...))
+	if _, err := parseTavernCharacterCard("bomb-itxt.png", itxtBomb); err == nil || !strings.Contains(err.Error(), "上限") {
+		t.Fatalf("expected iTXt zlib bomb to fail size limit, got %v", err)
+	}
 }

@@ -18,7 +18,7 @@ type LockedFiles struct{ snapshots map[string]Snapshot }
 func WithFiles(ctx context.Context, paths []string, operation func(*LockedFiles) error) error {
 	keys := make([]string, 0, len(paths))
 	for _, path := range paths {
-		keys = append(keys, canonicalPath(path))
+		keys = append(keys, localfs.CanonicalPath(path))
 	}
 	slices.Sort(keys)
 	keys = slices.Compact(keys)
@@ -46,7 +46,7 @@ func WithFiles(ctx context.Context, paths []string, operation func(*LockedFiles)
 }
 
 func (f *LockedFiles) Snapshot(path string) (Snapshot, error) {
-	snapshot, ok := f.snapshots[canonicalPath(path)]
+	snapshot, ok := f.snapshots[localfs.CanonicalPath(path)]
 	if !ok {
 		return Snapshot{}, fmt.Errorf("path is outside locked batch")
 	}
@@ -56,7 +56,7 @@ func (f *LockedFiles) Snapshot(path string) (Snapshot, error) {
 // Replace updates the locked snapshot even on a durability error, allowing the
 // transaction owner to inspect/restore a rename that reached the filesystem.
 func (f *LockedFiles) Replace(path string, content []byte, exists bool) error {
-	key := canonicalPath(path)
+	key := localfs.CanonicalPath(path)
 	current, err := f.Snapshot(key)
 	if err != nil {
 		return err

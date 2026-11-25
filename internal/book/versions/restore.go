@@ -14,6 +14,9 @@ import (
 
 	"denova/internal/assetstore"
 	"denova/internal/localfs"
+
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 type restorePlanner struct {
@@ -41,30 +44,40 @@ func (s *Service) RestoreWithPaths(id string, paths []string, settings VersionAu
 }
 
 func (p restorePlanner) PlanLocked(id string, paths []string, settings VersionAutoSettings) (VersionRestorePlan, error) {
+	plan, _, _, err := p.planWithSnapshotsLocked(id, paths, settings)
+	return plan, err
+}
+
+func (p restorePlanner) planWithSnapshotsLocked(id string, paths []string, settings VersionAutoSettings) (VersionRestorePlan, map[string]versionFileData, []versionFileData, error) {
 	s := p.service
 	version, err := s.findVersion(id)
 	if err != nil {
-		return VersionRestorePlan{}, err
+		return VersionRestorePlan{}, nil, nil, err
 	}
 	scope, normalizedPaths, err := normalizeRestorePaths(s.workspace, paths)
 	if err != nil {
-		return VersionRestorePlan{}, err
+		return VersionRestorePlan{}, nil, nil, err
+	}
+	targetFiles, err := s.commitFiles(version.ID)
+	if err != nil {
+		return VersionRestorePlan{}, nil, nil, err
 	}
 	if scope == VersionRestoreScopePaths {
-		normalizedPaths, err = s.loreRestorePaths(version.ID, normalizedPaths)
+		normalizedPaths, err = s.loreRestorePathsWithTarget(version.ID, normalizedPaths, targetFiles)
 		if err != nil {
-			return VersionRestorePlan{}, err
+			return VersionRestorePlan{}, nil, nil, err
 		}
 	}
+	currentFiles, err := s.collectVisibleFiles()
+	if err != nil {
+		return VersionRestorePlan{}, nil, nil, err
+	}
 	settings = normalizeVersionAutoSettings(settings)
-	status, err := s.statusLocked(context.Background(), settings)
+	status, err := s.statusWithVisibleFilesLocked(context.Background(), settings, currentFiles)
 	if err != nil {
-		return VersionRestorePlan{}, err
+		return VersionRestorePlan{}, nil, nil, err
 	}
-	changes, err := s.restoreChanges(version, scope, normalizedPaths)
-	if err != nil {
-		return VersionRestorePlan{}, err
-	}
+	changes := restoreChangesFromSnapshots(currentFiles, targetFiles, scope, normalizedPaths)
 
 	planPaths := normalizedPaths
 	if scope == VersionRestoreScopeWorkspace {
@@ -106,12 +119,12 @@ func (p restorePlanner) PlanLocked(id string, paths []string, settings VersionAu
 		BackupMessage:    backupMessage,
 		Warnings:         warnings,
 		RetainedMedia:    retainedMedia,
-	}, nil
+	}, targetFiles, currentFiles, nil
 }
 
 func (p restorePlanner) ApplyLocked(id string, paths []string, settings VersionAutoSettings) (VersionRestoreResult, error) {
 	s := p.service
-	plan, err := p.PlanLocked(id, paths, settings)
+	plan, targetFiles, currentFiles, err := p.planWithSnapshotsLocked(id, paths, settings)
 	if err != nil {
 		return VersionRestoreResult{}, err
 	}
@@ -126,10 +139,10 @@ func (p restorePlanner) ApplyLocked(id string, paths []string, settings VersionA
 	}
 
 	if plan.Scope == VersionRestoreScopeWorkspace {
-		if err := s.restoreCommitToWorkspace(plan.Target.ID); err != nil {
+		if err := s.restoreCommitToWorkspaceWithSnapshots(plan.Target.ID, targetFiles, currentFiles); err != nil {
 			return VersionRestoreResult{}, err
 		}
-	} else if err := s.restorePathsFromCommit(plan.Target.ID, plan.Paths); err != nil {
+	} else if err := s.restorePathsFromCommitWithTarget(plan.Target.ID, plan.Paths, targetFiles); err != nil {
 		return VersionRestoreResult{}, err
 	}
 
@@ -189,13 +202,17 @@ func (s *Service) restoreChanges(version VersionEntry, scope string, paths []str
 	if err != nil {
 		return nil, err
 	}
-	current := make(map[string]versionFileData, len(currentFiles))
-	for _, file := range currentFiles {
-		current[file.Path] = file
-	}
 	target, err := s.commitFiles(version.ID)
 	if err != nil {
 		return nil, err
+	}
+	return restoreChangesFromSnapshots(currentFiles, target, scope, paths), nil
+}
+
+func restoreChangesFromSnapshots(currentFiles []versionFileData, target map[string]versionFileData, scope string, paths []string) []VersionRestoreChange {
+	current := make(map[string]versionFileData, len(currentFiles))
+	for _, file := range currentFiles {
+		current[file.Path] = file
 	}
 
 	candidates := map[string]bool{}
@@ -251,13 +268,32 @@ func (s *Service) restoreChanges(version VersionEntry, scope string, paths []str
 			MissingInWorkspace: !currentOK,
 		})
 	}
-	return changes, nil
+	return changes
 }
 
 func (s *Service) restorePathsFromCommit(id string, paths []string) error {
 	target, err := s.commitFiles(id)
 	if err != nil {
 		return err
+	}
+	return s.restorePathsFromCommitWithTarget(id, paths, target)
+}
+
+func (s *Service) restorePathsFromCommitWithTarget(id string, paths []string, target map[string]versionFileData) error {
+	var commit *object.Commit
+	loadCommit := func() (*object.Commit, error) {
+		if commit != nil {
+			return commit, nil
+		}
+		repo, err := s.openVersionRepo()
+		if err != nil {
+			return nil, err
+		}
+		commit, err = repo.CommitObject(plumbing.NewHash(strings.TrimSpace(id)))
+		if err != nil {
+			return nil, err
+		}
+		return commit, nil
 	}
 	root, err := os.OpenRoot(s.workspace)
 	if err != nil {
@@ -280,7 +316,11 @@ func (s *Service) restorePathsFromCommit(id string, paths []string) error {
 		}
 		if _, ok := target[rel]; ok {
 			entry.targetExists = true
-			entry.targetData, err = s.readCommitFile(id, rel)
+			commitObj, err := loadCommit()
+			if err != nil {
+				return err
+			}
+			entry.targetData, err = readCommitObjectFile(commitObj, rel)
 			if err != nil {
 				return err
 			}
@@ -437,20 +477,24 @@ func (s *Service) removeVisibleFilesAbsentFromCommit(id string) error {
 	if err != nil {
 		return err
 	}
-	files, err := s.collectVisibleFiles()
-	if err != nil {
-		return err
-	}
-	for _, file := range files {
-		if assetstore.IsRetained(file.Path) {
-			continue
+	return s.removeVisibleFilesAbsentFromTarget(target)
+}
+
+func (s *Service) removeVisibleFilesAbsentFromTarget(target map[string]versionFileData) error {
+	err := walkVersionFiles(context.Background(), s.workspace, s.workspace, func(path, rel string, _ os.FileInfo) error {
+		if assetstore.IsRetained(rel) {
+			return nil
 		}
-		if _, ok := target[file.Path]; ok {
-			continue
+		if _, ok := target[rel]; ok {
+			return nil
 		}
-		if err := os.Remove(file.Abs); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	return s.removeEmptyVisibleDirs()
 }
@@ -462,11 +506,18 @@ type protectedDirMove struct {
 }
 
 func (s *Service) withProtectedExcludedWorkspaceDirs(fn func() error) error {
-	temp, err := os.MkdirTemp(filepath.Dir(s.workspace), ".denova-version-restore-*")
-	if err != nil {
-		return err
+	var temp string
+	ensureTemp := func() (string, error) {
+		if temp != "" {
+			return temp, nil
+		}
+		created, err := os.MkdirTemp(s.workspace, versionRestoreStagingPrefix+"*")
+		if err != nil {
+			return "", err
+		}
+		temp = created
+		return temp, nil
 	}
-	defer os.RemoveAll(temp)
 
 	moves := []protectedDirMove{}
 	for index, rel := range versionProtectedExcludedDirs() {
@@ -476,15 +527,33 @@ func (s *Service) withProtectedExcludedWorkspaceDirs(fn func() error) error {
 			continue
 		}
 		if err != nil {
-			_ = restoreProtectedDirMoves(moves)
+			restoreErr := restoreProtectedDirMoves(moves)
+			if restoreErr == nil && temp != "" {
+				_ = os.RemoveAll(temp)
+			} else if restoreErr != nil {
+				return fmt.Errorf("%w; 恢复版本排除目录失败 (备份保留于 %s): %v", err, temp, restoreErr)
+			}
 			return err
 		}
 		if !info.IsDir() {
 			continue
 		}
-		dst := filepath.Join(temp, fmt.Sprintf("%02d", index))
+		stageDir, err := ensureTemp()
+		if err != nil {
+			restoreErr := restoreProtectedDirMoves(moves)
+			if restoreErr != nil {
+				return fmt.Errorf("%w; 恢复版本排除目录失败: %v", err, restoreErr)
+			}
+			return err
+		}
+		dst := filepath.Join(stageDir, fmt.Sprintf("%02d", index))
 		if err := os.Rename(src, dst); err != nil {
-			_ = restoreProtectedDirMoves(moves)
+			restoreErr := restoreProtectedDirMoves(moves)
+			if restoreErr == nil {
+				_ = os.RemoveAll(stageDir)
+			} else {
+				return fmt.Errorf("%w; 恢复版本排除目录失败 (备份保留于 %s): %v", err, stageDir, restoreErr)
+			}
 			return err
 		}
 		moves = append(moves, protectedDirMove{rel: rel, src: src, dst: dst})
@@ -492,29 +561,38 @@ func (s *Service) withProtectedExcludedWorkspaceDirs(fn func() error) error {
 
 	runErr := fn()
 	restoreErr := restoreProtectedDirMoves(moves)
+	if restoreErr == nil && temp != "" {
+		_ = os.RemoveAll(temp)
+	}
 	if runErr != nil {
 		if restoreErr != nil {
-			return fmt.Errorf("%w; 恢复版本排除目录失败: %v", runErr, restoreErr)
+			return fmt.Errorf("%w; 恢复版本排除目录失败 (备份保留于 %s): %v", runErr, temp, restoreErr)
 		}
 		return runErr
 	}
-	return restoreErr
+	if restoreErr != nil {
+		return fmt.Errorf("恢复版本排除目录失败 (备份保留于 %s): %w", temp, restoreErr)
+	}
+	return nil
 }
 
 func restoreProtectedDirMoves(moves []protectedDirMove) error {
+	var errs []error
 	for i := len(moves) - 1; i >= 0; i-- {
 		move := moves[i]
 		if err := os.MkdirAll(filepath.Dir(move.src), 0o755); err != nil {
-			return err
+			errs = append(errs, err)
+			continue
 		}
 		if err := os.RemoveAll(move.src); err != nil {
-			return err
+			errs = append(errs, err)
+			continue
 		}
 		if err := os.Rename(move.dst, move.src); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (s *Service) removeEmptyVisibleDirs() error {

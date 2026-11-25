@@ -6,6 +6,10 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
+
+	"denova/internal/portablepath"
+	"golang.org/x/text/unicode/norm"
 )
 
 func NormalizeStoragePath(path string) string {
@@ -13,7 +17,10 @@ func NormalizeStoragePath(path string) string {
 	if path == "" {
 		return ""
 	}
-	base := filepath.Base(path)
+	base := strings.TrimSpace(filepath.Base(path))
+	if base == "" || strings.HasPrefix(base, ".") {
+		return ""
+	}
 	if !isStyleFile(base) {
 		base += ".md"
 	}
@@ -25,42 +32,69 @@ func NormalizeStoragePath(path string) string {
 }
 
 func StoragePath(filename string) string {
-	filename = sanitizeFilename(filepath.Base(strings.TrimSpace(filename)))
+	raw := strings.TrimSpace(filepath.Base(strings.ReplaceAll(strings.TrimSpace(filename), "\\", "/")))
+	if raw == "" || strings.HasPrefix(raw, ".") {
+		return ""
+	}
+	filename = sanitizeFilename(raw)
 	if filename == "" {
 		return ""
 	}
 	if !isStyleFile(filename) {
 		filename += ".md"
 	}
-	return filepath.ToSlash(filepath.Join(DisplayDir, filename))
+	normalized, err := portablepath.NormalizeComponent(filename)
+	if err != nil {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Join(DisplayDir, normalized))
 }
 
 func isStyleFile(name string) bool {
-	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(name)))
-	return ext == ".md" || ext == ".markdown" || ext == ".txt"
+	trimmed := strings.TrimSpace(name)
+	ext := strings.ToLower(filepath.Ext(trimmed))
+	if ext != ".md" && ext != ".markdown" && ext != ".txt" {
+		return false
+	}
+	return strings.TrimSuffix(trimmed, filepath.Ext(trimmed)) != ""
 }
 
 func filenameForWrite(filename, name string) string {
-	filename = sanitizeFilename(filepath.Base(strings.TrimSpace(filename)))
+	raw := strings.TrimSpace(filepath.Base(strings.ReplaceAll(strings.TrimSpace(filename), "\\", "/")))
+	if strings.HasPrefix(raw, ".") {
+		filename = ""
+	} else {
+		filename = sanitizeFilename(raw)
+	}
+	if filename != "" {
+		if !isStyleFile(filename) {
+			filename += ".md"
+		}
+		if strings.ToLower(filepath.Ext(filename)) != ".md" {
+			filename = strings.TrimSuffix(filename, filepath.Ext(filename)) + ".md"
+		}
+		if normalized, err := portablepath.NormalizeComponent(filename); err == nil {
+			filename = normalized
+		} else {
+			filename = ""
+		}
+	}
 	if filename == "" {
 		filename = slugFilename(name)
 	}
 	if filename == "" {
 		filename = fmt.Sprintf("style-%d.md", time.Now().UnixNano())
 	}
-	if !isStyleFile(filename) {
-		filename += ".md"
-	}
-	if strings.ToLower(filepath.Ext(filename)) != ".md" {
-		filename = strings.TrimSuffix(filename, filepath.Ext(filename)) + ".md"
-	}
 	return filename
 }
 
 func sanitizeFilename(filename string) string {
-	filename = strings.TrimSpace(filename)
+	filename = norm.NFC.String(strings.TrimSpace(filename))
 	filename = strings.ReplaceAll(filename, "\\", "/")
 	filename = filepath.Base(filename)
+	if strings.HasPrefix(filename, ".") {
+		return ""
+	}
 	filename = strings.Trim(filename, ". ")
 	if filename == "" || filename == "." || filename == ".." {
 		return ""
@@ -76,15 +110,35 @@ func sanitizeFilename(filename string) string {
 			out.WriteByte('-')
 		}
 	}
-	cleaned := strings.Trim(out.String(), ".- _")
+	cleaned := norm.NFC.String(strings.Trim(out.String(), ".- _"))
 	if cleaned == "" {
 		return ""
 	}
-	return cleaned
+	ext := ""
+	stem := cleaned
+	if isStyleFile(cleaned) {
+		ext = filepath.Ext(cleaned)
+		stem = strings.Trim(strings.TrimSuffix(cleaned, ext), ".- _")
+	}
+	if stem == "" {
+		return ""
+	}
+	checkExt := ext
+	if checkExt == "" {
+		checkExt = ".md"
+	}
+	stem = truncateStyleStemBytes(stem, portablepath.MaxComponentBytes-len(checkExt))
+	if stem == "" {
+		return ""
+	}
+	if err := portablepath.ValidateComponent(stem + checkExt); err != nil {
+		return ""
+	}
+	return stem + ext
 }
 
 func slugFilename(name string) string {
-	name = strings.TrimSpace(name)
+	name = norm.NFC.String(strings.TrimSpace(name))
 	if name == "" {
 		return ""
 	}
@@ -102,7 +156,33 @@ func slugFilename(name string) string {
 			}
 		}
 	}
-	return strings.Trim(out.String(), "-") + ".md"
+	stem := truncateStyleStemBytes(norm.NFC.String(strings.Trim(out.String(), "-")), portablepath.MaxComponentBytes-len(".md"))
+	if stem == "" {
+		return ""
+	}
+	candidate := stem + ".md"
+	if normalized, err := portablepath.NormalizeComponent(candidate); err == nil {
+		return normalized
+	}
+	return ""
+}
+
+func truncateStyleStemBytes(stem string, maxBytes int) string {
+	if maxBytes <= 0 || stem == "" {
+		return ""
+	}
+	if len(stem) <= maxBytes {
+		return stem
+	}
+	end := 0
+	for index, r := range stem {
+		next := index + utf8.RuneLen(r)
+		if next > maxBytes {
+			break
+		}
+		end = next
+	}
+	return norm.NFC.String(strings.Trim(stem[:end], ".- _"))
 }
 
 func summarizeMarkdown(filename, content string) (string, string) {

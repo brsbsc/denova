@@ -24,6 +24,13 @@ func (s *Service) loreRestorePaths(id string, paths []string) ([]string, error) 
 	if err != nil {
 		return nil, err
 	}
+	return s.loreRestorePathsWithTarget(id, paths, target)
+}
+
+func (s *Service) loreRestorePathsWithTarget(id string, paths []string, target map[string]versionFileData) ([]string, error) {
+	if !slices.Contains(paths, lore.ItemsRelativePath) {
+		return paths, nil
+	}
 	if _, ok := target[lore.ItemsRelativePath]; !ok {
 		return paths, nil
 	}
@@ -49,8 +56,8 @@ func (s *Service) loreRestorePaths(id string, paths []string) ([]string, error) 
 }
 
 // Git's forced checkout deletes tracked files absent from the target. Preserve
-// newer media outside the worktree, then put it back even if checkout fails.
-func (s *Service) preservingNewerLoreMedia(id string, restore func() error) (result error) {
+// newer media inside an excluded staging dir in workspace, then put it back even if checkout fails.
+func (s *Service) preservingNewerLoreMedia(id string, restore func() error) error {
 	target, err := s.commitFiles(id)
 	if err != nil {
 		return err
@@ -59,11 +66,11 @@ func (s *Service) preservingNewerLoreMedia(id string, restore func() error) (res
 	if err != nil {
 		return err
 	}
-	saved, err := os.MkdirTemp(filepath.Dir(s.workspace), ".denova-media-restore-")
-	if err != nil {
-		return err
-	}
-	names := []string{}
+	return s.preservingNewerLoreMediaWithSnapshots(target, files, restore)
+}
+
+func (s *Service) preservingNewerLoreMediaWithSnapshots(target map[string]versionFileData, files []versionFileData, restore func() error) (result error) {
+	retained := make([]versionFileData, 0)
 	for _, file := range files {
 		if !assetstore.IsRetained(file.Path) {
 			continue
@@ -71,8 +78,19 @@ func (s *Service) preservingNewerLoreMedia(id string, restore func() error) (res
 		if _, ok := target[file.Path]; ok && !assetstore.IsMetadata(file.Path) {
 			continue
 		}
+		retained = append(retained, file)
+	}
+	if len(retained) == 0 {
+		return restore()
+	}
+	saved, err := os.MkdirTemp(s.workspace, versionRestoreStagingPrefix+"media-*")
+	if err != nil {
+		return err
+	}
+	names := make([]string, 0, len(retained))
+	for _, file := range retained {
 		if err := copyRestoreMedia(file.Abs, filepath.Join(saved, filepath.FromSlash(file.Path))); err != nil {
-			os.RemoveAll(saved)
+			_ = os.RemoveAll(saved)
 			return err
 		}
 		names = append(names, file.Path)

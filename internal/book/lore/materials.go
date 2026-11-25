@@ -252,8 +252,11 @@ func (s *Store) AttachAsset(id string, asset Asset, entry MaterialEntry) (Item, 
 // Other items may still use the original asset, which remains available for reuse.
 func (s *Store) attachAsset(id string, asset Asset, entry MaterialEntry, options materialAttachment) (Item, error) {
 	return s.mutateMaterials(id, func(c *Collection, item *Item) error {
-		promoteMaterials(c, item)
+		oldID, newID := promoteMaterials(c, item)
 		replaceID := options.replaceID
+		if oldID != "" && replaceID == oldID {
+			replaceID = newID
+		}
 		if replaceID != "" {
 			index := -1
 			for i, e := range item.Materials.Entries {

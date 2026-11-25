@@ -104,3 +104,58 @@ func TestBookCreationParentUsesProjectContentDirectoryForDataRoot(t *testing.T) 
 		t.Fatalf("custom Book parent = %s, want %s", parent, customParent)
 	}
 }
+
+func TestRegistryReorderBooksResolvesSymlinkedExternalPaths(t *testing.T) {
+	dataDir := t.TempDir()
+	realRoot := filepath.Join(t.TempDir(), "real")
+	bookAPath := filepath.Join(realRoot, "book-a")
+	bookBPath := filepath.Join(realRoot, "book-b")
+	for _, p := range []string{bookAPath, bookBPath} {
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	aliasRoot := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(realRoot, aliasRoot); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	registry := NewRegistry(dataDir)
+	bookA, err := registry.Add(bookAPath, TypeBook, "Book A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bookB, err := registry.Add(bookBPath, TypeBook, "Book B")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Persist bookB under its symlinked external location to exercise EvalSymlinks parity.
+	registry.mu.Lock()
+	data, _, err := registry.loadOrMigrateLocked()
+	if err != nil {
+		registry.mu.Unlock()
+		t.Fatal(err)
+	}
+	for i := range data.Projects {
+		if data.Projects[i].ID == bookB.ID {
+			data.Projects[i].Location = ProjectLocation{Kind: LocationExternal, Path: filepath.Join(aliasRoot, "book-b")}
+		}
+	}
+	if err := registry.saveLocked(data); err != nil {
+		registry.mu.Unlock()
+		t.Fatal(err)
+	}
+	registry.mu.Unlock()
+
+	if err := registry.ReorderBooks([]string{bookBPath, bookAPath}); err != nil {
+		t.Fatalf("ReorderBooks failed: %v", err)
+	}
+	books, err := registry.Books()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(books) != 2 || books[0].ID != bookB.ID || books[1].ID != bookA.ID {
+		t.Fatalf("books order = %#v, want [%s, %s]", books, bookB.ID, bookA.ID)
+	}
+}

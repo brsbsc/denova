@@ -2,14 +2,19 @@ package book
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"denova/internal/portablepath"
+	"golang.org/x/text/unicode/norm"
 )
 
 const (
@@ -157,32 +162,146 @@ func PreviewNovelImport(filename string, data []byte, opts ...NovelImportOptions
 }
 
 // ImportNovelToWorkspace writes parsed txt/md chapters into an initialized workspace.
+// On any write failure, created or modified paths under chapters/ are rolled back.
 func ImportNovelToWorkspace(workspace, filename string, data []byte, opts ...NovelImportOptions) (NovelImportPreview, []string, error) {
 	parsed, err := parseNovelImport(filename, data, mergeNovelImportOptions(opts...))
 	if err != nil {
 		return NovelImportPreview{}, nil, err
 	}
+	for _, container := range parsed.containers {
+		if _, err := SafePath(workspace, container); err != nil {
+			return NovelImportPreview{}, nil, fmt.Errorf("章节目录路径不合法 %s: %w", container, err)
+		}
+	}
+	seenPaths := make(map[string]string, len(parsed.Chapters))
+	for _, chapter := range parsed.Chapters {
+		if _, err := SafePath(workspace, chapter.Path); err != nil {
+			return NovelImportPreview{}, nil, fmt.Errorf("章节文件路径不合法 %s: %w", chapter.Path, err)
+		}
+		fold := portablepath.FoldKey(chapter.Path)
+		if prev, exists := seenPaths[fold]; exists {
+			return NovelImportPreview{}, nil, fmt.Errorf("章节文件路径冲突: %s 与 %s", prev, chapter.Path)
+		}
+		seenPaths[fold] = chapter.Path
+	}
+
 	chapterDir := filepath.Join(workspace, "chapters")
+	_, chapterDirStatErr := os.Lstat(chapterDir)
+	chapterDirExisted := chapterDirStatErr == nil
+	if chapterDirStatErr != nil && !errors.Is(chapterDirStatErr, os.ErrNotExist) {
+		return NovelImportPreview{}, nil, chapterDirStatErr
+	}
+
+	structurePath := filepath.Join(workspace, structureFile)
+	prevStructureData, prevStructureErr := os.ReadFile(structurePath)
+	prevStructureExisted := prevStructureErr == nil
+	if prevStructureErr != nil && !errors.Is(prevStructureErr, os.ErrNotExist) {
+		return NovelImportPreview{}, nil, prevStructureErr
+	}
+
+	type fileBackup struct {
+		path string
+		data []byte
+		mode os.FileMode
+	}
+	var createdFiles []string
+	var createdDirs []string
+	var overwrittenFiles []fileBackup
+	knownCreatedDirs := map[string]bool{}
+	recordDirsUntil := func(dir string) {
+		rel, relErr := filepath.Rel(chapterDir, dir)
+		if relErr != nil || rel == "." || strings.HasPrefix(rel, "..") {
+			return
+		}
+		parts := strings.Split(filepath.ToSlash(rel), "/")
+		current := chapterDir
+		for _, part := range parts {
+			current = filepath.Join(current, part)
+			if knownCreatedDirs[current] {
+				continue
+			}
+			if _, statErr := os.Lstat(current); errors.Is(statErr, os.ErrNotExist) {
+				knownCreatedDirs[current] = true
+				createdDirs = append(createdDirs, current)
+			}
+		}
+	}
+
+	rollback := func(cause error) (NovelImportPreview, []string, error) {
+		var rbErr error
+		for i := len(createdFiles) - 1; i >= 0; i-- {
+			if err := os.Remove(createdFiles[i]); err != nil && !errors.Is(err, os.ErrNotExist) {
+				rbErr = errors.Join(rbErr, err)
+			}
+		}
+		for i := len(overwrittenFiles) - 1; i >= 0; i-- {
+			item := overwrittenFiles[i]
+			if err := os.WriteFile(item.path, item.data, item.mode); err != nil {
+				rbErr = errors.Join(rbErr, err)
+			}
+		}
+		sort.SliceStable(createdDirs, func(i, j int) bool { return len(createdDirs[i]) > len(createdDirs[j]) })
+		for _, dir := range createdDirs {
+			if err := os.RemoveAll(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
+				rbErr = errors.Join(rbErr, err)
+			}
+		}
+		if prevStructureExisted {
+			if err := os.WriteFile(structurePath, prevStructureData, 0o644); err != nil {
+				rbErr = errors.Join(rbErr, err)
+			}
+		} else if err := os.Remove(structurePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			rbErr = errors.Join(rbErr, err)
+		}
+		if !chapterDirExisted {
+			if err := os.RemoveAll(chapterDir); err != nil && !errors.Is(err, os.ErrNotExist) {
+				rbErr = errors.Join(rbErr, err)
+			}
+		}
+		if rbErr != nil {
+			return NovelImportPreview{}, nil, fmt.Errorf("%w; 回滚小说导入失败: %v", cause, rbErr)
+		}
+		return NovelImportPreview{}, nil, cause
+	}
+
 	if err := os.MkdirAll(chapterDir, 0o755); err != nil {
 		return NovelImportPreview{}, nil, fmt.Errorf("创建章节目录失败: %w", err)
 	}
 	if err := InitializeChapterStructure(workspace, parsed.Preview.Structure); err != nil {
-		return NovelImportPreview{}, nil, err
+		return rollback(err)
 	}
-	for _, path := range parsed.containers {
-		if err := NewService(workspace).Create(path, "dir", ""); err != nil && !os.IsExist(err) {
-			return NovelImportPreview{}, nil, err
+	service := NewService(workspace)
+	for _, container := range parsed.containers {
+		absContainer := filepath.Join(workspace, filepath.FromSlash(container))
+		recordDirsUntil(absContainer)
+		if err := service.Create(container, "dir", ""); err != nil && !errors.Is(err, os.ErrExist) {
+			return rollback(err)
 		}
 	}
 	paths := make([]string, 0, len(parsed.Chapters))
 	for _, chapter := range parsed.Chapters {
 		rel := chapter.Path
 		dst := filepath.Join(workspace, filepath.FromSlash(rel))
+		recordDirsUntil(filepath.Dir(dst))
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return NovelImportPreview{}, nil, fmt.Errorf("创建章节子目录失败: %w", err)
+			return rollback(fmt.Errorf("创建章节子目录失败: %w", err))
+		}
+		if info, statErr := os.Lstat(dst); statErr == nil {
+			if !info.Mode().IsRegular() {
+				return rollback(fmt.Errorf("写入章节失败 %s: 目标路径不是普通文件", rel))
+			}
+			oldBytes, readErr := os.ReadFile(dst)
+			if readErr != nil {
+				return rollback(fmt.Errorf("读取既有章节失败 %s: %w", rel, readErr))
+			}
+			overwrittenFiles = append(overwrittenFiles, fileBackup{path: dst, data: oldBytes, mode: info.Mode().Perm()})
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return rollback(statErr)
+		} else {
+			createdFiles = append(createdFiles, dst)
 		}
 		if err := os.WriteFile(dst, []byte(chapter.Content), 0o644); err != nil {
-			return NovelImportPreview{}, nil, fmt.Errorf("写入章节失败 %s: %w", rel, err)
+			return rollback(fmt.Errorf("写入章节失败 %s: %w", rel, err))
 		}
 		paths = append(paths, rel)
 	}
@@ -220,7 +339,7 @@ func parseNovelImport(filename string, data []byte, opts NovelImportOptions) (pa
 	chapterFilenameFormat := chapterFilenameFormatForLanguage(language)
 	volumeDirFormat := volumeDirFormatForLanguage(language)
 
-	title := strings.TrimSuffix(filepath.Base(name), filepath.Ext(name))
+	title := norm.NFC.String(strings.TrimSuffix(filepath.Base(name), filepath.Ext(name)))
 	slog.InfoContext(context.Background(), fmt.Sprintf("[novel-import] parse begin filename=%q bytes=%d text_chars=%d sample_chars=%d requested_strategy=%q has_split_regex=%t", name, len(data), utf8.RuneCountInString(text), opts.SampleChars, opts.SplitStrategy, opts.SplitRegex != ""))
 	chapters, splitStrategy, splitRegex, warnings, err := splitNovelChaptersWithOptions(text, opts)
 	if err != nil {
@@ -233,8 +352,19 @@ func parseNovelImport(filename string, data []byte, opts NovelImportOptions) (pa
 		}
 	}
 	chapters, structure, containers := reshapeNovelChapters(chapters, opts.Structure, language)
+	for i := range containers {
+		containers[i] = norm.NFC.String(containers[i])
+		if err := portablepath.Validate(containers[i]); err != nil {
+			return parsedNovel{}, fmt.Errorf("生成的章节目录名不合法 %q: %w", containers[i], err)
+		}
+	}
 	totalChars := 0
 	for i := range chapters {
+		chapters[i].Path = norm.NFC.String(chapters[i].Path)
+		chapters[i].VolumePath = norm.NFC.String(chapters[i].VolumePath)
+		if err := portablepath.Validate(chapters[i].Path); err != nil {
+			return parsedNovel{}, fmt.Errorf("生成的章节路径不合法 %q: %w", chapters[i].Path, err)
+		}
 		chapters[i].Index = i + 1
 		chapters[i].Chars = utf8.RuneCountInString(chapters[i].Content)
 		totalChars += chapters[i].Chars
@@ -791,19 +921,26 @@ func volumeDirFormatForLanguage(_ string) string {
 }
 
 func safeFilenamePart(input string) string {
-	input = strings.TrimSpace(input)
+	input = norm.NFC.String(strings.TrimSpace(input))
 	var out []rune
 	lastDash := false
 	for _, r := range input {
+		if r == 0 || unicode.IsControl(r) {
+			if !lastDash && len(out) > 0 {
+				out = append(out, '-')
+				lastDash = true
+			}
+			continue
+		}
 		if r == '/' || r == '\\' || r == ':' || r == '*' || r == '?' || r == '"' || r == '<' || r == '>' || r == '|' {
-			if !lastDash {
+			if !lastDash && len(out) > 0 {
 				out = append(out, '-')
 				lastDash = true
 			}
 			continue
 		}
 		if unicode.IsSpace(r) {
-			if !lastDash {
+			if !lastDash && len(out) > 0 {
 				out = append(out, '-')
 				lastDash = true
 			}
@@ -815,7 +952,7 @@ func safeFilenamePart(input string) string {
 			break
 		}
 	}
-	return strings.Trim(strings.TrimSpace(string(out)), "-.")
+	return norm.NFC.String(strings.Trim(strings.TrimSpace(string(out)), "-."))
 }
 
 func minInt(a, b int) int {

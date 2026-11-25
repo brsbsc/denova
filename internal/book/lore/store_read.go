@@ -153,35 +153,6 @@ func (s *Store) SearchIndexMarkdown(options IndexOptions) (string, error) {
 	return renderLoreIndexMarkdown(entries, matchedTotal, libraryTotal, options), nil
 }
 
-// ResidentIndexMarkdown returns a bounded discovery index containing only
-// enabled resident lore. Bodies stay behind query_lore_items so specialized
-// agents can review relevant rules without injecting the complete library.
-func (s *Store) ResidentIndexMarkdown(maxBytes int) (string, error) {
-	items, err := s.List()
-	if err != nil {
-		return "", err
-	}
-	entries := make([]loreIndexEntry, 0, len(items))
-	for _, item := range items {
-		if item.LoadMode == LoadModeResident {
-			entries = append(entries, loreIndexEntry{Item: item})
-		}
-	}
-	sortLoreIndexEntries(entries, false)
-	return renderLoreIndexMarkdown(entries, len(entries), len(entries), IndexOptions{MaxBytes: maxBytes}), nil
-}
-
-// NameRosterMarkdown returns a compact, deterministic discovery roster.
-// It intentionally excludes briefs and bodies so callers can expose many
-// names without treating every lore item as active model context.
-func (s *Store) NameRosterMarkdown(maxBytes int, excludeResident bool) (string, error) {
-	return s.NameCatalogMarkdown(NameCatalogOptions{
-		MaxBytes:        maxBytes,
-		ExcludeResident: excludeResident,
-		OmitWhenEmpty:   true,
-	})
-}
-
 func (s *Store) ResidentContextMarkdown() (string, error) {
 	items, err := s.List()
 	if err != nil {
@@ -201,22 +172,6 @@ func (s *Store) ResidentContextMarkdown() (string, error) {
 		sb.WriteString("\n\n")
 	}
 	return strings.TrimSpace(sb.String()), nil
-}
-
-// ResidentContentBytes returns the exact UTF-8 size of enabled resident lore
-// bodies for UI guidance and model-context safety checks.
-func (s *Store) ResidentContentBytes() (int, error) {
-	items, err := s.List()
-	if err != nil {
-		return 0, err
-	}
-	total := 0
-	for _, item := range items {
-		if item.LoadMode == LoadModeResident {
-			total += len([]byte(strings.TrimSpace(item.Content)))
-		}
-	}
-	return total, nil
 }
 
 func (s *Store) IndexMarkdown() (string, error) {

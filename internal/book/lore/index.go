@@ -392,7 +392,7 @@ func renderBoundedLoreNameIndex(entries []loreIndexEntry, matchedTotal, libraryT
 	if len([]byte(out)) <= maxBytes {
 		return out
 	}
-	return strings.TrimSpace(truncateStringBytes(out, maxBytes))
+	return strings.TrimSpace(TruncateStringBytes(out, maxBytes))
 }
 
 func appendLoreContextPart(sb *strings.Builder, text string, maxBytes int) bool {
@@ -411,7 +411,7 @@ func appendLoreContextPart(sb *strings.Builder, text string, maxBytes int) bool 
 		sb.WriteString(text)
 		return true
 	}
-	clipped := truncateStringBytes(text, remaining)
+	clipped := TruncateStringBytes(text, remaining)
 	if clipped == "" {
 		return false
 	}
@@ -419,11 +419,12 @@ func appendLoreContextPart(sb *strings.Builder, text string, maxBytes int) bool 
 	return false
 }
 
-func truncateStringBytes(text string, maxBytes int) string {
+// TruncateStringBytes clips UTF-8 text to at most maxBytes on a rune boundary.
+func TruncateStringBytes(text string, maxBytes int) string {
 	if maxBytes <= 0 || text == "" {
 		return ""
 	}
-	if len([]byte(text)) <= maxBytes {
+	if len(text) <= maxBytes {
 		return text
 	}
 	end := 0

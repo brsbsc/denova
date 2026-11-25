@@ -95,11 +95,25 @@ func jsonPayloadEqual(left, right []byte) bool {
 	return bytes.Equal(bytes.TrimSpace(left), bytes.TrimSpace(right))
 }
 
+const maxPNGTextPayloadBytes = 16 * 1024 * 1024
+
 func extractPNGTextChunks(data []byte) ([]pngTextChunk, error) {
 	if !bytes.HasPrefix(data, pngSignature) {
 		return nil, errors.New("不是有效的 PNG 文件")
 	}
 	var chunks []pngTextChunk
+	totalTextBytes := 0
+	appendChunk := func(chunk pngTextChunk) error {
+		if chunk.Keyword == "" {
+			return nil
+		}
+		if len(chunk.Text) > maxPNGTextPayloadBytes || totalTextBytes+len(chunk.Text) > 2*maxPNGTextPayloadBytes {
+			return fmt.Errorf("PNG 文本块超过 %d MiB 上限", maxPNGTextPayloadBytes/(1024*1024))
+		}
+		totalTextBytes += len(chunk.Text)
+		chunks = append(chunks, chunk)
+		return nil
+	}
 	offset := len(pngSignature)
 	for offset+12 <= len(data) {
 		length := int(binary.BigEndian.Uint32(data[offset : offset+4]))
@@ -115,23 +129,25 @@ func extractPNGTextChunks(data []byte) ([]pngTextChunk, error) {
 		case "tEXt":
 			chunk, ok := parsePNGTextChunk(chunkData)
 			if ok {
-				chunks = append(chunks, chunk)
+				if err := appendChunk(chunk); err != nil {
+					return nil, err
+				}
 			}
 		case "zTXt":
 			chunk, err := parsePNGCompressedTextChunk(chunkData)
 			if err != nil {
 				return nil, err
 			}
-			if chunk.Keyword != "" {
-				chunks = append(chunks, chunk)
+			if err := appendChunk(chunk); err != nil {
+				return nil, err
 			}
 		case "iTXt":
 			chunk, err := parsePNGInternationalTextChunk(chunkData)
 			if err != nil {
 				return nil, err
 			}
-			if chunk.Keyword != "" {
-				chunks = append(chunks, chunk)
+			if err := appendChunk(chunk); err != nil {
+				return nil, err
 			}
 		case "IEND":
 			return chunks, nil
@@ -204,9 +220,12 @@ func inflateZlib(data []byte) (string, error) {
 		return "", fmt.Errorf("解压 PNG 文本块失败: %w", err)
 	}
 	defer reader.Close()
-	out, err := io.ReadAll(reader)
+	out, err := io.ReadAll(io.LimitReader(reader, maxPNGTextPayloadBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("读取 PNG 文本块失败: %w", err)
+	}
+	if len(out) > maxPNGTextPayloadBytes {
+		return "", fmt.Errorf("PNG 文本块解压后超过 %d MiB 上限", maxPNGTextPayloadBytes/(1024*1024))
 	}
 	return string(out), nil
 }

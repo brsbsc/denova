@@ -22,7 +22,7 @@ func AcquireLease(ctx context.Context, lockPath string) (func() error, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	lockPath = canonicalLeasePath(lockPath)
+	lockPath = CanonicalPath(lockPath)
 	if lockPath == "" {
 		return nil, fmt.Errorf("file lease path is required")
 	}
@@ -49,9 +49,9 @@ func AcquireLease(ctx context.Context, lockPath string) (func() error, error) {
 	}, nil
 }
 
-// canonicalLeasePath resolves the longest existing prefix so symlink aliases
-// continue to share one lease even when the lock file itself does not exist.
-func canonicalLeasePath(path string) string {
+// CanonicalPath resolves the longest existing prefix so symlink aliases share
+// one lock or lease even when the target file or a child directory is new.
+func CanonicalPath(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return ""

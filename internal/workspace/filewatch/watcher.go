@@ -341,15 +341,6 @@ func (w *workspaceWatcher) removeDirectoryWatch(path string) {
 	}
 }
 
-func hasHiddenSegment(path string) bool {
-	for _, segment := range strings.Split(filepath.ToSlash(path), "/") {
-		if strings.HasPrefix(segment, ".") {
-			return true
-		}
-	}
-	return false
-}
-
 var ignoredDirectoryNames = map[string]struct{}{
 	".git":         {},
 	".next":        {},

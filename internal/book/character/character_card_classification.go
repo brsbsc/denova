@@ -31,7 +31,7 @@ func applySemanticTavernLoreClassification(ops []lore.Operation, stats *tavernIm
 			Tags:             append([]string(nil), item.Tags...),
 			Keywords:         append([]string(nil), item.Keywords...),
 			BriefDescription: item.BriefDescription,
-			Content:          truncateStringBytes(item.Content, semanticLoreClassificationBodyBytes),
+			Content:          lore.TruncateStringBytes(item.Content, semanticLoreClassificationBodyBytes),
 			CurrentType:      item.Type,
 		}
 		encoded, err := json.Marshal(input)

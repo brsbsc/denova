@@ -2,7 +2,6 @@ package project
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -628,35 +627,11 @@ func (registry *Registry) saveLocked(data registryData) error {
 	if err != nil {
 		return err
 	}
-	temp, err := os.CreateTemp(filepath.Dir(registry.path), ".projects-*.tmp")
-	if err != nil {
+	rawWithNewline := append(raw, '\n')
+	if err := writeFileAtomic(registry.path, rawWithNewline, 0o600); err != nil {
 		return err
 	}
-	tempPath := temp.Name()
-	removeTemp := true
-	defer func() {
-		_ = temp.Close()
-		if removeTemp {
-			_ = os.Remove(tempPath)
-		}
-	}()
-	if err := temp.Chmod(0o600); err != nil {
-		return err
-	}
-	if _, err := temp.Write(append(raw, '\n')); err != nil {
-		return err
-	}
-	if err := temp.Sync(); err != nil {
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tempPath, registry.path); err != nil {
-		return err
-	}
-	removeTemp = false
-	registry.readCache = &registryReadCache{raw: append(raw, '\n'), data: cloneRegistryData(data)}
+	registry.readCache = &registryReadCache{raw: rawWithNewline, data: cloneRegistryData(data)}
 	return nil
 }
 
@@ -788,24 +763,6 @@ func randomID() (string, error) {
 		return "", err
 	}
 	return "project-" + hex.EncodeToString(value[:]), nil
-}
-
-func stableID(path string) string {
-	digest := sha256.Sum256([]byte(filepath.Clean(path)))
-	return "project-" + hex.EncodeToString(digest[:16])
-}
-
-func uniqueStableID(path string, existing map[string]bool) string {
-	for suffix := 0; ; suffix++ {
-		candidatePath := path
-		if suffix > 0 {
-			candidatePath = fmt.Sprintf("%s\x00%d", path, suffix)
-		}
-		candidate := stableID(candidatePath)
-		if !existing[candidate] {
-			return candidate
-		}
-	}
 }
 
 func projectStatus(record Record) Record {

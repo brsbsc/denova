@@ -18,14 +18,11 @@ type NameCatalogOptions struct {
 // NameCatalogMarkdown returns a bounded catalog for candidate discovery.
 // Entries are added as complete lines so the result is never cut mid-entry.
 func (s *Store) NameCatalogMarkdown(options NameCatalogOptions) (string, error) {
-	items, err := s.List()
+	collection, err := s.loadOrCreate()
 	if err != nil {
 		return "", err
 	}
-	categories, err := s.Categories()
-	if err != nil {
-		return "", err
-	}
+	categories := collection.Categories
 	var categoryCatalog strings.Builder
 	categoryCatalog.WriteString("Category catalog (project reference data; use exact IDs):\n")
 	for _, category := range categories {
@@ -33,8 +30,11 @@ func (s *Store) NameCatalogMarkdown(options NameCatalogOptions) (string, error) 
 	}
 	categoryCatalog.WriteByte('\n')
 	prefix := categoryCatalog.String()
-	filtered := make([]Item, 0, len(items))
-	for _, item := range items {
+	filtered := make([]Item, 0, len(collection.Items))
+	for _, item := range collection.Items {
+		if !item.Enabled {
+			continue
+		}
 		if options.ExcludeResident && item.LoadMode == LoadModeResident {
 			continue
 		}
@@ -60,7 +60,7 @@ func (s *Store) NameCatalogMarkdown(options NameCatalogOptions) (string, error) 
 	if offset > len(entries) {
 		offset = len(entries)
 	}
-	revision, err := s.Revision()
+	revision, err := revisionFromCollection(collection)
 	if err != nil {
 		return "", err
 	}

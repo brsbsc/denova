@@ -66,23 +66,20 @@ func (s *Store) Get(id string) (Item, error) {
 // invalidation. It changes when a name, summary, body, or enabled state
 // changes without exposing the full collection to metadata consumers.
 func (s *Store) Revision() (string, error) {
-	items, err := s.List()
+	collection, err := s.loadOrCreate()
 	if err != nil {
 		return "", err
 	}
-	categories, err := s.Categories()
-	if err != nil {
-		return "", err
-	}
-	guideCollection, err := s.loadOrCreate()
-	if err != nil {
-		return "", err
-	}
+	return revisionFromCollection(collection)
+}
+
+func revisionFromCollection(collection Collection) (string, error) {
+	items := listFromCollection(collection, false)
 	data, err := json.Marshal(struct {
 		Items      []Item
 		Categories []Category
 		Guide      IndexGuide
-	}{items, categories, guideCollection.IndexGuide})
+	}{items, collection.Categories, collection.IndexGuide})
 	if err != nil {
 		return "", err
 	}
@@ -95,6 +92,10 @@ func (s *Store) list(includeDisabled bool) ([]Item, error) {
 	if err != nil {
 		return nil, err
 	}
+	return listFromCollection(collection, includeDisabled), nil
+}
+
+func listFromCollection(collection Collection, includeDisabled bool) []Item {
 	items := make([]Item, 0, len(collection.Items))
 	for _, item := range collection.Items {
 		if !includeDisabled && !item.Enabled {
@@ -114,7 +115,7 @@ func (s *Store) list(includeDisabled bool) ([]Item, error) {
 		}
 		return items[i].Name < items[j].Name
 	})
-	return items, nil
+	return items
 }
 
 func (s *Store) Create(input ItemInput) (Item, error) {

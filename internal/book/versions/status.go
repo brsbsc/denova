@@ -11,6 +11,10 @@ func (s *Service) Status(ctx context.Context, settings VersionAutoSettings) (Ver
 }
 
 func (s *Service) statusLocked(ctx context.Context, settings VersionAutoSettings) (VersionStatus, error) {
+	return s.statusWithVisibleFilesLocked(ctx, settings, nil)
+}
+
+func (s *Service) statusWithVisibleFilesLocked(ctx context.Context, settings VersionAutoSettings, precollected []versionFileData) (VersionStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return VersionStatus{}, err
 	}
@@ -25,9 +29,18 @@ func (s *Service) statusLocked(ctx context.Context, settings VersionAutoSettings
 			return VersionStatus{}, err
 		}
 	}
-	changes, err := s.statusChanges(ctx, baseline)
-	if err != nil {
-		return VersionStatus{}, err
+	var changes []VersionChange
+	if precollected != nil {
+		byPath := make(map[string]versionFileData, len(precollected))
+		for _, file := range precollected {
+			byPath[file.Path] = file
+		}
+		changes = diffFileStates(baseline, byPath)
+	} else {
+		changes, err = s.statusChanges(ctx, baseline)
+		if err != nil {
+			return VersionStatus{}, err
+		}
 	}
 	lastAutoAt, _, err := s.latestVersionTimes()
 	if err != nil {

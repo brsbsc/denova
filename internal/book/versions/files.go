@@ -18,18 +18,8 @@ import (
 	gitstorer "github.com/go-git/go-git/v5/plumbing/storer"
 )
 
-// WorkspaceFileSet defines which workspace files are visible to versioning.
-type WorkspaceFileSet struct {
-	root string
-}
-
 func (s *Service) collectVisibleFiles() ([]versionFileData, error) {
 	snapshot, err := s.collectWorkspaceSnapshot(nil)
-	return snapshot.files, err
-}
-
-func (w WorkspaceFileSet) Collect() ([]versionFileData, error) {
-	snapshot, err := collectVersionFiles(w.root, w.root, nil)
 	return snapshot.files, err
 }
 
@@ -181,9 +171,12 @@ func isTextBytes(data []byte) bool {
 // Windows. Exclude only Denova's lease names, preserving user files such as Cargo.lock.
 var journalLeaseName = regexp.MustCompile(`\.jsonl\.(?:domain|mutation|agent-[0-9a-f]{32})\.lock$`)
 
+const versionRestoreStagingPrefix = ".denova-version-restore-"
+
 func isVersionExcludedRelPath(relPath string) bool {
 	cleanRel := filepath.ToSlash(filepath.Clean(filepath.FromSlash(relPath)))
-	return journalLeaseName.MatchString(filepath.Base(cleanRel)) ||
+	return strings.HasPrefix(cleanRel, versionRestoreStagingPrefix) ||
+		journalLeaseName.MatchString(filepath.Base(cleanRel)) ||
 		cleanRel == ".git" || strings.HasPrefix(cleanRel, ".git/") ||
 		cleanRel == workspacelayout.CurrentRel("runs") || strings.HasPrefix(cleanRel, workspacelayout.CurrentRel("runs")+"/") ||
 		cleanRel == workspacelayout.LegacyRel("runs") || strings.HasPrefix(cleanRel, workspacelayout.LegacyRel("runs")+"/") ||

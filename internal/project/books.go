@@ -38,10 +38,13 @@ func (registry *Registry) ReorderBooks(paths []string) error {
 		return err
 	}
 	records := orderedRecords(data, false)
-	bookByPath := make(map[string]string, len(records))
+	bookByPath := make(map[string]string, len(records)*2)
 	for _, record := range records {
 		if record.Type == TypeBook {
 			bookByPath[filepath.Clean(record.WorkspacePath)] = record.ID
+			if canonical, canonicalErr := canonicalDirectory(record.WorkspacePath, false); canonicalErr == nil {
+				bookByPath[canonical] = record.ID
+			}
 		}
 	}
 

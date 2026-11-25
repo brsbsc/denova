@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/osfs"
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -64,7 +65,36 @@ func openStateRepository(workspace, repository string) (*git.Repository, error) 
 		}
 		return nil, err
 	}
-	return git.Open(detachedRepositoryStorage(repository), osfs.New(workspace))
+	return git.Open(detachedRepositoryStorage(repository), newVersionWorktreeFS(workspace))
+}
+
+// versionWorktreeFS hides in-workspace restore staging directories from go-git
+// so forced checkouts never delete staged .denova backups or retained media.
+type versionWorktreeFS struct {
+	billy.Filesystem
+}
+
+func newVersionWorktreeFS(workspace string) billy.Filesystem {
+	return versionWorktreeFS{Filesystem: osfs.New(workspace)}
+}
+
+func (f versionWorktreeFS) ReadDir(dir string) ([]os.FileInfo, error) {
+	entries, err := f.Filesystem.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	cleanDir := filepath.ToSlash(filepath.Clean(dir))
+	if cleanDir != "." && cleanDir != "/" && cleanDir != "" {
+		return entries, nil
+	}
+	filtered := make([]os.FileInfo, 0, len(entries))
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), versionRestoreStagingPrefix) {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered, nil
 }
 
 // detachedStorage intentionally exposes only the stable storage.Storer
@@ -98,7 +128,7 @@ func initializeStateRepository(workspace, repository string) (*git.Repository, e
 			_ = os.RemoveAll(temp)
 		}
 	}()
-	if _, err := git.Init(detachedRepositoryStorage(temp), osfs.New(workspace)); err != nil {
+	if _, err := git.Init(detachedRepositoryStorage(temp), newVersionWorktreeFS(workspace)); err != nil {
 		return nil, err
 	}
 	if err := os.Rename(temp, repository); err != nil {
@@ -141,7 +171,7 @@ func MigrateLegacyRepository(workspace, repository string) (bool, error) {
 			_ = os.RemoveAll(temp)
 		}
 	}()
-	destination, err := git.Init(detachedRepositoryStorage(temp), osfs.New(workspace))
+	destination, err := git.Init(detachedRepositoryStorage(temp), newVersionWorktreeFS(workspace))
 	if err != nil {
 		return false, err
 	}
@@ -379,15 +409,7 @@ func (s *Service) commitFileIndex(id string) (map[string]versionFileData, error)
 	return files, nil
 }
 
-func (s *Service) readCommitFile(id, path string) ([]byte, error) {
-	repo, err := s.openVersionRepo()
-	if err != nil {
-		return nil, err
-	}
-	commit, err := repo.CommitObject(plumbing.NewHash(strings.TrimSpace(id)))
-	if err != nil {
-		return nil, err
-	}
+func readCommitObjectFile(commit *object.Commit, path string) ([]byte, error) {
 	file, err := commit.File(path)
 	if err != nil {
 		return nil, err
@@ -400,20 +422,44 @@ func (s *Service) readCommitFile(id, path string) ([]byte, error) {
 	return io.ReadAll(reader)
 }
 
+func (s *Service) readCommitFile(id, path string) ([]byte, error) {
+	repo, err := s.openVersionRepo()
+	if err != nil {
+		return nil, err
+	}
+	commit, err := repo.CommitObject(plumbing.NewHash(strings.TrimSpace(id)))
+	if err != nil {
+		return nil, err
+	}
+	return readCommitObjectFile(commit, path)
+}
+
 func (s *Service) restoreCommitToWorkspace(id string) error {
+	target, err := s.commitFiles(id)
+	if err != nil {
+		return err
+	}
+	files, err := s.collectVisibleFiles()
+	if err != nil {
+		return err
+	}
+	return s.restoreCommitToWorkspaceWithSnapshots(id, target, files)
+}
+
+func (s *Service) restoreCommitToWorkspaceWithSnapshots(id string, target map[string]versionFileData, files []versionFileData) error {
 	repo, err := s.openVersionRepo()
 	if err != nil {
 		return err
 	}
 	if err := s.withProtectedExcludedWorkspaceDirs(func() error {
-		return s.preservingNewerLoreMedia(id, func() error { return s.gitStore().CheckoutWhole(repo, id) })
+		return s.preservingNewerLoreMediaWithSnapshots(target, files, func() error { return s.gitStore().CheckoutWhole(repo, id) })
 	}); err != nil {
 		return err
 	}
 	if err := removeVersionExcludedIndexEntries(repo); err != nil {
 		return err
 	}
-	if err := s.removeVisibleFilesAbsentFromCommit(id); err != nil {
+	if err := s.removeVisibleFilesAbsentFromTarget(target); err != nil {
 		return err
 	}
 	return repo.Storer.SetReference(plumbing.NewHashReference(versionCurrentReference, plumbing.NewHash(strings.TrimSpace(id))))

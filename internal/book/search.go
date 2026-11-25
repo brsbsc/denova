@@ -3,7 +3,6 @@ package book
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,6 +10,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"denova/internal/portablepath"
 )
 
 const (
@@ -119,32 +120,60 @@ func SearchWorkspace(workspace, query string, limit int, opts SearchOptions) ([]
 var errSearchLimitReached = errors.New("search limit reached")
 
 // walkVisibleWorkspaceFiles 按统一规则遍历 workspace 内的可见文件：
-// 跳过隐藏文件/目录、符号链接以及未通过 SafePath 校验的路径。
+// 每目录仅读取一次目录项以检测大小写折叠冲突，跳过隐藏文件/目录、符号链接与非可移植文件名。
 func walkVisibleWorkspaceFiles(workspace string, visit func(absPath, rel string) error) error {
-	return filepath.WalkDir(workspace, func(path string, entry fs.DirEntry, err error) error {
+	cleanWorkspace := filepath.Clean(workspace)
+	if err := portablepath.CheckDirectory(cleanWorkspace); err != nil {
+		return nil
+	}
+	var walkDir func(currentDir, relPrefix string) error
+	walkDir = func(currentDir, relPrefix string) error {
+		entries, err := os.ReadDir(currentDir)
 		if err != nil {
 			return nil
 		}
-		name := entry.Name()
-		if name != "." && strings.HasPrefix(name, ".") {
-			if entry.IsDir() {
-				return filepath.SkipDir
+		foldCounts := make(map[string]int, len(entries))
+		for _, entry := range entries {
+			foldCounts[portablepath.FoldKey(entry.Name())]++
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if strings.HasPrefix(name, ".") || entry.Type()&os.ModeSymlink != 0 {
+				continue
 			}
-			return nil
+			if foldCounts[portablepath.FoldKey(name)] > 1 {
+				continue
+			}
+			if err := portablepath.ValidateComponent(name); err != nil {
+				continue
+			}
+			rel := name
+			if relPrefix != "" {
+				rel = relPrefix + "/" + name
+			}
+			if len(rel) > portablepath.MaxRelativePathBytes {
+				continue
+			}
+			absPath := filepath.Join(currentDir, name)
+			if entry.IsDir() {
+				if err := walkDir(absPath, rel); err != nil {
+					return err
+				}
+				continue
+			}
+			if !entry.Type().IsRegular() {
+				info, infoErr := entry.Info()
+				if infoErr != nil || !info.Mode().IsRegular() {
+					continue
+				}
+			}
+			if err := visit(absPath, rel); err != nil {
+				return err
+			}
 		}
-		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
-			return nil
-		}
-		rel, err := filepath.Rel(workspace, path)
-		if err != nil {
-			return nil
-		}
-		rel = filepath.ToSlash(rel)
-		if _, err := SafePath(workspace, rel); err != nil {
-			return nil
-		}
-		return visit(path, rel)
-	})
+		return nil
+	}
+	return walkDir(cleanWorkspace, "")
 }
 
 // searchMatcher 统一字面量（大小写不敏感折叠）与正则两种匹配方式，
