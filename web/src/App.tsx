@@ -117,6 +117,27 @@ function App() {
     messages: [],
     isStreaming: false,
   })
+  const latestWritingAgentConversationRef = useRef<AgentChatConversationState>(writingAgentConversation)
+  const activeTabKeyRef = useRef<string | null>(activeTabKey)
+  activeTabKeyRef.current = activeTabKey
+  const handleWritingAgentConversationStateChange = useCallback((next: AgentChatConversationState) => {
+    latestWritingAgentConversationRef.current = next
+    setWritingAgentConversation((current) => {
+      if (
+        current.sessionId !== next.sessionId
+        || current.isStreaming !== next.isStreaming
+        || current.onResolveAsk !== next.onResolveAsk
+      ) {
+        return next
+      }
+      // Avoid reconciling the full workbench on every streamed chunk unless the
+      // SubAgent tab is actively displaying the live transcript; settled turns still sync.
+      if (!next.isStreaming || activeTabKeyRef.current === WRITING_SUBAGENT_TAB_KEY) {
+        return current.messages === next.messages ? current : next
+      }
+      return current
+    })
+  }, [])
   const [lastCreationRoute, setLastCreationRoute] = useState<CreationRoute>(() => readContentMode())
   const lastCreationRouteRef = useRef<CreationRoute>(readContentMode())
   const characterCardInputRef = useRef<HTMLInputElement>(null)
@@ -796,8 +817,9 @@ function App() {
   }, [activeTabKey, clearSelectedFile, flushEditorDraft, handleActivateTab, openTabs])
 
   const handleOpenWritingSubAgentSession = useCallback(async (target: AgentSubAgentSessionTarget) => {
-    if (target.parentSessionId !== writingAgentConversation.sessionId) return
+    if (target.parentSessionId !== latestWritingAgentConversationRef.current.sessionId) return
     if (activeTabKey !== WRITING_SUBAGENT_TAB_KEY && !(await flushEditorDraft())) return
+    setWritingAgentConversation(latestWritingAgentConversationRef.current)
     setOpenTabs((current) => {
       const existing = current.find((tab) => tab.kind === 'subagent')
       const returnTabKey = existing?.kind === 'subagent' && activeTabKey === WRITING_SUBAGENT_TAB_KEY
@@ -815,7 +837,7 @@ function App() {
         : [...current, nextTab]
     })
     setActiveTabKey(WRITING_SUBAGENT_TAB_KEY)
-  }, [activeTabKey, flushEditorDraft, writingAgentConversation.sessionId])
+  }, [activeTabKey, flushEditorDraft])
 
   useEffect(() => {
     if (!writingAgentConversation.sessionId) return
@@ -995,7 +1017,7 @@ function App() {
         styleScenes={styleScenes}
         textSelections={textSelections}
         writingAgentConversation={writingAgentConversation}
-        onWritingAgentConversationStateChange={setWritingAgentConversation}
+        onWritingAgentConversationStateChange={handleWritingAgentConversationStateChange}
         onOpenWritingSubAgentSession={handleOpenWritingSubAgentSession}
         chatPlanMode={planMode}
         hasEarlierMessages={hasEarlierMessages}

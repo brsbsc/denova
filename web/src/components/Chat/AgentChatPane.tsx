@@ -17,6 +17,7 @@ interface AgentChatPaneProps {
 }
 
 const StableMessageList = memo(MessageList)
+const StableInputArea = memo(InputArea)
 
 /** Shared assembly for the primary chat and the desktop split-chat pane. */
 export function AgentChatPane({ emptyContent, messageListProps, inputAreaProps, contentClassName, sessionTransitionPending = false, className }: AgentChatPaneProps) {
@@ -37,7 +38,7 @@ export function AgentChatPane({ emptyContent, messageListProps, inputAreaProps, 
           contentClassName={contentClassName ?? messageListProps.contentClassName}
         />
       </motion.div>
-      <InputArea
+      <StableInputArea
         {...inputAreaProps}
         contentClassName={contentClassName ?? inputAreaProps.contentClassName}
       />

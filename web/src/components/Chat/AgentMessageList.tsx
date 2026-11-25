@@ -492,9 +492,7 @@ function MessageListContent({ projectId, attachmentScope, messages, projection, 
         totalListHeightChanged={tailFollowActive ? scrollLock.syncStreamingTailLayout : scrollLock.syncIdleBottomLayout}
         initialTopMostItemIndex={initialPosition === 'end' ? MESSAGE_LIST_INITIAL_END_INDEX : 0}
         firstItemIndex={firstItemIndex}
-        // Pass totalCount instead of data: react-virtuoso 4.18's listState stream does not
-        // deduplicate data emissions when empty or hidden, causing React 19 store loops.
-        totalCount={listItems.length}
+        data={listItems}
         context={virtuosoContext}
         components={MESSAGE_LIST_COMPONENTS}
         // Keep short conversations top-aligned. Initial restoration still scrolls

@@ -77,6 +77,8 @@ export type AgentPanelChrome = 'panel' | 'workbench'
 
 const WRITING_AGENT_INIT_EVENT = 'nova:writing-agent-init'
 const EMPTY_TIMELINE_ATTACHMENTS: never[] = []
+const EMPTY_QUEUED_COMMANDS: AgentRuntimeQueuedCommand[] = []
+const EMPTY_IMAGE_PRESETS: ImagePreset[] = []
 export const WRITING_COMPOSER_SETTING_DEFAULTS = {
   ide_story_teller_id: DEFAULT_NARRATIVE_STYLE_ID,
   ide_image_preset_id: 'game-cg',
@@ -220,7 +222,7 @@ function AgentPanelComponent({
   composerDraftScope,
   composerSettings: persistedSettings,
   tellers,
-  imagePresets = [],
+  imagePresets = EMPTY_IMAGE_PRESETS,
   messages,
   sessions,
   activeSessionId,
@@ -411,7 +413,7 @@ function AgentPanelComponent({
     setFallbackSubAgentSession(null)
   }, [activeSessionId])
 
-  const handleAnalyzeContext = async (message: string) => {
+  const handleAnalyzeContext = useCallback(async (message: string) => {
     setContextAnalysisLoading(true)
     setContextAnalysisError(null)
     setContextAnalysis(null)
@@ -436,12 +438,12 @@ function AgentPanelComponent({
     } finally {
       setContextAnalysisLoading(false)
     }
-  }
+  }, [generalAgent, ideContext, ideTellerId, imagePresetId, onAnalyzeContext, page, writingSkill])
 
-  const openContextAnalysis = () => {
+  const openContextAnalysis = useCallback(() => {
     setContextAnalysisOpen(true)
     void handleAnalyzeContext(CONTEXT_ANALYSIS_SIMULATED_MESSAGE)
-  }
+  }, [handleAnalyzeContext])
 
   const openSubAgentSession = useCallback((message: AgentMessageView) => {
     const key = agentSubAgentSessionKey(message)
@@ -498,7 +500,7 @@ function AgentPanelComponent({
     [activeRunID, changeGroupsQuery.data, isExecutionActive, onOpenChangeReview, onWorkspaceChanged, projectId],
   )
 
-  const sendWithWritingSkill = async (message: string, inputOptions?: InputAreaSendOptions) => {
+  const sendWithWritingSkill = useCallback(async (message: string, inputOptions?: InputAreaSendOptions) => {
     // Snapshot only persisted Project files, using the same API as version management.
     const snapshot = message.trim().match(/^\/snapshot(?:\s+([\s\S]*))?$/)
     if (snapshot) {
@@ -578,9 +580,27 @@ function AgentPanelComponent({
     if (feedbackSelection.length && accepted && !submissionStarted) handleSubmissionStart()
     if (!accepted) handleSubmissionError()
     return accepted
-  }
+  }, [
+    generalAgent,
+    ideContext,
+    ideTellerId,
+    imagePresetId,
+    loreReferenceLabels,
+    onCreateSession,
+    onReviewFeedbackSubmissionFailed,
+    onReviewFeedbackSubmitted,
+    onSend,
+    page,
+    persistedSettings.loading,
+    projectId,
+    queryClient,
+    reviewFeedback,
+    sessionControlsDisabled,
+    t,
+    writingSkill,
+  ])
 
-  const submitGoal = async (objective: string, inputOptions?: InputAreaSendOptions) => {
+  const submitGoal = useCallback(async (objective: string, inputOptions?: InputAreaSendOptions) => {
     if (objective.trim() === '/new' || /^\/snapshot(?:\s|$)/.test(objective.trim())) return sendWithWritingSkill(objective, inputOptions)
     if (planMode) onPlanModeChange(false)
     const next = await conversationGoal.set(objective)
@@ -589,25 +609,25 @@ function AgentPanelComponent({
       return false
     }
     return sendWithWritingSkill(objective, inputOptions)
-  }
+  }, [conversationGoal.set, onPlanModeChange, planMode, sendWithWritingSkill, t])
 
-  const pauseGoal = async () => {
+  const pauseGoal = useCallback(async () => {
     const next = await conversationGoal.pause()
     if (!next) {
       toast.error(t('chat.goal.updateFailed'))
       return
     }
     if (isExecutionActive) onStop()
-  }
+  }, [conversationGoal.pause, isExecutionActive, onStop, t])
 
-  const clearGoal = async () => {
+  const clearGoal = useCallback(async () => {
     const next = await conversationGoal.clear()
     if (!next) {
       toast.error(t('chat.goal.updateFailed'))
       return
     }
     if (isExecutionActive) onStop()
-  }
+  }, [conversationGoal.clear, isExecutionActive, onStop, t])
 
   const returnQueuedCommandToEditor = useCallback(async (item: AgentRuntimeQueuedCommand) => {
     const prompt = await onEditQueuedCommand?.(item)
@@ -709,6 +729,74 @@ function AgentPanelComponent({
     afterContent: messageListAfterContent,
     afterContentKey: `${recoveryFailed}:${runtimePhase || 'idle'}:${commandSubmitting}:${lastRuntimeFailure || ''}`,
   }
+  const clearInputPrefill = useCallback(() => setInputPrefill(null), [])
+  const persistImagePreset = useCallback(
+    (value: string) => persistedSettings.persist('ide_image_preset_id', value),
+    [persistedSettings.persist],
+  )
+  const persistStoryTeller = useCallback(
+    (value: string) => persistedSettings.persist('ide_story_teller_id', value),
+    [persistedSettings.persist],
+  )
+  const persistWritingSkill = useCallback(
+    (value: string) => persistedSettings.persist('writing_skill_default', value),
+    [persistedSettings.persist],
+  )
+  const savingImagePreset = persistedSettings.isSaving('ide_image_preset_id')
+  const savingStoryTeller = persistedSettings.isSaving('ide_story_teller_id')
+  const savingWritingSkill = persistedSettings.isSaving('writing_skill_default')
+  const composerSettingsControl = useMemo(
+    () => (
+      <>
+        {quickPrompts.menuItem}
+        {!generalAgent && !page ? (
+          <>
+            <ImageGenerationSettingsMenu projectId={projectId} disabled={!workspace || persistedSettings.loading || isStreaming}>
+              <WritingImagePresetMenu
+                enabled={Boolean(workspace) && !persistedSettings.loading && !isStreaming}
+                imagePresets={imagePresets}
+                imagePresetID={imagePresetId}
+                saving={savingImagePreset}
+                onChange={persistImagePreset}
+              />
+            </ImageGenerationSettingsMenu>
+            <WritingComposerSettingsMenu
+              enabled={Boolean(workspace) && !persistedSettings.loading}
+              tellers={tellers}
+              tellerID={ideTellerId}
+              writingSkills={writingSkillOptions}
+              writingSkill={writingSkill}
+              savingTeller={savingStoryTeller}
+              savingWritingSkill={savingWritingSkill}
+              onTellerChange={persistStoryTeller}
+              onWritingSkillChange={persistWritingSkill}
+            />
+          </>
+        ) : null}
+      </>
+    ),
+    [
+      generalAgent,
+      ideTellerId,
+      imagePresetId,
+      imagePresets,
+      isStreaming,
+      page,
+      persistImagePreset,
+      persistStoryTeller,
+      persistWritingSkill,
+      persistedSettings.loading,
+      projectId,
+      quickPrompts.menuItem,
+      savingImagePreset,
+      savingStoryTeller,
+      savingWritingSkill,
+      tellers,
+      workspace,
+      writingSkill,
+      writingSkillOptions,
+    ],
+  )
   const inputAreaProps = {
     page,
     autoFocus: active && sessionDraft && chrome === 'workbench',
@@ -721,7 +809,7 @@ function AgentPanelComponent({
     sendBlocked: persistedSettings.loading || sessionTransitionPending || recoveryFailed,
     generationActive: isStreaming,
     resumeAvailable: !isStreaming && Boolean(runtimeProjection?.pending_interruption_id?.trim()),
-    queuedCommands: runtimeProjection?.queue || [],
+    queuedCommands: runtimeProjection?.queue ?? EMPTY_QUEUED_COMMANDS,
     activeOperationID: runtimeProjection?.active || runtimeProjection?.phase === 'suspended' ? runtimeProjection.active_operation_id : '',
     queueActionPendingCommandID,
     onQueuedCommandSteer: onSteerQueuedCommand,
@@ -741,19 +829,19 @@ function AgentPanelComponent({
     draftKey: JSON.stringify(['chat', projectId, activeSessionId, composerDraftScope ?? '']),
     persistDraft: Boolean(projectId && activeSessionId && !sessionDraft),
     inputPrefill,
-    onInputPrefillConsumed: () => setInputPrefill(null),
+    onInputPrefillConsumed: clearInputPrefill,
     referencedFiles: references,
     onReferenceRemove,
     fileSuggestions,
-    loreReferences: generalAgent && !page ? [] : loreReferences,
+    loreReferences: generalAgent && !page ? EMPTY_TIMELINE_ATTACHMENTS : loreReferences,
     loreReferenceLabels,
     onLoreReferenceAdd,
     onLoreReferenceRemove,
-    loreSuggestions: generalAgent && !page ? [] : loreSuggestions,
-    styleScenes: generalAgent ? [] : styleScenes,
+    loreSuggestions: generalAgent && !page ? EMPTY_TIMELINE_ATTACHMENTS : loreSuggestions,
+    styleScenes: generalAgent ? EMPTY_TIMELINE_ATTACHMENTS : styleScenes,
     onStyleSceneAdd,
     onStyleSceneRemove,
-    styleSceneSuggestions: generalAgent ? [] : styleSceneSuggestions,
+    styleSceneSuggestions: generalAgent ? EMPTY_TIMELINE_ATTACHMENTS : styleSceneSuggestions,
     textSelections,
     onTextSelectionRemove,
     reviewFeedback,
@@ -766,35 +854,7 @@ function AgentPanelComponent({
     agentKey: generalAgent ? ('general' as const) : ('ide' as const),
     workspace,
     conversationBinding: effectiveConversationBinding,
-    composerSettingsControl: (
-      <>
-        {quickPrompts.menuItem}
-        {!generalAgent && !page ? (
-          <>
-            <ImageGenerationSettingsMenu projectId={projectId} disabled={!workspace || persistedSettings.loading || isStreaming}>
-              <WritingImagePresetMenu
-                enabled={Boolean(workspace) && !persistedSettings.loading && !isStreaming}
-                imagePresets={imagePresets}
-                imagePresetID={imagePresetId}
-                saving={persistedSettings.isSaving('ide_image_preset_id')}
-                onChange={(value) => persistedSettings.persist('ide_image_preset_id', value)}
-              />
-            </ImageGenerationSettingsMenu>
-            <WritingComposerSettingsMenu
-              enabled={Boolean(workspace) && !persistedSettings.loading}
-              tellers={tellers}
-              tellerID={ideTellerId}
-              writingSkills={writingSkillOptions}
-              writingSkill={writingSkill}
-              savingTeller={persistedSettings.isSaving('ide_story_teller_id')}
-              savingWritingSkill={persistedSettings.isSaving('writing_skill_default')}
-              onTellerChange={(value) => persistedSettings.persist('ide_story_teller_id', value)}
-              onWritingSkillChange={(value) => persistedSettings.persist('writing_skill_default', value)}
-            />
-          </>
-        ) : null}
-      </>
-    ),
+    composerSettingsControl,
     onboardingAnchor: 'agent-input',
     floating: true,
     onHeightChange: setInputAreaHeight,
