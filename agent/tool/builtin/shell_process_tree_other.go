@@ -7,12 +7,22 @@ import (
 	"os/exec"
 )
 
+type processTree struct {
+	process *os.Process
+}
+
 func configureProcessTree(*exec.Cmd) {}
 
-func terminateProcessTree(process *os.Process) {
-	if process != nil {
-		_ = process.Kill()
+func startProcessTree(process *os.Process) *processTree {
+	return &processTree{process: process}
+}
+
+func (tree *processTree) terminate() {
+	if tree != nil && tree.process != nil {
+		_ = tree.process.Kill()
 	}
 }
 
-func cleanupProcessTree(process *os.Process) { terminateProcessTree(process) }
+func (tree *processTree) cleanup() {
+	tree.terminate()
+}

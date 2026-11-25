@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io/fs"
 	"sort"
+	"strings"
 )
 
 var (
@@ -138,14 +139,15 @@ func ValidateChanges(changes []Change) []Diagnostic {
 			})
 			continue
 		}
-		if previous, duplicate := seen[path]; duplicate {
+		folded := strings.ToLower(path)
+		if previous, duplicate := seen[folded]; duplicate {
 			diagnostics = append(diagnostics, Diagnostic{
 				Code: "duplicate_change_path", Path: path,
 				Message: fmt.Sprintf("State changes %d and %d target the same path", previous, index),
 			})
 			continue
 		}
-		seen[path] = index
+		seen[folded] = index
 	}
 	return diagnostics
 }

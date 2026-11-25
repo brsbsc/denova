@@ -32,7 +32,7 @@ func scanFiles(root string) ([]File, error) {
 		if relative == "." {
 			return nil
 		}
-		if relative == privateDirectory || strings.HasPrefix(relative, privateDirectory+"/") {
+		if strings.EqualFold(relative, privateDirectory) || strings.HasPrefix(strings.ToLower(relative), privateDirectory+"/") {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
@@ -82,21 +82,51 @@ func snapshotFromFiles(files []File) Snapshot {
 }
 
 func normalizePath(value string) (string, error) {
-	value = strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
-	if value == "" || strings.HasPrefix(value, "/") {
+	value = strings.ReplaceAll(value, "\\", "/")
+	if strings.TrimSpace(value) == "" || strings.HasSuffix(value, " ") || strings.HasSuffix(value, ".") {
+		return "", ErrInvalidPath
+	}
+	value = strings.TrimSpace(value)
+	if value == "" || strings.HasPrefix(value, "/") || strings.ContainsAny(value, ":\x00") || filepath.VolumeName(value) != "" {
 		return "", ErrInvalidPath
 	}
 	cleaned := filepath.ToSlash(filepath.Clean(filepath.FromSlash(value)))
-	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") || cleaned == privateDirectory || strings.HasPrefix(cleaned, privateDirectory+"/") {
+	if !fs.ValidPath(cleaned) || cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
 		return "", ErrInvalidPath
+	}
+	segments := strings.Split(cleaned, "/")
+	for index, segment := range segments {
+		if segment == "" || segment == "." || segment == ".." || strings.HasSuffix(segment, ".") || strings.HasSuffix(segment, " ") {
+			return "", ErrInvalidPath
+		}
+		if index == 0 && strings.EqualFold(segment, privateDirectory) {
+			return "", ErrInvalidPath
+		}
+		stem, _, _ := strings.Cut(segment, ".")
+		if isWindowsReservedStateName(stem) {
+			return "", ErrInvalidPath
+		}
 	}
 	return cleaned, nil
 }
 
+func isWindowsReservedStateName(stem string) bool {
+	switch strings.ToUpper(strings.TrimSpace(stem)) {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return true
+	default:
+		return false
+	}
+}
+
 func applyChanges(base Snapshot, changes []Change) (Snapshot, error) {
 	files := make(map[string][]byte, len(base.files)+len(changes))
+	foldedOwners := make(map[string]string, len(base.files)+len(changes))
 	for _, file := range base.files {
 		files[file.Path] = append([]byte(nil), file.Content...)
+		foldedOwners[strings.ToLower(file.Path)] = file.Path
 	}
 	seen := make(map[string]struct{}, len(changes))
 	for _, change := range changes {
@@ -104,14 +134,22 @@ func applyChanges(base Snapshot, changes []Change) (Snapshot, error) {
 		if err != nil {
 			return Snapshot{}, fmt.Errorf("%w: %q", err, change.Path)
 		}
-		if _, duplicate := seen[path]; duplicate {
+		folded := strings.ToLower(path)
+		if _, duplicate := seen[folded]; duplicate {
 			return Snapshot{}, fmt.Errorf("duplicate Agent state change path %q", path)
 		}
-		seen[path] = struct{}{}
+		seen[folded] = struct{}{}
 		if change.Delete {
 			delete(files, path)
+			if foldedOwners[folded] == path {
+				delete(foldedOwners, folded)
+			}
 			continue
 		}
+		if existing, conflict := foldedOwners[folded]; conflict && existing != path {
+			return Snapshot{}, fmt.Errorf("%w: path %q collides case-insensitively with %q", ErrInvalidPath, path, existing)
+		}
+		foldedOwners[folded] = path
 		files[path] = append([]byte(nil), change.Content...)
 	}
 	result := make([]File, 0, len(files))
@@ -127,7 +165,7 @@ func writeSnapshot(root string, snapshot Snapshot) error {
 		return err
 	}
 	for _, entry := range entries {
-		if entry.Name() == privateDirectory {
+		if strings.EqualFold(entry.Name(), privateDirectory) {
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(root, entry.Name())); err != nil {
@@ -248,7 +286,7 @@ func syncTreeDirectories(root string) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if path != root && entry.IsDir() && filepath.Dir(path) == root && entry.Name() == privateDirectory {
+		if path != root && entry.IsDir() && filepath.Dir(path) == root && strings.EqualFold(entry.Name(), privateDirectory) {
 			return filepath.SkipDir
 		}
 		if entry.IsDir() {
@@ -275,20 +313,6 @@ func readJSON(path string, value any) error {
 	}
 	if err := json.Unmarshal(content, value); err != nil {
 		return fmt.Errorf("decode %s: %w", path, err)
-	}
-	return nil
-}
-
-func removeEmptyParents(root, start string) error {
-	for current := filepath.Dir(start); current != root && strings.HasPrefix(current, root+string(filepath.Separator)); current = filepath.Dir(current) {
-		err := os.Remove(current)
-		if err == nil {
-			continue
-		}
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		break
 	}
 	return nil
 }

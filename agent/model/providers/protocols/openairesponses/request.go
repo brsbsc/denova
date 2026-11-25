@@ -8,6 +8,7 @@ import (
 
 	agentmodel "github.com/alfredxw/denova/agent/model"
 	"github.com/alfredxw/denova/agent/model/providers"
+	"github.com/alfredxw/denova/agent/model/providers/protocols/internal/protocolutil"
 	agentschema "github.com/alfredxw/denova/agent/schema"
 	sdk "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -24,7 +25,7 @@ func (model *ChatModel) request(input []*agentschema.Message, opts ...agentmodel
 	common := agentmodel.GetCommonOptions(model.options, opts...)
 	tools := common.Tools
 	if common.ToolChoice != nil && len(common.AllowedToolNames) != 0 {
-		tools = filterTools(tools, common.AllowedToolNames)
+		tools = protocolutil.FilterTools(tools, common.AllowedToolNames)
 	}
 	requestTools, err := requestTools(tools)
 	if err != nil {
@@ -147,11 +148,21 @@ func requestMessage(message *agentschema.Message, config providers.ModelConfig, 
 		if strings.TrimSpace(message.ToolCallID) == "" {
 			return nil, fmt.Errorf("tool result requires tool call id")
 		}
-		if len(message.Attachments) > 0 {
+		hasNativeImage := false
+		for _, attachment := range message.Attachments {
+			if agentschema.IsNativeImageMediaType(attachment.MediaType) {
+				hasNativeImage = true
+				break
+			}
+		}
+		if hasNativeImage {
 			content := responses.ResponseFunctionCallOutputItemListParam{
 				responses.ResponseFunctionCallOutputItemParamOfInputText(message.Content),
 			}
 			for _, attachment := range message.Attachments {
+				if !agentschema.IsNativeImageMediaType(attachment.MediaType) {
+					continue
+				}
 				prepared, err := config.PrepareImage(attachment, imageCount)
 				if err != nil {
 					return nil, err
@@ -306,23 +317,6 @@ func sortRequired(value any) {
 	}
 }
 
-func filterTools(tools []*agentschema.ToolInfo, names []string) []*agentschema.ToolInfo {
-	allowed := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		allowed[name] = struct{}{}
-	}
-	result := make([]*agentschema.ToolInfo, 0, len(tools))
-	for _, tool := range tools {
-		if tool == nil {
-			continue
-		}
-		if _, ok := allowed[tool.Name]; ok {
-			result = append(result, tool)
-		}
-	}
-	return result
-}
-
 func requestToolChoice(choice *agentmodel.ToolChoice, toolCount int, supported bool) (responses.ResponseNewParamsToolChoiceUnion, error) {
 	result := responses.ResponseNewParamsToolChoiceUnion{}
 	if choice == nil {
@@ -369,22 +363,17 @@ func (model *ChatModel) requestOptions(sessionKey string) []option.RequestOption
 	sort.Strings(keys)
 	result := make([]option.RequestOption, 0, len(keys))
 	for _, key := range keys {
-		result = append(result, option.WithJSONSet(escapeJSONPathKey(key), model.compatibility.ExtraBody[key]))
+		result = append(result, option.WithJSONSet(protocolutil.EscapeJSONPathKey(key), model.compatibility.ExtraBody[key]))
 	}
 	if mapping := model.config.SessionKeyMapping; mapping != nil && sessionKey != "" {
 		switch mapping.Location {
 		case providers.SessionKeyLocationHeader:
 			result = append(result, option.WithHeader(mapping.Name, sessionKey))
 		case providers.SessionKeyLocationBody:
-			result = append(result, option.WithJSONSet(escapeJSONPathKey(mapping.Name), sessionKey))
+			result = append(result, option.WithJSONSet(protocolutil.EscapeJSONPathKey(mapping.Name), sessionKey))
 		}
 	}
 	return result
-}
-
-func escapeJSONPathKey(key string) string {
-	replacer := strings.NewReplacer(`\`, `\\`, `.`, `\.`, `:`, `\:`, `#`, `\#`, `@`, `\@`)
-	return replacer.Replace(key)
 }
 
 func applyOutputFormat(params *responses.ResponseNewParams, format *providers.OutputFormat) error {

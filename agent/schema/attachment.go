@@ -5,13 +5,18 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 )
+
+// MaxAttachmentImageBytes bounds native image reads before SHA-256 verification.
+const MaxAttachmentImageBytes = 20 << 20
 
 // Attachment is a durable, provider-neutral copy supplied by a user or a tool.
 // User paths are relative to Definition.AttachmentRoot; tool image paths are
@@ -105,9 +110,27 @@ func ReadAttachmentImage(attachment Attachment) ([]byte, error) {
 	if !IsNativeImageMediaType(attachment.MediaType) {
 		return nil, fmt.Errorf("attachment %q is not a supported native image", attachment.Name)
 	}
-	data, err := os.ReadFile(AttachmentFilePath(attachment))
+	file, err := os.Open(AttachmentFilePath(attachment))
 	if err != nil {
 		return nil, fmt.Errorf("read attached image %q: %w", attachment.Name, err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat attached image %q: %w", attachment.Name, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("attached image %q must be a regular file", attachment.Name)
+	}
+	if info.Size() > MaxAttachmentImageBytes {
+		return nil, fmt.Errorf("attached image %q exceeds the %d-byte limit", attachment.Name, MaxAttachmentImageBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, MaxAttachmentImageBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read attached image %q: %w", attachment.Name, err)
+	}
+	if int64(len(data)) > MaxAttachmentImageBytes {
+		return nil, fmt.Errorf("attached image %q exceeds the %d-byte limit", attachment.Name, MaxAttachmentImageBytes)
 	}
 	digest := sha256.Sum256(data)
 	if !strings.EqualFold(hex.EncodeToString(digest[:]), strings.TrimSpace(attachment.SHA256)) {
@@ -172,6 +195,14 @@ func AttachmentFilePath(attachment Attachment) string {
 // the current host without changing the persisted Attachment.Path value.
 func ResolveMessageAttachmentPaths(root string, messages []*Message) ([]*Message, error) {
 	root = strings.TrimSpace(root)
+	var absoluteRoot string
+	if root != "" {
+		var err error
+		absoluteRoot, err = filepath.Abs(root)
+		if err != nil {
+			return nil, fmt.Errorf("resolve attachment root: %w", err)
+		}
+	}
 	result := CloneMessages(messages)
 	for _, message := range result {
 		if message == nil || message.Role == ToolRole {
@@ -183,29 +214,59 @@ func ResolveMessageAttachmentPaths(root string, messages []*Message) ([]*Message
 			if stored == "" {
 				continue
 			}
-			// Absolute paths are accepted only as an in-memory legacy input. New
-			// durable records always use a slash-relative owner path.
-			if filepath.IsAbs(stored) {
-				attachment.RuntimePath = filepath.Clean(stored)
-				continue
-			}
+			// Absolute paths without an AttachmentRoot are accepted only for
+			// in-memory SDK callers. Once AttachmentRoot is configured, every
+			// resolved path must stay strictly inside AttachmentRoot.
 			if root == "" {
+				if filepath.IsAbs(stored) || strings.HasPrefix(stored, "/") {
+					attachment.RuntimePath = filepath.Clean(stored)
+					continue
+				}
 				return nil, fmt.Errorf("resolve attachment %q: AttachmentRoot is required", attachment.Name)
 			}
-			if strings.Contains(stored, "\\") || !fs.ValidPath(stored) || stored == "." {
-				return nil, fmt.Errorf("resolve attachment %q: invalid durable path %q", attachment.Name, stored)
+			var candidate string
+			if filepath.IsAbs(stored) || strings.HasPrefix(stored, "/") || filepath.VolumeName(stored) != "" {
+				if !filepath.IsAbs(stored) {
+					return nil, fmt.Errorf("resolve attachment %q: durable path escapes AttachmentRoot", attachment.Name)
+				}
+				candidate = filepath.Clean(stored)
+			} else {
+				if strings.Contains(stored, "\\") || !fs.ValidPath(stored) || stored == "." {
+					return nil, fmt.Errorf("resolve attachment %q: invalid durable path %q", attachment.Name, stored)
+				}
+				candidate = filepath.Join(absoluteRoot, filepath.FromSlash(stored))
 			}
-			absoluteRoot, err := filepath.Abs(root)
-			if err != nil {
-				return nil, fmt.Errorf("resolve attachment root: %w", err)
-			}
-			candidate := filepath.Join(absoluteRoot, filepath.FromSlash(stored))
-			relative, err := filepath.Rel(absoluteRoot, candidate)
-			if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-				return nil, fmt.Errorf("resolve attachment %q: durable path escapes AttachmentRoot", attachment.Name)
+			if err := verifyAttachmentInsideRoot(absoluteRoot, candidate, attachment.Name); err != nil {
+				return nil, err
 			}
 			attachment.RuntimePath = candidate
 		}
 	}
 	return result, nil
+}
+
+func verifyAttachmentInsideRoot(absoluteRoot, candidate, name string) error {
+	relative, err := filepath.Rel(absoluteRoot, candidate)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return fmt.Errorf("resolve attachment %q: durable path escapes AttachmentRoot", name)
+	}
+	info, err := os.Lstat(candidate)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("inspect attachment %q: %w", name, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("resolve attachment %q: symbolic links are not allowed", name)
+	}
+	canonicalRoot, rootErr := filepath.EvalSymlinks(absoluteRoot)
+	canonicalCandidate, candidateErr := filepath.EvalSymlinks(candidate)
+	if rootErr == nil && candidateErr == nil {
+		canonicalRel, relErr := filepath.Rel(canonicalRoot, canonicalCandidate)
+		if relErr != nil || canonicalRel == "." || canonicalRel == ".." || strings.HasPrefix(canonicalRel, ".."+string(filepath.Separator)) || filepath.IsAbs(canonicalRel) {
+			return fmt.Errorf("resolve attachment %q: durable path escapes AttachmentRoot", name)
+		}
+	}
+	return nil
 }

@@ -57,9 +57,13 @@ func newStrictCompactionChatModel(t *testing.T, engine *incrementalModel) agentm
 			_ = json.NewEncoder(writer).Encode(map[string]any{"error": map[string]any{"message": err.Error(), "type": "invalid_request_error"}})
 			return
 		}
+		finishReason := "stop"
+		if len(message.ToolCalls) > 0 {
+			finishReason = "tool_calls"
+		}
 		if input.Stream {
 			writer.Header().Set("Content-Type", "text/event-stream")
-			chunk, err := json.Marshal(map[string]any{"id": "compaction", "choices": []any{map[string]any{"index": 0, "delta": message}}})
+			chunk, err := json.Marshal(map[string]any{"id": "compaction", "choices": []any{map[string]any{"index": 0, "delta": message, "finish_reason": finishReason}}})
 			if err != nil {
 				t.Errorf("encode Chat Completions chunk: %v", err)
 				return
@@ -68,7 +72,7 @@ func newStrictCompactionChatModel(t *testing.T, engine *incrementalModel) agentm
 			return
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(writer).Encode(map[string]any{"id": "compaction", "choices": []any{map[string]any{"index": 0, "message": message}}})
+		_ = json.NewEncoder(writer).Encode(map[string]any{"id": "compaction", "choices": []any{map[string]any{"index": 0, "message": message, "finish_reason": finishReason}}})
 	}))
 	t.Cleanup(server.Close)
 	model, err := openaichatcompletions.NewAdapter().New(t.Context(), providers.ModelConfig{

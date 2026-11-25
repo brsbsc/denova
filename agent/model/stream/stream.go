@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"sync"
-
-	agentasync "github.com/alfredxw/denova/agent/internal/async"
 )
 
 var (
@@ -257,57 +255,4 @@ func StreamReaderWithConvert[T, D any](source *StreamReader[T], convert func(T) 
 		}
 	}
 	return &StreamReader[D]{recvFn: recv, closeFn: source.Close}
-}
-
-// StreamReaderWithOnEOF is a typed convenience wrapper around WithOnEOF.
-func StreamReaderWithOnEOF[T any](source *StreamReader[T], callback func() (T, error)) *StreamReader[T] {
-	return StreamReaderWithConvert(source, func(value T) (T, error) { return value, nil }, WithOnEOF(func() (any, error) {
-		return callback()
-	}))
-}
-
-// StreamReaderWithErrWrapper is a convenience wrapper for upstream errors.
-func StreamReaderWithErrWrapper[T any](source *StreamReader[T], wrapper func(error) error) *StreamReader[T] {
-	return StreamReaderWithConvert(source, func(value T) (T, error) { return value, nil }, WithErrWrapper(wrapper))
-}
-
-// Copy fans a reader out into independent, unbounded readers. The original
-// reader must not be consumed after Copy.
-func (reader *StreamReader[T]) Copy(count int) []*StreamReader[T] {
-	if count <= 0 {
-		return nil
-	}
-	readers := make([]*StreamReader[T], count)
-	writers := make([]*StreamWriter[T], count)
-	for index := range count {
-		readers[index], writers[index] = Pipe[T](-1)
-	}
-	agentasync.SafeGo(func() {
-		defer reader.Close()
-		for {
-			value, err := reader.Recv()
-			if errors.Is(err, io.EOF) {
-				for _, writer := range writers {
-					writer.Close()
-				}
-				return
-			}
-			for _, writer := range writers {
-				writer.Send(value, err)
-			}
-			if err != nil {
-				for _, writer := range writers {
-					writer.Close()
-				}
-				return
-			}
-		}
-	}, func(err error) {
-		var zero T
-		for _, writer := range writers {
-			writer.Send(zero, err)
-			writer.Close()
-		}
-	})
-	return readers
 }

@@ -25,8 +25,13 @@ func responseMessage(response *genai.GenerateContentResponse, config providers.M
 	}
 	candidate := firstCandidate(response)
 	if candidate == nil || candidate.Content == nil {
-		if response.PromptFeedback != nil && response.PromptFeedback.BlockReasonMessage != "" {
-			return nil, fmt.Errorf("google generative AI: %s", response.PromptFeedback.BlockReasonMessage)
+		if response.PromptFeedback != nil {
+			if response.PromptFeedback.BlockReasonMessage != "" {
+				return nil, fmt.Errorf("google generative AI: %s", response.PromptFeedback.BlockReasonMessage)
+			}
+			if response.PromptFeedback.BlockReason != "" {
+				return nil, fmt.Errorf("google generative AI: blocked (%s)", response.PromptFeedback.BlockReason)
+			}
 		}
 		return nil, fmt.Errorf("google generative AI: response has no candidate")
 	}

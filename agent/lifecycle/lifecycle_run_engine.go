@@ -267,17 +267,15 @@ func (run *Run) handleEngineEvent(event agentengine.Event) error {
 		}
 		run.publish(nested)
 	case agentengine.ModelRetry:
-		if value.OutputState != string(agentretry.ModelOutputComplete) {
-			run.mu.Lock()
-			if run.modelResponseOrdinal == value.ResponseOrdinal {
-				content, thinking := run.content.String()[:run.modelContentStart], run.thinking.String()[:run.modelThinkingStart]
-				run.content.Reset()
-				run.content.WriteString(content)
-				run.thinking.Reset()
-				run.thinking.WriteString(thinking)
-			}
-			run.mu.Unlock()
+		run.mu.Lock()
+		if run.modelResponseOrdinal == value.ResponseOrdinal {
+			content, thinking := run.content.String()[:run.modelContentStart], run.thinking.String()[:run.modelThinkingStart]
+			run.content.Reset()
+			run.content.WriteString(content)
+			run.thinking.Reset()
+			run.thinking.WriteString(thinking)
 		}
+		run.mu.Unlock()
 		run.publish(agentevent.ModelRetry{Source: publicEventSource(value.Source), Attempt: value.Attempt, MaxAttempts: value.MaxAttempts,
 			ResponseOrdinal: value.ResponseOrdinal, OutputState: agentretry.ModelOutputState(value.OutputState), Delay: value.Delay, Reason: value.Reason})
 	case agentengine.ModelCompleted:
@@ -396,19 +394,23 @@ func (run *Run) applyCapabilityUpdates(updates []agentengine.CapabilityState) er
 		}
 	}
 	changed := false
+	candidate := agentschema.CloneRawStateMap(run.session.capabilities)
+	if candidate == nil {
+		candidate = make(map[string]json.RawMessage)
+	}
 	for _, update := range updates {
 		if update.CheckOnly {
 			continue
 		}
 		changed = true
 		if update.Delete {
-			delete(run.session.capabilities, update.Capability)
+			delete(candidate, update.Capability)
 		} else {
-			run.session.capabilities[update.Capability] = append(json.RawMessage(nil), update.State...)
+			candidate[update.Capability] = append(json.RawMessage(nil), update.State...)
 		}
 	}
 	if changed {
-		if err := run.session.persistCapabilitiesLocked(context.Background()); err != nil {
+		if err := run.session.commitCapabilitiesLocked(context.Background(), candidate); err != nil {
 			run.session.mu.Unlock()
 			return err
 		}

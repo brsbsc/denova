@@ -203,19 +203,59 @@ func criticalToolRequest(request PermissionRequest) bool {
 	if request.Descriptor.Source != agenttool.ToolSourceShell {
 		return false
 	}
-	text := strings.ToLower(string(request.Arguments))
-	text = strings.Join(strings.Fields(text), " ")
 	critical := []string{
 		"rm -rf /", "rm -fr /", "mkfs.", "format c:",
-		"remove-item c:\\ -recurse", "remove-item / -recurse",
+		"remove-item c:\\ -recurse", "remove-item c:/ -recurse", "remove-item / -recurse",
 		"dd if=/dev/zero of=/dev/", "> /dev/sda", "shutdown -h", "reboot -f",
 	}
-	for _, pattern := range critical {
-		if strings.Contains(text, pattern) {
+	matches := func(value string) bool {
+		normalized := strings.Join(strings.Fields(strings.ToLower(value)), " ")
+		for _, pattern := range critical {
+			if strings.Contains(normalized, pattern) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, candidate := range extractShellCommandStrings(request.Arguments) {
+		if matches(candidate) {
 			return true
 		}
 	}
-	return false
+	return matches(string(request.Arguments))
+}
+
+func extractShellCommandStrings(raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var payload any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	var values []string
+	var collect func(any)
+	collect = func(node any) {
+		switch typed := node.(type) {
+		case string:
+			values = append(values, typed)
+		case map[string]any:
+			if command, ok := typed["command"].(string); ok {
+				values = append(values, command)
+			}
+			for key, value := range typed {
+				if key != "command" {
+					collect(value)
+				}
+			}
+		case []any:
+			for _, item := range typed {
+				collect(item)
+			}
+		}
+	}
+	collect(payload)
+	return values
 }
 
 var _ PermissionPolicy = (*policy)(nil)

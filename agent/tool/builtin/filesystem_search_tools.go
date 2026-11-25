@@ -335,10 +335,6 @@ func globRequestFingerprint(request GlobRequest) string {
 	return hex.EncodeToString(digest[:16])
 }
 
-func encodeGrepCursor(state grepCursorState, request GrepRequest) (string, error) {
-	return encodeGrepCursorFingerprint(state, grepRequestFingerprint(request))
-}
-
 func encodeGrepCursorFingerprint(state grepCursorState, fingerprint string) (string, error) {
 	cursor := grepCursor{
 		Version: 3, Offset: state.Offset, Prefix: state.Prefix,
@@ -349,10 +345,6 @@ func encodeGrepCursorFingerprint(state grepCursorState, fingerprint string) (str
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(encoded), nil
-}
-
-func decodeGrepCursor(value string, request GrepRequest) (grepCursorState, error) {
-	return decodeGrepCursorFingerprint(value, grepRequestFingerprint(request))
 }
 
 func decodeGrepCursorFingerprint(value, fingerprint string) (grepCursorState, error) {

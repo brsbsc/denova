@@ -10,6 +10,7 @@ import (
 
 	agentmodel "github.com/alfredxw/denova/agent/model"
 	"github.com/alfredxw/denova/agent/model/providers"
+	"github.com/alfredxw/denova/agent/model/providers/protocols/internal/protocolutil"
 	agentschema "github.com/alfredxw/denova/agent/schema"
 	"google.golang.org/genai"
 )
@@ -22,7 +23,7 @@ func (model *ChatModel) request(input []*agentschema.Message, opts ...agentmodel
 	common := agentmodel.GetCommonOptions(model.options, opts...)
 	tools := common.Tools
 	if common.ToolChoice != nil && len(common.AllowedToolNames) != 0 {
-		tools = filterTools(tools, common.AllowedToolNames)
+		tools = protocolutil.FilterTools(tools, common.AllowedToolNames)
 	}
 	requestTools, err := requestTools(tools)
 	if err != nil {
@@ -116,6 +117,9 @@ func requestContents(input []*agentschema.Message, config providers.ModelConfig)
 			}
 			result := &genai.FunctionResponse{ID: message.ToolCallID, Name: name, Response: response}
 			for _, attachment := range message.Attachments {
+				if !agentschema.IsNativeImageMediaType(attachment.MediaType) {
+					continue
+				}
 				image, err := requestImage(attachment, config, imageCount)
 				if err != nil {
 					return nil, nil, fmt.Errorf("google generative AI tool result %d: %w", index, err)
@@ -174,10 +178,18 @@ func assistantParts(message *agentschema.Message, config providers.ModelConfig) 
 					if !keep {
 						continue
 					}
-					if err := json.Unmarshal([]byte(call.Function.Arguments), &part.FunctionCall.Args); err != nil {
-						return nil, fmt.Errorf("google generative AI retained tool arguments: %w", err)
+					args := map[string]any{}
+					if strings.TrimSpace(call.Function.Arguments) != "" {
+						if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+							return nil, fmt.Errorf("google generative AI retained tool arguments: %w", err)
+						}
 					}
-					part.FunctionCall.Name = call.Function.Name
+					clonedPart := *part
+					clonedCall := *part.FunctionCall
+					clonedCall.Name = call.Function.Name
+					clonedCall.Args = args
+					clonedPart.FunctionCall = &clonedCall
+					part = &clonedPart
 				}
 				replay = append(replay, part)
 			}
@@ -317,20 +329,4 @@ func applyOutputFormat(config *genai.GenerateContentConfig, format *providers.Ou
 		config.ResponseJsonSchema = schema
 	}
 	return nil
-}
-
-func filterTools(tools []*agentschema.ToolInfo, names []string) []*agentschema.ToolInfo {
-	allowed := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		allowed[name] = struct{}{}
-	}
-	result := make([]*agentschema.ToolInfo, 0, len(tools))
-	for _, tool := range tools {
-		if tool != nil {
-			if _, ok := allowed[tool.Name]; ok {
-				result = append(result, tool)
-			}
-		}
-	}
-	return result
 }

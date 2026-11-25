@@ -3,6 +3,7 @@ package openaichatcompletions
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/alfredxw/denova/agent/model/providers"
 	agentschema "github.com/alfredxw/denova/agent/schema"
@@ -30,6 +31,9 @@ type continuationState struct {
 }
 
 func (state *continuationState) add(raw string) error {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
 	var message struct {
 		ExtraContent *json.RawMessage `json:"extra_content"`
 		ToolCalls    []struct {
@@ -66,7 +70,7 @@ func (state *continuationState) add(raw string) error {
 func (state *continuationState) message(config providers.ModelConfig) (*agentschema.Message, error) {
 	payload := chatContinuation{ExtraContent: state.extraContent}
 	for _, call := range state.toolCalls {
-		if len(call.extraContent) == 0 {
+		if len(call.extraContent) == 0 || strings.TrimSpace(call.id) == "" {
 			continue
 		}
 		if payload.ToolCalls == nil {

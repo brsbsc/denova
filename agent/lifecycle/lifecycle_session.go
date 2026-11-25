@@ -487,8 +487,12 @@ func (session *Session) UpdateGoal(ctx context.Context, mutation agentschema.Goa
 	if err != nil {
 		return agentgoal.GoalState{}, err
 	}
-	session.capabilities[agentgoal.GoalCapability] = encoded
-	if err := session.persistCapabilitiesLocked(ctx); err != nil {
+	candidate := agentschema.CloneRawStateMap(session.capabilities)
+	if candidate == nil {
+		candidate = make(map[string]json.RawMessage)
+	}
+	candidate[agentgoal.GoalCapability] = encoded
+	if err := session.commitCapabilitiesLocked(ctx, candidate); err != nil {
 		return agentgoal.GoalState{}, err
 	}
 	session.publishLocked(agentevent.Event{RunID: "", Payload: agentevent.GoalUpdated{State: next, Present: next.Visible()}})
@@ -620,6 +624,16 @@ func (session *Session) persistTranscriptLocked(ctx context.Context) error {
 	return session.appendRecordLocked(ctx, sessionTranscriptRecord, persistedSessionTranscript{
 		EngineState: append(json.RawMessage(nil), session.engineState...),
 	})
+}
+
+func (session *Session) commitCapabilitiesLocked(ctx context.Context, candidate map[string]json.RawMessage) error {
+	previous := session.capabilities
+	session.capabilities = candidate
+	if err := session.persistCapabilitiesLocked(ctx); err != nil {
+		session.capabilities = previous
+		return err
+	}
+	return nil
 }
 
 func (session *Session) persistCapabilitiesLocked(ctx context.Context) error {

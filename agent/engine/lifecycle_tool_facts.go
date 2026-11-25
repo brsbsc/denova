@@ -50,7 +50,11 @@ func (engine *Engine) restorePendingToolBatch(ctx context.Context, request Reque
 		}
 		batch = append(batch, agentschema.ToolMessage(result, call.ID, agentschema.WithToolName(call.Function.Name)))
 	}
-	state.Messages = append(agentschema.CloneMessages(state.Messages[:checkpoint.MessageCount]), batch...)
+	localCount := state.Archive.Local(checkpoint.MessageCount)
+	if localCount < 0 || localCount > len(state.Messages) {
+		return errors.New("pending tool checkpoint message count is out of bounds")
+	}
+	state.Messages = append(agentschema.CloneMessages(state.Messages[:localCount]), batch...)
 	sequence := prepared.contextSequence
 	prepared.contextSequence++
 	encoded, err := encodeEngineTranscriptState(*prepared, state.Messages, state.ActiveModelUser, state.ActiveUserIndex)

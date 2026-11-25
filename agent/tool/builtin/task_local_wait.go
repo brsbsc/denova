@@ -327,7 +327,7 @@ func (tasks *LocalTasks) readTaskSnapshot(ctx context.Context, ref TaskRef) (Tas
 	}
 	task, err := tasks.taskFromSessionSnapshot(ctx, session, ref, snapshot)
 	if err == nil && isTaskTerminal(task.Status) && snapshot.ActiveRunID == "" && len(snapshot.QueuedRuns) == 0 {
-		err = errors.Join(err, session.Close(context.Background()))
+		err = errors.Join(err, closeIdleTaskSession(session))
 	}
 	return task, err
 }

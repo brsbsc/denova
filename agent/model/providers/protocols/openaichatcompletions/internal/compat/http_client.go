@@ -56,8 +56,8 @@ func shouldFilterSSEResponse(req *http.Request, resp *http.Response) bool {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return false
 	}
-	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
-		return true
+	if contentType := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type"))); contentType != "" {
+		return strings.Contains(contentType, "text/event-stream")
 	}
 	return strings.Contains(strings.ToLower(req.Header.Get("Accept")), "text/event-stream")
 }

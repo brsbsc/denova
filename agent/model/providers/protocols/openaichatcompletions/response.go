@@ -118,10 +118,12 @@ func streamMessage(chunk sdk.ChatCompletionChunk, rawResponse *http.Response, in
 }
 
 func responseRole(role string) agentschema.RoleType {
-	if role == "" {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "", "assistant", "model":
 		return agentschema.Assistant
+	default:
+		return agentschema.RoleType(strings.TrimSpace(role))
 	}
-	return agentschema.RoleType(role)
 }
 
 func responseToolCalls(calls []sdk.ChatCompletionMessageToolCallUnion) []agentschema.ToolCall {

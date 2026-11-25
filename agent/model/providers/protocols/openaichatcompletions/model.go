@@ -7,6 +7,8 @@ import (
 	"runtime/debug"
 
 	agentmodel "github.com/alfredxw/denova/agent/model"
+	"github.com/alfredxw/denova/agent/model/providers"
+	"github.com/alfredxw/denova/agent/model/providers/protocols/internal/protocolutil"
 	agentstream "github.com/alfredxw/denova/agent/model/stream"
 	agentschema "github.com/alfredxw/denova/agent/schema"
 	"github.com/openai/openai-go/v3/option"
@@ -23,7 +25,7 @@ func (model *ChatModel) Generate(ctx context.Context, input []*agentschema.Messa
 	requestOptions = append(requestOptions, option.WithResponseInto(&rawResponse))
 	response, err := model.client.Chat.Completions.New(ctx, params, requestOptions...)
 	if err != nil {
-		return nil, modelCallError(ctx, err)
+		return nil, protocolutil.ModelCallError(ctx, err, adaptAPIError)
 	}
 	message, err := responseMessage(response, rawResponse, model.config, model.compatibility.ReasoningContentField)
 	if err != nil {
@@ -49,7 +51,7 @@ func (model *ChatModel) Stream(ctx context.Context, input []*agentschema.Message
 	providerStream := model.client.Chat.Completions.NewStreaming(ctx, params, requestOptions...)
 	if err := providerStream.Err(); err != nil {
 		_ = providerStream.Close()
-		return nil, modelCallError(ctx, err)
+		return nil, protocolutil.ModelCallError(ctx, err, adaptAPIError)
 	}
 
 	reader, writer := agentstream.Pipe[*agentschema.Message](1)
@@ -63,10 +65,14 @@ func (model *ChatModel) Stream(ctx context.Context, input []*agentschema.Message
 		}()
 
 		metadataPending := true
+		sawFinishReason := false
 		var continuation continuationState
 		for providerStream.Next() {
 			chunk := providerStream.Current()
 			if choice, found := streamChoice(chunk.Choices); found {
+				if choice.FinishReason != "" {
+					sawFinishReason = true
+				}
 				if err := continuation.add(choice.Delta.RawJSON()); err != nil {
 					writer.Send(nil, err)
 					return
@@ -88,7 +94,16 @@ func (model *ChatModel) Stream(ctx context.Context, input []*agentschema.Message
 			}
 		}
 		if err := providerStream.Err(); err != nil {
-			writer.Send(nil, modelCallError(ctx, err))
+			writer.Send(nil, protocolutil.ModelCallError(ctx, err, adaptAPIError))
+			return
+		}
+		if !sawFinishReason {
+			writer.Send(nil, &providers.APIError{
+				RequestID: responseRequestID(rawResponse),
+				Kind:      "server_error",
+				InStream:  true,
+				Message:   "openai chat completions stream ended without finish_reason",
+			})
 			return
 		}
 		message, err := continuation.message(model.config)
@@ -112,11 +127,4 @@ func (model *ChatModel) WithTools(tools []*agentschema.ToolInfo) (agentmodel.Too
 	clone := *model
 	clone.options = agentmodel.GetCommonOptions(model.options, agentmodel.WithTools(tools))
 	return &clone, nil
-}
-
-func modelCallError(ctx context.Context, err error) error {
-	if ctx != nil && ctx.Err() != nil {
-		return ctx.Err()
-	}
-	return adaptAPIError(err)
 }

@@ -20,18 +20,30 @@ func (tasks *LocalTasks) FollowUp(ctx context.Context, ref TaskRef, input agent.
 	}
 	localTaskAdmissionMu.Lock()
 	defer localTaskAdmissionMu.Unlock()
-	session, err := tasks.openExisting(ctx, candidate, ref.Session)
+	type followUpState struct {
+		session        *agent.Session
+		snapshot       agentevent.SessionSnapshot
+		acceptedBefore bool
+	}
+	opened, err := retryClosedTaskRead(ctx, func() (followUpState, error) {
+		session, err := tasks.openExisting(ctx, candidate, ref.Session)
+		if err != nil {
+			return followUpState{}, err
+		}
+		snapshot, err := session.Snapshot(ctx)
+		if err != nil {
+			return followUpState{}, err
+		}
+		_, acceptedBefore, err := session.CommandSnapshot(ctx, input.IdempotencyKey)
+		if err != nil {
+			return followUpState{}, err
+		}
+		return followUpState{session: session, snapshot: snapshot, acceptedBefore: acceptedBefore}, nil
+	})
 	if err != nil {
 		return Task{}, err
 	}
-	snapshot, err := session.Snapshot(ctx)
-	if err != nil {
-		return Task{}, err
-	}
-	_, acceptedBefore, err := session.CommandSnapshot(ctx, input.IdempotencyKey)
-	if err != nil {
-		return Task{}, err
-	}
+	session, snapshot, acceptedBefore := opened.session, opened.snapshot, opened.acceptedBefore
 	if snapshot.ActiveRunID == "" && !acceptedBefore {
 		if err := tasks.checkCapacity(ctx); err != nil {
 			return Task{}, err
@@ -76,20 +88,32 @@ func (tasks *LocalTasks) SendMessage(ctx context.Context, ref TaskRef, input age
 	}
 	localTaskAdmissionMu.Lock()
 	defer localTaskAdmissionMu.Unlock()
-	session, err := tasks.openExisting(ctx, candidate, ref.Session)
+	type sendState struct {
+		session  *agent.Session
+		hostData *agent.HostData
+	}
+	opened, err := retryClosedTaskRead(ctx, func() (sendState, error) {
+		session, err := tasks.openExisting(ctx, candidate, ref.Session)
+		if err != nil {
+			return sendState{}, err
+		}
+		var hostData *agent.HostData
+		if active, found, err := session.Active(ctx); err != nil {
+			return sendState{}, err
+		} else if found {
+			original, _, err := session.RunInput(ctx, active.ID())
+			if err != nil {
+				return sendState{}, err
+			}
+			hostData = original.HostData
+		}
+		return sendState{session: session, hostData: hostData}, nil
+	})
 	if err != nil {
 		return agentevent.CommandReceipt{}, err
 	}
-	input.HostData = nil
-	if active, found, err := session.Active(ctx); err != nil {
-		return agentevent.CommandReceipt{}, err
-	} else if found {
-		original, _, err := session.RunInput(ctx, active.ID())
-		if err != nil {
-			return agentevent.CommandReceipt{}, err
-		}
-		input.HostData = original.HostData
-	}
+	session := opened.session
+	input.HostData = opened.hostData
 	if tasks.completionParent != nil {
 		if err := tasks.completionParent.RegisterChildTask(ctx, agent.ChildTask{Key: session.Key()}); err != nil {
 			return agentevent.CommandReceipt{}, err
@@ -105,14 +129,25 @@ func (tasks *LocalTasks) SendMessage(ctx context.Context, ref TaskRef, input age
 func (tasks *LocalTasks) Resume(ctx context.Context, ref TaskRef, request agent.ResumeRequest) (Task, error) {
 	localTaskAdmissionMu.Lock()
 	defer localTaskAdmissionMu.Unlock()
-	_, session, err := tasks.open(ctx, ref)
+	type resumeState struct {
+		session  *agent.Session
+		snapshot agentevent.SessionSnapshot
+	}
+	opened, err := retryClosedTaskRead(ctx, func() (resumeState, error) {
+		_, session, err := tasks.open(ctx, ref)
+		if err != nil {
+			return resumeState{}, err
+		}
+		snapshot, err := session.Snapshot(ctx)
+		if err != nil {
+			return resumeState{}, err
+		}
+		return resumeState{session: session, snapshot: snapshot}, nil
+	})
 	if err != nil {
 		return Task{}, err
 	}
-	snapshot, err := session.Snapshot(ctx)
-	if err != nil {
-		return Task{}, err
-	}
+	session, snapshot := opened.session, opened.snapshot
 	if _, accepted := session.AcceptedControl(request.IdempotencyKey); !accepted {
 		if snapshot.ActiveRunID != ref.Run {
 			return Task{}, agentschema.ErrNoActiveRun

@@ -157,13 +157,6 @@ func lineNumbers(content string, start int) string {
 	return result.String()
 }
 
-func joinedResult(entries []string, empty string) string {
-	if len(entries) == 0 {
-		return empty
-	}
-	return boundedString(strings.Join(entries, "\n"), defaultResultBytes)
-}
-
 func boundedString(content string, limit int) string {
 	if len(content) <= limit {
 		return content

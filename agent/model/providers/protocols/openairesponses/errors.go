@@ -62,6 +62,7 @@ func responseFailure(response *responses.Response, rawResponse *http.Response) e
 	return &providers.APIError{
 		RequestID: responseRequestID(rawResponse),
 		Code:      string(response.Error.Code), RetryAfter: providers.RetryAfterDelay(rawResponse),
-		Message: message,
+		InStream: true,
+		Message:  message,
 	}
 }

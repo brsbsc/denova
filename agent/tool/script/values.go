@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"reflect"
 	"strings"
 
 	"github.com/dop251/goja"
 )
+
+const maxParallelCalls = 256
 
 func runtimeBuiltins(runtime *goja.Runtime) (
 	jsonParse goja.Callable,
@@ -50,6 +51,10 @@ func buildContext(
 		return nil, fmt.Errorf("create script tools object: %w", err)
 	}
 	call := func(call goja.FunctionCall) goja.Value {
+		if *hostErr != nil {
+			runtime.Interrupt(*hostErr)
+			return goja.Undefined()
+		}
 		request, invalid := decodeCall(runtime, jsonStringify, call.Argument(0), call.Argument(1))
 		if invalid != nil {
 			return mustParseJSON(runtime, jsonParse, mustMarshal(invalidOutcome(request.Name, invalid.Error())))
@@ -57,16 +62,22 @@ func buildContext(
 		outcomes, err := host.CallTools(hostContext, []Call{request})
 		if err != nil {
 			*hostErr = err
-			panic(runtime.NewGoError(err))
+			runtime.Interrupt(err)
+			return goja.Undefined()
 		}
 		if len(outcomes) != 1 {
 			err := fmt.Errorf("script host returned %d outcomes for one call", len(outcomes))
 			*hostErr = err
-			panic(runtime.NewGoError(err))
+			runtime.Interrupt(err)
+			return goja.Undefined()
 		}
 		return mustParseJSON(runtime, jsonParse, mustMarshal(outcomes[0]))
 	}
 	parallel := func(call goja.FunctionCall) goja.Value {
+		if *hostErr != nil {
+			runtime.Interrupt(*hostErr)
+			return goja.Undefined()
+		}
 		requests, slots, err := decodeParallel(runtime, jsonStringify, call.Argument(0))
 		if err != nil {
 			return mustParseJSON(runtime, jsonParse, mustMarshal([]Outcome{invalidOutcome("", err.Error())}))
@@ -74,12 +85,14 @@ func buildContext(
 		outcomes, callErr := host.CallTools(hostContext, requests)
 		if callErr != nil {
 			*hostErr = callErr
-			panic(runtime.NewGoError(callErr))
+			runtime.Interrupt(callErr)
+			return goja.Undefined()
 		}
 		if len(outcomes) != len(requests) {
 			err := fmt.Errorf("script host returned %d outcomes for %d calls", len(outcomes), len(requests))
 			*hostErr = err
-			panic(runtime.NewGoError(err))
+			runtime.Interrupt(err)
+			return goja.Undefined()
 		}
 		for index := range slots {
 			if slots[index].invalid == nil {
@@ -110,6 +123,10 @@ func buildContext(
 		return nil, fmt.Errorf("define ctx.tools: %w", err)
 	}
 	log := func(call goja.FunctionCall) goja.Value {
+		if *hostErr != nil {
+			runtime.Interrupt(*hostErr)
+			return goja.Undefined()
+		}
 		value := call.Argument(0)
 		if goja.IsUndefined(value) || goja.IsNull(value) {
 			logs.add("")
@@ -142,8 +159,11 @@ func decodeParallel(runtime *goja.Runtime, stringify goja.Callable, value goja.V
 		return nil, nil, errors.New("ctx.tools.parallel(calls) requires an array")
 	}
 	length := object.Get("length").ToInteger()
-	if length < 0 || length > math.MaxInt32 {
+	if length < 0 {
 		return nil, nil, errors.New("ctx.tools.parallel(calls) has an invalid length")
+	}
+	if length > maxParallelCalls {
+		return nil, nil, fmt.Errorf("ctx.tools.parallel(calls) exceeds the %d-call limit", maxParallelCalls)
 	}
 	requests := make([]Call, 0, length)
 	slots := make([]outcomeSlot, int(length))

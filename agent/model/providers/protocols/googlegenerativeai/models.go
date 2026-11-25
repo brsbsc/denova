@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/alfredxw/denova/agent/model/providers"
+	"github.com/alfredxw/denova/agent/model/providers/protocols/internal/protocolutil"
 )
 
 // ListModels lists native Gemini model IDs without requiring a model selection.
@@ -22,7 +23,7 @@ func (*Adapter) ListModels(ctx context.Context, config providers.ModelConfig) ([
 	seen := make(map[string]bool)
 	for model, err := range client.Models.All(ctx) {
 		if err != nil {
-			return nil, modelCallError(ctx, err)
+			return nil, protocolutil.ModelCallError(ctx, err, adaptAPIError)
 		}
 		id := strings.TrimPrefix(strings.TrimSpace(model.Name), "models/")
 		if id == "" || seen[id] {

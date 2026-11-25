@@ -110,14 +110,23 @@ func responseExtra(response *anthropic.Message, rawResponse *http.Response, conf
 		}
 	}
 	if rawResponse != nil {
-		for _, name := range []string{"request-id", "x-request-id"} {
-			if value := strings.TrimSpace(rawResponse.Header.Get(name)); value != "" {
-				result[extraKeyRequestID] = value
-				break
-			}
+		if value := responseRequestID(rawResponse); value != "" {
+			result[extraKeyRequestID] = value
 		}
 	}
 	return result
+}
+
+func responseRequestID(rawResponse *http.Response) string {
+	if rawResponse == nil {
+		return ""
+	}
+	for _, name := range []string{"request-id", "x-request-id"} {
+		if value := strings.TrimSpace(rawResponse.Header.Get(name)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func streamMessage(event anthropic.MessageStreamEventUnion, accumulator *anthropic.Message, rawResponse *http.Response, config providers.ModelConfig) (*agentschema.Message, error) {

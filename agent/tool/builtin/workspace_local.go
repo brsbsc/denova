@@ -181,6 +181,9 @@ func (workspace *LocalWorkspace) relative(input string, allowRoot bool) (string,
 			return "", fmt.Errorf("resolve workspace-relative path: %w", err)
 		}
 	} else {
+		if strings.HasPrefix(filepath.ToSlash(input), "/") || filepath.VolumeName(input) != "" {
+			return "", fmt.Errorf("path is outside the active workspace: %s", input)
+		}
 		relative = filepath.Clean(filepath.FromSlash(input))
 	}
 	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {

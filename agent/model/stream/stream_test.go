@@ -6,8 +6,6 @@ import (
 	"io"
 	"reflect"
 	"testing"
-
-	agentasync "github.com/alfredxw/denova/agent/internal/async"
 )
 
 func TestStreamPipeAndArray(t *testing.T) {
@@ -73,48 +71,17 @@ func TestStreamConvertFilterOnEOFAndErrorWrapper(t *testing.T) {
 	errorWriter.Send(0, errors.New("skip"))
 	errorWriter.Send(3, nil)
 	errorWriter.Close()
-	wrapped := StreamReaderWithErrWrapper(errorSource, func(err error) error {
+	wrapped := StreamReaderWithConvert(errorSource, func(value int) (int, error) {
+		return value, nil
+	}, WithErrWrapper(func(err error) error {
 		if err.Error() == "skip" {
 			return nil
 		}
 		return fmt.Errorf("wrapped: %w", err)
-	})
+	}))
 	defer wrapped.Close()
 	value, err := wrapped.Recv()
 	if err != nil || value != 3 {
 		t.Fatalf("wrapped recv = %d, %v", value, err)
-	}
-}
-
-func TestStreamCopyFansOutAndRecoversPanic(t *testing.T) {
-	copies := StreamReaderFromArray([]int{1, 2, 3}).Copy(2)
-	for index, copy := range copies {
-		var got []int
-		for {
-			value, err := copy.Recv()
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			if err != nil {
-				t.Fatalf("copy %d: %v", index, err)
-			}
-			got = append(got, value)
-		}
-		copy.Close()
-		if !reflect.DeepEqual(got, []int{1, 2, 3}) {
-			t.Fatalf("copy %d = %#v", index, got)
-		}
-	}
-
-	panicking := &StreamReader[int]{recvFn: func() (int, error) { panic("boom") }}
-	panicCopy := panicking.Copy(1)[0]
-	defer panicCopy.Close()
-	if _, err := panicCopy.Recv(); err == nil {
-		t.Fatal("expected recovered panic error")
-	} else {
-		var panicErr *agentasync.PanicError
-		if !errors.As(err, &panicErr) {
-			t.Fatalf("panic error = %T: %v", err, err)
-		}
 	}
 }

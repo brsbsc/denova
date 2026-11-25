@@ -279,29 +279,39 @@ func (tasks *LocalTasks) observe(ctx context.Context, ref TaskRef, cursor string
 		result.Task.Output = result.Output
 	}
 	if terminal && observation.Snapshot.ActiveRunID == "" && len(observation.Snapshot.QueuedRuns) == 0 {
-		err = errors.Join(err, session.Close(context.Background()))
+		err = errors.Join(err, closeIdleTaskSession(session))
 	}
 	return result, err
 }
 
 func (tasks *LocalTasks) Steer(ctx context.Context, ref TaskRef, input agent.Input) (agentevent.CommandReceipt, error) {
-	_, session, err := tasks.open(ctx, ref)
-	if err != nil {
-		return agentevent.CommandReceipt{}, err
+	type steerTarget struct {
+		run      *agent.Run
+		hostData *agent.HostData
 	}
-	run, found, err := session.AttachRun(ctx, ref.Run)
-	if err != nil || !found {
-		if err == nil {
-			err = ErrTaskNotFound
+	target, err := retryClosedTaskRead(ctx, func() (steerTarget, error) {
+		_, session, err := tasks.open(ctx, ref)
+		if err != nil {
+			return steerTarget{}, err
 		}
-		return agentevent.CommandReceipt{}, err
-	}
-	original, _, err := session.RunInput(ctx, ref.Run)
+		run, found, err := session.AttachRun(ctx, ref.Run)
+		if err != nil || !found {
+			if err == nil {
+				err = ErrTaskNotFound
+			}
+			return steerTarget{}, err
+		}
+		original, _, err := session.RunInput(ctx, ref.Run)
+		if err != nil {
+			return steerTarget{}, err
+		}
+		return steerTarget{run: run, hostData: original.HostData}, nil
+	})
 	if err != nil {
 		return agentevent.CommandReceipt{}, err
 	}
-	input.HostData = original.HostData
-	return run.Steer(ctx, input)
+	input.HostData = target.hostData
+	return target.run.Steer(ctx, input)
 }
 
 func (tasks *LocalTasks) Respond(
@@ -310,30 +320,42 @@ func (tasks *LocalTasks) Respond(
 	interactionID string,
 	response agentinteraction.InteractionResponse,
 ) error {
-	_, session, err := tasks.open(ctx, ref)
-	if err != nil {
-		return err
-	}
-	run, found, err := session.AttachRun(ctx, ref.Run)
-	if err != nil || !found {
-		if err == nil {
-			err = ErrTaskNotFound
+	run, err := retryClosedTaskRead(ctx, func() (*agent.Run, error) {
+		_, session, err := tasks.open(ctx, ref)
+		if err != nil {
+			return nil, err
 		}
+		run, found, err := session.AttachRun(ctx, ref.Run)
+		if err != nil || !found {
+			if err == nil {
+				err = ErrTaskNotFound
+			}
+			return nil, err
+		}
+		return run, nil
+	})
+	if err != nil {
 		return err
 	}
 	return run.Respond(ctx, strings.TrimSpace(interactionID), response)
 }
 
 func (tasks *LocalTasks) Abort(ctx context.Context, ref TaskRef, request agentevent.AbortRequest) (agentevent.CommandReceipt, error) {
-	_, session, err := tasks.open(ctx, ref)
-	if err != nil {
-		return agentevent.CommandReceipt{}, err
-	}
-	run, found, err := session.AttachRun(ctx, ref.Run)
-	if err != nil || !found {
-		if err == nil {
-			err = ErrTaskNotFound
+	run, err := retryClosedTaskRead(ctx, func() (*agent.Run, error) {
+		_, session, err := tasks.open(ctx, ref)
+		if err != nil {
+			return nil, err
 		}
+		run, found, err := session.AttachRun(ctx, ref.Run)
+		if err != nil || !found {
+			if err == nil {
+				err = ErrTaskNotFound
+			}
+			return nil, err
+		}
+		return run, nil
+	})
+	if err != nil {
 		return agentevent.CommandReceipt{}, err
 	}
 	return run.Abort(ctx, request)
@@ -423,14 +445,34 @@ func (tasks *LocalTasks) activeTaskCount(ctx context.Context) (int, error) {
 			}
 			if snapshot.ActiveRunID != "" && snapshot.ActiveStatus != agentschema.ResultSuspended {
 				total++
-			} else if snapshot.ActiveRunID == "" {
-				if closeErr := session.Close(context.Background()); closeErr != nil {
-					return 0, closeErr
-				}
 			}
 		}
 	}
 	return total, nil
+}
+
+// closeIdleTaskSession releases terminal child writer leases only when no
+// admission or mutation holds localTaskAdmissionMu. If an admission operation
+// is in progress, skipping close prevents invalidating its open Session handle.
+func closeIdleTaskSession(session *agent.Session) error {
+	if session == nil {
+		return nil
+	}
+	if !localTaskAdmissionMu.TryLock() {
+		return nil
+	}
+	defer localTaskAdmissionMu.Unlock()
+	snapshot, err := session.Snapshot(context.Background())
+	if err != nil {
+		if errors.Is(err, agentschema.ErrSessionClosed) {
+			return nil
+		}
+		return err
+	}
+	if snapshot.ActiveRunID != "" || len(snapshot.QueuedRuns) != 0 {
+		return nil
+	}
+	return session.Close(context.Background())
 }
 
 func (tasks *LocalTasks) open(ctx context.Context, ref TaskRef) (LocalTaskAgent, *agent.Session, error) {

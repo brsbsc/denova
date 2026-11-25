@@ -132,22 +132,28 @@ func (m *toolCallTextModel) WithTools(tools []*agentschema.ToolInfo) (agentmodel
 }
 
 func extractTextToolCalls(msg *agentschema.Message) {
+	extractTextToolCallsFrom(msg, 0)
+}
+
+func extractTextToolCallsFrom(msg *agentschema.Message, startIndex int) int {
 	if msg == nil || len(msg.ToolCalls) > 0 || msg.Content == "" {
-		return
+		return startIndex
 	}
 	matches := pcInvokeRe.FindAllStringSubmatch(msg.Content, -1)
 	if len(matches) == 0 {
-		return
+		return startIndex
 	}
 	calls := make([]agentschema.ToolCall, 0, len(matches))
-	for i, m := range matches {
+	nextIndex := startIndex
+	for _, m := range matches {
 		name := strings.TrimSpace(m[1])
 		if name == "" {
 			continue
 		}
 		params := parseInvokeParams(m[2])
 		args, _ := json.Marshal(params)
-		idx := i
+		idx := nextIndex
+		nextIndex++
 		calls = append(calls, agentschema.ToolCall{
 			Index: &idx,
 			ID:    newTextToolCallID(),
@@ -159,11 +165,12 @@ func extractTextToolCalls(msg *agentschema.Message) {
 		})
 	}
 	if len(calls) == 0 {
-		return
+		return startIndex
 	}
 	msg.ToolCalls = calls
 	msg.Content = pcToolCallRe.ReplaceAllString(msg.Content, "")
 	msg.Content = pcInvokeRe.ReplaceAllString(msg.Content, "")
+	return nextIndex
 }
 
 func newTextToolCallID() string {
@@ -342,12 +349,14 @@ func emptyMessage(message *agentschema.Message) bool {
 		len(message.MultiContent) == 0 &&
 		len(message.UserInputMultiContent) == 0 &&
 		len(message.AssistantGenMultiContent) == 0 &&
+		len(message.Extra) == 0 &&
 		message.ResponseMeta == nil
 }
 
 type textToolCallStreamRepair struct {
-	buffer     string
-	inToolCall bool
+	buffer        string
+	inToolCall    bool
+	nextToolIndex int
 }
 
 func (r *textToolCallStreamRepair) push(frame *agentschema.Message, emit streamEmitFunc) {
@@ -355,23 +364,28 @@ func (r *textToolCallStreamRepair) push(frame *agentschema.Message, emit streamE
 		return
 	}
 	if frame.Content == "" || len(frame.ToolCalls) > 0 {
-		emit(frame)
+		emit(frame.Clone())
 		return
 	}
+	carrier, role := detachFrameMetadata(frame, true, false)
+	emitWithCarrier := wrapCarrierEmit(emit, &carrier)
 	r.buffer += frame.Content
-	r.drain(frame, emit)
+	r.drain(role, emitWithCarrier)
+	if carrier != nil && !emptyMessage(carrier) {
+		emit(carrier)
+	}
 }
 
 func (r *textToolCallStreamRepair) flush(emit streamEmitFunc) {
 	if r.buffer == "" {
 		return
 	}
-	r.emitToolAwareContent(&agentschema.Message{Role: agentschema.Assistant}, r.buffer, emit)
+	r.emitToolAwareContent(agentschema.Assistant, r.buffer, emit)
 	r.buffer = ""
 	r.inToolCall = false
 }
 
-func (r *textToolCallStreamRepair) drain(base *agentschema.Message, emit streamEmitFunc) {
+func (r *textToolCallStreamRepair) drain(role agentschema.RoleType, emit streamEmitFunc) {
 	const openTag = "<tool_call>"
 	const closeTag = "</tool_call>"
 	for r.buffer != "" {
@@ -381,7 +395,7 @@ func (r *textToolCallStreamRepair) drain(base *agentschema.Message, emit streamE
 				return
 			}
 			end := closeIndex + len(closeTag)
-			r.emitToolAwareContent(base, r.buffer[:end], emit)
+			r.emitToolAwareContent(role, r.buffer[:end], emit)
 			r.buffer = r.buffer[end:]
 			r.inToolCall = false
 			continue
@@ -390,7 +404,7 @@ func (r *textToolCallStreamRepair) drain(base *agentschema.Message, emit streamE
 		openIndex := indexFold(r.buffer, openTag)
 		if openIndex >= 0 {
 			if openIndex > 0 {
-				emit(messageWithContent(base, r.buffer[:openIndex]))
+				emit(&agentschema.Message{Role: role, Content: r.buffer[:openIndex]})
 			}
 			r.buffer = r.buffer[openIndex:]
 			r.inToolCall = true
@@ -399,22 +413,22 @@ func (r *textToolCallStreamRepair) drain(base *agentschema.Message, emit streamE
 		keep := partialTagSuffixLength(r.buffer, openTag)
 		if keep > 0 {
 			if len(r.buffer) > keep {
-				emit(messageWithContent(base, r.buffer[:len(r.buffer)-keep]))
+				emit(&agentschema.Message{Role: role, Content: r.buffer[:len(r.buffer)-keep]})
 				r.buffer = r.buffer[len(r.buffer)-keep:]
 			}
 			return
 		}
-		emit(messageWithContent(base, r.buffer))
+		emit(&agentschema.Message{Role: role, Content: r.buffer})
 		r.buffer = ""
 	}
 }
 
-func (r *textToolCallStreamRepair) emitToolAwareContent(base *agentschema.Message, content string, emit streamEmitFunc) {
+func (r *textToolCallStreamRepair) emitToolAwareContent(role agentschema.RoleType, content string, emit streamEmitFunc) {
 	if content == "" {
 		return
 	}
-	message := messageWithContent(base, content)
-	extractTextToolCalls(message)
+	message := &agentschema.Message{Role: role, Content: content}
+	r.nextToolIndex = extractTextToolCallsFrom(message, r.nextToolIndex)
 	emit(message)
 }
 
@@ -428,37 +442,38 @@ func (r *inlineThinkStreamRepair) push(frame *agentschema.Message, emit streamEm
 		return
 	}
 	if frame.Content == "" {
-		emit(frame)
+		emit(frame.Clone())
 		return
 	}
-	if frame.ReasoningContent != "" {
-		emit(messageWithThinking(frame, frame.ReasoningContent))
-	}
+	carrier, role := detachFrameMetadata(frame, true, true)
+	emitWithCarrier := wrapCarrierEmit(emit, &carrier)
 	r.buffer += frame.Content
-	r.drain(frame, emit)
+	r.drain(role, emitWithCarrier)
+	if carrier != nil && !emptyMessage(carrier) {
+		emit(carrier)
+	}
 }
 
 func (r *inlineThinkStreamRepair) flush(emit streamEmitFunc) {
 	if r.buffer == "" {
 		return
 	}
-	base := &agentschema.Message{Role: agentschema.Assistant}
 	if r.inThink {
-		emit(messageWithThinking(base, r.buffer))
+		emit(&agentschema.Message{Role: agentschema.Assistant, ReasoningContent: r.buffer})
 	} else {
 		clean, thinking := stripThinkTagsSimple(r.buffer)
 		if thinking != "" {
-			emit(messageWithThinking(base, thinking))
+			emit(&agentschema.Message{Role: agentschema.Assistant, ReasoningContent: thinking})
 		}
 		if clean != "" {
-			emit(messageWithContent(base, clean))
+			emit(&agentschema.Message{Role: agentschema.Assistant, Content: clean})
 		}
 	}
 	r.buffer = ""
 	r.inThink = false
 }
 
-func (r *inlineThinkStreamRepair) drain(base *agentschema.Message, emit streamEmitFunc) {
+func (r *inlineThinkStreamRepair) drain(role agentschema.RoleType, emit streamEmitFunc) {
 	const openTag = "<think>"
 	const closeTag = "</think>"
 	for r.buffer != "" {
@@ -466,7 +481,7 @@ func (r *inlineThinkStreamRepair) drain(base *agentschema.Message, emit streamEm
 			closeIndex := indexFold(r.buffer, closeTag)
 			if closeIndex >= 0 {
 				if closeIndex > 0 {
-					emit(messageWithThinking(base, r.buffer[:closeIndex]))
+					emit(&agentschema.Message{Role: role, ReasoningContent: r.buffer[:closeIndex]})
 				}
 				r.buffer = strings.TrimLeft(r.buffer[closeIndex+len(closeTag):], " \t\r\n")
 				r.inThink = false
@@ -475,12 +490,12 @@ func (r *inlineThinkStreamRepair) drain(base *agentschema.Message, emit streamEm
 			keep := partialTagSuffixLength(r.buffer, closeTag)
 			if keep > 0 {
 				if len(r.buffer) > keep {
-					emit(messageWithThinking(base, r.buffer[:len(r.buffer)-keep]))
+					emit(&agentschema.Message{Role: role, ReasoningContent: r.buffer[:len(r.buffer)-keep]})
 					r.buffer = r.buffer[len(r.buffer)-keep:]
 				}
 				return
 			}
-			emit(messageWithThinking(base, r.buffer))
+			emit(&agentschema.Message{Role: role, ReasoningContent: r.buffer})
 			r.buffer = ""
 			return
 		}
@@ -489,14 +504,14 @@ func (r *inlineThinkStreamRepair) drain(base *agentschema.Message, emit streamEm
 		closeIndex := indexFold(r.buffer, closeTag)
 		if closeIndex >= 0 && (openIndex < 0 || closeIndex < openIndex) {
 			if closeIndex > 0 {
-				emit(messageWithThinking(base, r.buffer[:closeIndex]))
+				emit(&agentschema.Message{Role: role, ReasoningContent: r.buffer[:closeIndex]})
 			}
 			r.buffer = strings.TrimLeft(r.buffer[closeIndex+len(closeTag):], " \t\r\n")
 			continue
 		}
 		if openIndex >= 0 {
 			if openIndex > 0 {
-				emit(messageWithContent(base, r.buffer[:openIndex]))
+				emit(&agentschema.Message{Role: role, Content: r.buffer[:openIndex]})
 			}
 			r.buffer = r.buffer[openIndex+len(openTag):]
 			r.inThink = true
@@ -505,36 +520,70 @@ func (r *inlineThinkStreamRepair) drain(base *agentschema.Message, emit streamEm
 		keep := partialTagSuffixLength(r.buffer, openTag, closeTag)
 		if keep > 0 {
 			if len(r.buffer) > keep {
-				emit(messageWithContent(base, r.buffer[:len(r.buffer)-keep]))
+				emit(&agentschema.Message{Role: role, Content: r.buffer[:len(r.buffer)-keep]})
 				r.buffer = r.buffer[len(r.buffer)-keep:]
 			}
 			return
 		}
-		emit(messageWithContent(base, r.buffer))
+		emit(&agentschema.Message{Role: role, Content: r.buffer})
 		r.buffer = ""
 	}
 }
 
-func messageWithContent(base *agentschema.Message, content string) *agentschema.Message {
-	if base == nil {
-		return &agentschema.Message{Role: agentschema.Assistant, Content: content}
+func detachFrameMetadata(frame *agentschema.Message, includeReasoning, includeToolCalls bool) (*agentschema.Message, agentschema.RoleType) {
+	cloned := frame.Clone()
+	role := cloned.Role
+	if role == "" {
+		role = agentschema.Assistant
 	}
-	message := *base
-	message.Content = content
-	message.ToolCalls = nil
-	message.ReasoningContent = ""
-	return &message
+	cloned.Role = role
+	cloned.Content = ""
+	if !includeReasoning {
+		cloned.ReasoningContent = ""
+	}
+	if !includeToolCalls {
+		cloned.ToolCalls = nil
+	}
+	return cloned, role
 }
 
-func messageWithThinking(base *agentschema.Message, thinking string) *agentschema.Message {
-	if base == nil {
-		return &agentschema.Message{Role: agentschema.Assistant, ReasoningContent: thinking}
+func wrapCarrierEmit(emit streamEmitFunc, carrier **agentschema.Message) streamEmitFunc {
+	return func(message *agentschema.Message) {
+		if message == nil || emptyMessage(message) {
+			return
+		}
+		if *carrier != nil {
+			meta := *carrier
+			*carrier = nil
+			if message.Name == "" {
+				message.Name = meta.Name
+			}
+			if meta.ReasoningContent != "" {
+				message.ReasoningContent = meta.ReasoningContent + message.ReasoningContent
+			}
+			if len(meta.ToolCalls) > 0 && len(message.ToolCalls) == 0 {
+				message.ToolCalls = meta.ToolCalls
+			}
+			message.MultiContent = append(meta.MultiContent, message.MultiContent...)
+			message.UserInputMultiContent = append(meta.UserInputMultiContent, message.UserInputMultiContent...)
+			message.AssistantGenMultiContent = append(meta.AssistantGenMultiContent, message.AssistantGenMultiContent...)
+			if len(meta.Extra) > 0 {
+				if len(message.Extra) == 0 {
+					message.Extra = meta.Extra
+				} else {
+					for key, value := range meta.Extra {
+						if _, exists := message.Extra[key]; !exists {
+							message.Extra[key] = value
+						}
+					}
+				}
+			}
+			if meta.ResponseMeta != nil && message.ResponseMeta == nil {
+				message.ResponseMeta = meta.ResponseMeta
+			}
+		}
+		emit(message)
 	}
-	message := *base
-	message.Content = ""
-	message.ToolCalls = nil
-	message.ReasoningContent = thinking
-	return &message
 }
 
 func indexFold(value, needle string) int {

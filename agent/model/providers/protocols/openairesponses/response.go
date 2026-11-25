@@ -175,6 +175,7 @@ type streamState struct {
 	pendingExtra  map[string]any
 	toolIndices   map[string]int
 	nextToolIndex int
+	completed     bool
 }
 
 func newStreamState(rawResponse *http.Response, config providers.ModelConfig) *streamState {
@@ -231,6 +232,7 @@ func (state *streamState) convert(event responses.ResponseStreamEventUnion) (*ag
 			}},
 		}), nil
 	case "response.completed", "response.incomplete":
+		state.completed = true
 		response := event.Response
 		message := &agentschema.Message{
 			Role: agentschema.Assistant,

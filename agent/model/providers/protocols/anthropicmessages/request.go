@@ -8,6 +8,7 @@ import (
 
 	agentmodel "github.com/alfredxw/denova/agent/model"
 	"github.com/alfredxw/denova/agent/model/providers"
+	"github.com/alfredxw/denova/agent/model/providers/protocols/internal/protocolutil"
 	agentschema "github.com/alfredxw/denova/agent/schema"
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -21,7 +22,7 @@ func (model *ChatModel) request(input []*agentschema.Message, opts ...agentmodel
 	common := agentmodel.GetCommonOptions(model.options, opts...)
 	tools := common.Tools
 	if common.ToolChoice != nil && len(common.AllowedToolNames) != 0 {
-		tools = filterTools(tools, common.AllowedToolNames)
+		tools = protocolutil.FilterTools(tools, common.AllowedToolNames)
 	}
 	requestTools, err := requestTools(tools)
 	if err != nil {
@@ -95,6 +96,9 @@ func requestMessages(input []*agentschema.Message, config providers.ModelConfig)
 			isError := message.ToolResult != nil && message.ToolResult.Status == agentschema.ToolResultError
 			result := anthropic.NewToolResultBlock(message.ToolCallID, message.Content, isError)
 			for _, attachment := range message.Attachments {
+				if !agentschema.IsNativeImageMediaType(attachment.MediaType) {
+					continue
+				}
 				prepared, err := config.PrepareImage(attachment, imageCount)
 				if err != nil {
 					return nil, nil, fmt.Errorf("anthropic messages input %d: %w", index, err)
@@ -102,7 +106,11 @@ func requestMessages(input []*agentschema.Message, config providers.ModelConfig)
 				image := anthropic.NewImageBlockBase64(prepared.MediaType, prepared.Base64)
 				result.OfToolResult.Content = append(result.OfToolResult.Content, anthropic.ToolResultBlockParamContentUnion{OfImage: image.OfImage})
 			}
-			messages = append(messages, anthropic.NewUserMessage(result))
+			if index > 0 && input[index-1] != nil && input[index-1].Role == agentschema.ToolRole && len(messages) > 0 {
+				messages[len(messages)-1].Content = append(messages[len(messages)-1].Content, result)
+			} else {
+				messages = append(messages, anthropic.NewUserMessage(result))
+			}
 		default:
 			return nil, nil, fmt.Errorf("anthropic messages input %d: unsupported role %q", index, message.Role)
 		}
@@ -298,36 +306,15 @@ func requestOptions(extraBody map[string]any, mapping *providers.SessionKeyMappi
 	sort.Strings(keys)
 	result := make([]option.RequestOption, 0, len(keys))
 	for _, key := range keys {
-		result = append(result, option.WithJSONSet(escapeJSONPathKey(key), extraBody[key]))
+		result = append(result, option.WithJSONSet(protocolutil.EscapeJSONPathKey(key), extraBody[key]))
 	}
 	if mapping != nil && sessionKey != "" {
 		switch mapping.Location {
 		case providers.SessionKeyLocationHeader:
 			result = append(result, option.WithHeader(mapping.Name, sessionKey))
 		case providers.SessionKeyLocationBody:
-			result = append(result, option.WithJSONSet(escapeJSONPathKey(mapping.Name), sessionKey))
+			result = append(result, option.WithJSONSet(protocolutil.EscapeJSONPathKey(mapping.Name), sessionKey))
 		}
 	}
 	return result
-}
-
-func filterTools(tools []*agentschema.ToolInfo, names []string) []*agentschema.ToolInfo {
-	allowed := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		allowed[name] = struct{}{}
-	}
-	result := make([]*agentschema.ToolInfo, 0, len(tools))
-	for _, tool := range tools {
-		if tool != nil {
-			if _, ok := allowed[tool.Name]; ok {
-				result = append(result, tool)
-			}
-		}
-	}
-	return result
-}
-
-func escapeJSONPathKey(key string) string {
-	replacer := strings.NewReplacer(`\`, `\\`, `.`, `\.`, `:`, `\:`, `#`, `\#`, `@`, `\@`)
-	return replacer.Replace(key)
 }

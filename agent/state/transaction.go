@@ -76,15 +76,23 @@ func (store *Store) recoverTransaction() error {
 	if transaction.Stage != "prepared" && transaction.Stage != "applied" {
 		return fmt.Errorf("recover Agent state transaction: invalid stage %q", transaction.Stage)
 	}
-	base, err := store.loadCachedSnapshot(transaction.BaseRevision)
-	if err != nil {
-		return fmt.Errorf("recover Agent state transaction base: %w", err)
-	}
 	if transaction.Stage == "applied" {
 		current, err := scanFiles(store.root)
 		if err == nil && snapshotFromFiles(current).Revision == transaction.CandidateRevision {
 			return removeDurable(marker)
 		}
+		candidate, err := store.loadCachedSnapshot(transaction.CandidateRevision)
+		if err != nil {
+			return fmt.Errorf("recover Agent state transaction candidate: %w", err)
+		}
+		if err := writeSnapshot(store.root, candidate); err != nil {
+			return fmt.Errorf("complete applied Agent state transaction (recovery marker retained): %w", err)
+		}
+		return removeDurable(marker)
+	}
+	base, err := store.loadCachedSnapshot(transaction.BaseRevision)
+	if err != nil {
+		return fmt.Errorf("recover Agent state transaction base: %w", err)
 	}
 	return store.rollbackPreparedTransaction(marker, base)
 }

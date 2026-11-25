@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -174,6 +175,8 @@ func (runner *LocalCommandRunner) runProcess(
 	if err != nil {
 		return CommandResult{}, err
 	}
+	tree := startProcessTree(command.Process)
+	defer tree.cleanup()
 	defer reader.Close()
 	if ptyHandle != nil {
 		defer ptyHandle.Close()
@@ -186,7 +189,7 @@ func (runner *LocalCommandRunner) runProcess(
 			if recovered := recover(); recovered != nil {
 				waitErr = fmt.Errorf("wait for command panic: %v\n%s", recovered, debug.Stack())
 			}
-			cleanupProcessTree(command.Process)
+			tree.cleanup()
 			if ptyHandle != nil {
 				finishPTYAfterWait(ptyHandle)
 			}
@@ -201,7 +204,7 @@ func (runner *LocalCommandRunner) runProcess(
 		}()
 		select {
 		case <-runCtx.Done():
-			terminateProcessTree(command.Process)
+			tree.terminate()
 			_ = reader.Close()
 		case <-outputSettled:
 		}
@@ -360,6 +363,7 @@ func commandEnvironment(base []string, extra map[string]string, pty bool, cwd st
 		return nil, fmt.Errorf("command env may contain at most %d entries", maxCommandEnvironmentEntries)
 	}
 	keys := make([]string, 0, len(extra))
+	seenExtra := make(map[string]string, len(extra))
 	total := 0
 	for key, value := range extra {
 		if !portableEnvironmentName.MatchString(key) {
@@ -368,43 +372,45 @@ func commandEnvironment(base []string, extra map[string]string, pty bool, cwd st
 		if strings.IndexByte(value, 0) >= 0 {
 			return nil, fmt.Errorf("command env %q contains a NUL byte", key)
 		}
+		if runtime.GOOS == "windows" {
+			folded := strings.ToUpper(key)
+			if previous, duplicate := seenExtra[folded]; duplicate {
+				return nil, fmt.Errorf("duplicate command env name %q conflicts with %q", key, previous)
+			}
+			seenExtra[folded] = key
+		}
 		total += len(key) + len(value) + 1
 		if total > maxCommandEnvironmentBytes {
 			return nil, fmt.Errorf("command env exceeds %d bytes", maxCommandEnvironmentBytes)
 		}
 		keys = append(keys, key)
 	}
+	sort.Strings(keys)
 	environment := environmentMap(base)
 	if len(environment) == 0 {
 		environment = environmentMap(os.Environ())
 	}
 	if strings.TrimSpace(cwd) != "" {
-		environment["PWD"] = cwd
-		delete(environment, "OLDPWD")
+		setEnvironmentEntry(environment, "PWD", cwd)
+		deleteEnvironmentEntry(environment, "OLDPWD")
 	}
 	for _, key := range keys {
-		environment[key] = extra[key]
+		setEnvironmentEntry(environment, key, extra[key])
 	}
-	if pty && environment["TERM"] == "" {
-		environment["TERM"] = "xterm-256color"
+	if pty && getEnvironmentEntry(environment, "TERM") == "" {
+		setEnvironmentEntry(environment, "TERM", "xterm-256color")
 	}
-	names := make([]string, 0, len(environment))
-	for name := range environment {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	result := make([]string, 0, len(names))
-	for _, name := range names {
-		result = append(result, name+"="+environment[name])
-	}
-	return result, nil
+	return formatEnvironmentMap(environment), nil
 }
 
 func normalizeBaseEnvironment(source []string) []string {
 	if len(source) == 0 {
 		return nil
 	}
-	environment := environmentMap(source)
+	return formatEnvironmentMap(environmentMap(source))
+}
+
+func formatEnvironmentMap(environment map[string]string) []string {
 	names := make([]string, 0, len(environment))
 	for name := range environment {
 		names = append(names, name)
@@ -424,9 +430,40 @@ func environmentMap(source []string) map[string]string {
 		if !ok || name == "" || strings.IndexByte(name, 0) >= 0 || strings.IndexByte(value, 0) >= 0 {
 			continue
 		}
-		result[name] = value
+		setEnvironmentEntry(result, name, value)
 	}
 	return result
+}
+
+func setEnvironmentEntry(environment map[string]string, name, value string) {
+	if runtime.GOOS == "windows" {
+		deleteEnvironmentEntry(environment, name)
+	}
+	environment[name] = value
+}
+
+func deleteEnvironmentEntry(environment map[string]string, name string) {
+	if runtime.GOOS != "windows" {
+		delete(environment, name)
+		return
+	}
+	for existing := range environment {
+		if strings.EqualFold(existing, name) {
+			delete(environment, existing)
+		}
+	}
+}
+
+func getEnvironmentEntry(environment map[string]string, name string) string {
+	if runtime.GOOS != "windows" {
+		return environment[name]
+	}
+	for existing, value := range environment {
+		if strings.EqualFold(existing, name) {
+			return value
+		}
+	}
+	return ""
 }
 
 func resolveShellExecutable(shell ShellKind, configured string, lookPath func(string) (string, error)) (string, string, error) {

@@ -108,7 +108,9 @@ func (session *Session) suspendAndClose(ctx context.Context, request SuspendRequ
 		return Suspension{}, agentschema.ErrSessionClosed
 	}
 	session.mu.Lock()
-	if previous, found := session.controlReceipts[strings.TrimSpace(request.IdempotencyKey)]; found && (session.lastControl.Receipt.Cursor > previous.Receipt.Cursor || session.active == nil || request.RunID != "" && session.active.id != request.RunID) {
+	idempotencyKey := strings.TrimSpace(request.IdempotencyKey)
+	previous, found := session.controlReceipts[idempotencyKey]
+	if found && (session.closed || session.lastControl.Receipt.Cursor > previous.Receipt.Cursor) {
 		reason := strings.TrimSpace(request.Reason)
 		if reason == "" {
 			reason = "Agent Session suspended"
@@ -117,18 +119,23 @@ func (session *Session) suspendAndClose(ctx context.Context, request SuspendRequ
 		if runID == "" {
 			runID = previous.Receipt.RunID
 		}
-		receipt, err := session.acceptControlLocked(ctx, "suspend", runID, request.IdempotencyKey, reason)
+		receipt, err := session.acceptControlLocked(ctx, "suspend", runID, idempotencyKey, reason)
+		if err == nil && session.closed {
+			err = session.closeErr
+		}
 		session.mu.Unlock()
 		return Suspension{Session: session.Key(), RunID: runID, Status: agentschema.ResultSuspended, Receipt: receipt}, err
 	}
 	run := session.active
-	if request.RunID != "" && (run == nil || run.id != request.RunID) {
+	if !found && request.RunID != "" && (run == nil || run.id != request.RunID) {
 		session.mu.Unlock()
 		return Suspension{}, agentschema.ErrNoActiveRun
 	}
 	runID := request.RunID
 	if run != nil {
 		runID = run.id
+	} else if found && runID == "" {
+		runID = previous.Receipt.RunID
 	}
 	result := Suspension{Session: session.Key(), RunID: runID, Status: agentschema.ResultSuspended}
 	result.Receipt = session.lastControl.Receipt
@@ -137,11 +144,11 @@ func (session *Session) suspendAndClose(ctx context.Context, request SuspendRequ
 		reason = "Agent Session suspended"
 	}
 	if session.closed || session.closing {
-		if _, accepted := session.controlReceipts[request.IdempotencyKey]; !accepted {
+		if !found {
 			session.mu.Unlock()
 			return Suspension{}, agentschema.ErrSessionClosed
 		}
-		receipt, err := session.acceptControlLocked(ctx, "suspend", runID, request.IdempotencyKey, reason)
+		receipt, err := session.acceptControlLocked(ctx, "suspend", runID, idempotencyKey, reason)
 		if err != nil {
 			session.mu.Unlock()
 			return Suspension{}, err

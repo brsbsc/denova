@@ -7,6 +7,7 @@ import (
 
 	agentmodel "github.com/alfredxw/denova/agent/model"
 	"github.com/alfredxw/denova/agent/model/providers"
+	"github.com/alfredxw/denova/agent/model/providers/protocols/internal/protocolutil"
 	agentschema "github.com/alfredxw/denova/agent/schema"
 	sdk "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -21,7 +22,7 @@ func (model *ChatModel) request(input []*agentschema.Message, stream bool, opts 
 	common := agentmodel.GetCommonOptions(model.options, opts...)
 	tools := common.Tools
 	if common.ToolChoice != nil && len(common.AllowedToolNames) != 0 {
-		tools = filterTools(tools, common.AllowedToolNames)
+		tools = protocolutil.FilterTools(tools, common.AllowedToolNames)
 	}
 	requestTools, err := requestTools(tools)
 	if err != nil {
@@ -82,6 +83,9 @@ func requestMessages(messages []*agentschema.Message, compatibility Compatibilit
 		result = append(result, mapped)
 		if message.Role == agentschema.ToolRole {
 			for _, attachment := range message.Attachments {
+				if !agentschema.IsNativeImageMediaType(attachment.MediaType) {
+					continue
+				}
 				prepared, err := config.PrepareImage(attachment, imageCount)
 				if err != nil {
 					return nil, fmt.Errorf("openai request tool image %d: %w", index, err)
@@ -218,23 +222,6 @@ func requestTools(tools []*agentschema.ToolInfo) ([]sdk.ChatCompletionToolUnionP
 	return result, nil
 }
 
-func filterTools(tools []*agentschema.ToolInfo, names []string) []*agentschema.ToolInfo {
-	allowed := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		allowed[name] = struct{}{}
-	}
-	result := make([]*agentschema.ToolInfo, 0, len(tools))
-	for _, tool := range tools {
-		if tool == nil {
-			continue
-		}
-		if _, ok := allowed[tool.Name]; ok {
-			result = append(result, tool)
-		}
-	}
-	return result
-}
-
 func requestToolChoice(choice *agentmodel.ToolChoice, toolCount int, supported bool) (sdk.ChatCompletionToolChoiceOptionUnionParam, error) {
 	if choice == nil {
 		return sdk.ChatCompletionToolChoiceOptionUnionParam{}, nil
@@ -280,14 +267,14 @@ func (model *ChatModel) requestOptions(sessionKey string) []option.RequestOption
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		result = append(result, option.WithJSONSet(escapeJSONPathKey(key), extraFields[key]))
+		result = append(result, option.WithJSONSet(protocolutil.EscapeJSONPathKey(key), extraFields[key]))
 	}
 	if mapping := model.config.SessionKeyMapping; mapping != nil && sessionKey != "" {
 		switch mapping.Location {
 		case providers.SessionKeyLocationHeader:
 			result = append(result, option.WithHeader(mapping.Name, sessionKey))
 		case providers.SessionKeyLocationBody:
-			result = append(result, option.WithJSONSet(escapeJSONPathKey(mapping.Name), sessionKey))
+			result = append(result, option.WithJSONSet(protocolutil.EscapeJSONPathKey(mapping.Name), sessionKey))
 		}
 	}
 	return result
@@ -311,15 +298,4 @@ func chatResponseFormat(format *providers.OutputFormat) any {
 	}
 	result["json_schema"] = jsonSchema
 	return result
-}
-
-func escapeJSONPathKey(key string) string {
-	replacer := strings.NewReplacer(
-		`\`, `\\`,
-		`.`, `\.`,
-		`:`, `\:`,
-		`#`, `\#`,
-		`@`, `\@`,
-	)
-	return replacer.Replace(key)
 }

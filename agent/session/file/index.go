@@ -183,6 +183,9 @@ func (log *logFile) replayTailLocked(ctx context.Context, projection session.Che
 			return err
 		}
 		line, err := reader.ReadBytes('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
 		if len(line) == 0 || line[len(line)-1] != '\n' {
 			return nil
 		}

@@ -36,6 +36,9 @@ func (log *logFile) ReadRecord(ctx context.Context, revision session.Revision) (
 			return session.Record{}, fmt.Errorf("Agent record revision %d is missing", revision)
 		}
 	}
+	if location.Length <= 0 || location.Offset < 0 {
+		return session.Record{}, fmt.Errorf("Agent record revision %d has an invalid location", revision)
+	}
 	file, err := os.Open(log.path)
 	if err != nil {
 		return session.Record{}, err
@@ -44,6 +47,9 @@ func (log *logFile) ReadRecord(ctx context.Context, revision session.Revision) (
 	data := make([]byte, location.Length)
 	if _, err := file.ReadAt(data, location.Offset); err != nil {
 		return session.Record{}, err
+	}
+	if data[len(data)-1] != '\n' {
+		return session.Record{}, fmt.Errorf("Agent record revision %d transaction is incomplete", revision)
 	}
 	records, err := decodeTransaction(data[:len(data)-1], location.Previous)
 	if err != nil {

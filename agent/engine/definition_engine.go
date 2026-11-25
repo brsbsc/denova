@@ -146,6 +146,7 @@ func (engine *Engine) Run(
 		return Result{}, err
 	}
 	input.IdempotencyKey = string(request.Snapshot.CommandID)
+	request.Snapshot.Capabilities = agentschema.CloneRawStateMap(request.Snapshot.Capabilities)
 	state, err := decodeEngineTranscript(request.Snapshot.State)
 	if err != nil {
 		return Result{}, err

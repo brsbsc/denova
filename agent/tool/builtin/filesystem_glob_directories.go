@@ -62,7 +62,10 @@ func (workspace *LocalWorkspace) addGlobDirectories(
 		if err != nil {
 			return false, fmt.Errorf("enumerate glob directory %s: %w", directory, err)
 		}
-		matcher := gitignore.NewMatcher(patterns)
+		var matcher gitignore.Matcher
+		if request.Gitignore && len(patterns) > 0 {
+			matcher = gitignore.NewMatcher(patterns)
+		}
 		for _, child := range children {
 			if err := contextError(ctx); err != nil {
 				return false, err
@@ -81,7 +84,7 @@ func (workspace *LocalWorkspace) addGlobDirectories(
 			if len(childComponents) > workspace.Limits().MaxDirectoryDepth {
 				return false, fmt.Errorf("glob directory traversal exceeds depth %d under %s; narrow the path", workspace.Limits().MaxDirectoryDepth, directory)
 			}
-			if request.Gitignore && matcher.Match(childComponents, true) {
+			if matcher != nil && matcher.Match(childComponents, true) {
 				continue
 			}
 			childPath := name

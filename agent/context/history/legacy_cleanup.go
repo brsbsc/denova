@@ -69,12 +69,3 @@ type CleanupState struct {
 	UpdatedAt      time.Time            `json:"updated_at"`
 	Removed        bool                 `json:"removed,omitempty"`
 }
-
-func cloneCleanupState(state *CleanupState) *CleanupState {
-	if state == nil {
-		return nil
-	}
-	cloned := *state
-	cloned.Replacements = append([]CleanupReplacement(nil), state.Replacements...)
-	return &cloned
-}

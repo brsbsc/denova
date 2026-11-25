@@ -436,10 +436,39 @@ func cloneReflectValue(value reflect.Value) reflect.Value {
 	}
 }
 
+type indexedToolCallAccumulator struct {
+	id        string
+	callType  string
+	name      string
+	arguments strings.Builder
+	extra     map[string]any
+}
+
+type stagedIndexedToolCall struct {
+	id        string
+	callType  string
+	name      string
+	arguments strings.Builder
+	extra     map[string]any
+}
+
 // MessageAssembler incrementally applies the same strict rules as
 // ConcatMessages. A failed append does not mutate the accepted prefix.
 type MessageAssembler struct {
-	chunks []*Message
+	role                     RoleType
+	name                     string
+	toolCallID               string
+	toolName                 string
+	content                  strings.Builder
+	reasoning                strings.Builder
+	multiContent             []json.RawMessage
+	userInputMultiContent    []json.RawMessage
+	assistantGenMultiContent []json.RawMessage
+	withoutIndex             []ToolCall
+	byIndex                  map[int]*indexedToolCallAccumulator
+	indices                  []int
+	extra                    map[string]any
+	responseMeta             *ResponseMeta
 }
 
 // NewMessageAssembler returns an empty message assembler.
@@ -452,22 +481,160 @@ func (assembler *MessageAssembler) Append(chunk *Message) error {
 	if chunk == nil {
 		return fmt.Errorf("append message chunk: nil chunk")
 	}
-	candidate := append(append([]*Message(nil), assembler.chunks...), chunk)
-	if _, err := ConcatMessages(candidate); err != nil {
+	nextRole := stringRole(assembler.role)
+	if err := mergeIdentity("role", string(chunk.Role), &nextRole); err != nil {
 		return err
 	}
-	assembler.chunks = candidate
+	nextName := assembler.name
+	if err := mergeStringIdentity("name", chunk.Name, &nextName); err != nil {
+		return err
+	}
+	nextToolCallID := assembler.toolCallID
+	if err := mergeStringIdentity("tool call ID", chunk.ToolCallID, &nextToolCallID); err != nil {
+		return err
+	}
+	nextToolName := assembler.toolName
+	if err := mergeStringIdentity("tool name", chunk.ToolName, &nextToolName); err != nil {
+		return err
+	}
+
+	nextExtra := assembler.extra
+	if chunk.Extra != nil {
+		var err error
+		nextExtra, err = mergeExtraMaps(assembler.extra, chunk.Extra)
+		if err != nil {
+			return fmt.Errorf("concat message extra: %w", err)
+		}
+	}
+
+	var stagedCalls map[int]*stagedIndexedToolCall
+	var stagedOrder []int
+	if len(chunk.ToolCalls) > 0 {
+		for _, call := range chunk.ToolCalls {
+			if call.Index == nil {
+				continue
+			}
+			idx := *call.Index
+			if stagedCalls == nil {
+				stagedCalls = make(map[int]*stagedIndexedToolCall, len(chunk.ToolCalls))
+			}
+			staged, exists := stagedCalls[idx]
+			if !exists {
+				staged = &stagedIndexedToolCall{}
+				if existing := assembler.byIndex[idx]; existing != nil {
+					staged.id = existing.id
+					staged.callType = existing.callType
+					staged.name = existing.name
+					staged.extra = existing.extra
+				}
+				stagedCalls[idx] = staged
+				stagedOrder = append(stagedOrder, idx)
+			}
+			if err := mergeStringIdentity(fmt.Sprintf("tool call[%d] ID", idx), call.ID, &staged.id); err != nil {
+				return err
+			}
+			if err := mergeStringIdentity(fmt.Sprintf("tool call[%d] type", idx), call.Type, &staged.callType); err != nil {
+				return err
+			}
+			if err := mergeStringIdentity(fmt.Sprintf("tool call[%d] name", idx), call.Function.Name, &staged.name); err != nil {
+				return err
+			}
+			staged.arguments.WriteString(call.Function.Arguments)
+			if call.Extra != nil {
+				var err error
+				staged.extra, err = mergeExtraMaps(staged.extra, call.Extra)
+				if err != nil {
+					return fmt.Errorf("concat tool call[%d] extra: %w", idx, err)
+				}
+			}
+		}
+	}
+
+	assembler.role = RoleType(nextRole)
+	assembler.name = nextName
+	assembler.toolCallID = nextToolCallID
+	assembler.toolName = nextToolName
+	assembler.extra = nextExtra
+	assembler.content.WriteString(chunk.Content)
+	assembler.reasoning.WriteString(chunk.ReasoningContent)
+	if len(chunk.MultiContent) > 0 {
+		assembler.multiContent = append(assembler.multiContent, cloneRawMessages(chunk.MultiContent)...)
+	}
+	if len(chunk.UserInputMultiContent) > 0 {
+		assembler.userInputMultiContent = append(assembler.userInputMultiContent, cloneRawMessages(chunk.UserInputMultiContent)...)
+	}
+	if len(chunk.AssistantGenMultiContent) > 0 {
+		assembler.assistantGenMultiContent = append(assembler.assistantGenMultiContent, cloneRawMessages(chunk.AssistantGenMultiContent)...)
+	}
+	mergeResponseMeta(&assembler.responseMeta, chunk.ResponseMeta)
+
+	for _, call := range chunk.ToolCalls {
+		if call.Index == nil {
+			assembler.withoutIndex = append(assembler.withoutIndex, CloneToolCalls([]ToolCall{call})[0])
+		}
+	}
+	for _, idx := range stagedOrder {
+		staged := stagedCalls[idx]
+		if assembler.byIndex == nil {
+			assembler.byIndex = make(map[int]*indexedToolCallAccumulator, len(stagedOrder))
+		}
+		acc, exists := assembler.byIndex[idx]
+		if !exists {
+			acc = &indexedToolCallAccumulator{}
+			assembler.byIndex[idx] = acc
+			assembler.indices = append(assembler.indices, idx)
+		}
+		acc.id = staged.id
+		acc.callType = staged.callType
+		acc.name = staged.name
+		acc.extra = staged.extra
+		acc.arguments.WriteString(staged.arguments.String())
+	}
 	return nil
 }
 
 // Message returns the merged accepted chunks.
 func (assembler *MessageAssembler) Message() (*Message, error) {
-	return ConcatMessages(assembler.chunks)
+	result := &Message{
+		Role:                     assembler.role,
+		Name:                     assembler.name,
+		ToolCallID:               assembler.toolCallID,
+		ToolName:                 assembler.toolName,
+		Content:                  assembler.content.String(),
+		ReasoningContent:         assembler.reasoning.String(),
+		MultiContent:             cloneRawMessages(assembler.multiContent),
+		UserInputMultiContent:    cloneRawMessages(assembler.userInputMultiContent),
+		AssistantGenMultiContent: cloneRawMessages(assembler.assistantGenMultiContent),
+		Extra:                    CloneStringAnyMap(assembler.extra),
+		ResponseMeta:             cloneResponseMeta(assembler.responseMeta),
+	}
+	if len(assembler.withoutIndex) > 0 || len(assembler.indices) > 0 {
+		calls := make([]ToolCall, 0, len(assembler.withoutIndex)+len(assembler.indices))
+		calls = append(calls, CloneToolCalls(assembler.withoutIndex)...)
+		sortedIndices := append([]int(nil), assembler.indices...)
+		sort.Ints(sortedIndices)
+		for _, idx := range sortedIndices {
+			acc := assembler.byIndex[idx]
+			callIndex := idx
+			calls = append(calls, ToolCall{
+				Index: &callIndex,
+				ID:    acc.id,
+				Type:  acc.callType,
+				Function: FunctionCall{
+					Name:      acc.name,
+					Arguments: acc.arguments.String(),
+				},
+				Extra: CloneStringAnyMap(acc.extra),
+			})
+		}
+		result.ToolCalls = calls
+	}
+	return result, nil
 }
 
 // Reset discards all accepted chunks.
 func (assembler *MessageAssembler) Reset() {
-	assembler.chunks = nil
+	*assembler = MessageAssembler{}
 }
 
 // ConcatMessages merges streaming message chunks without silently resolving

@@ -709,11 +709,12 @@ func TestLocalWorkspaceGrepUsesConfiguredRipgrep(t *testing.T) {
 
 func TestGrepCursorSupportsLargeContinuationOffsets(t *testing.T) {
 	request := GrepRequest{Command: "rg dragon"}
-	cursor, err := encodeGrepCursor(grepCursorState{Offset: 50_000, Prefix: "prefix"}, request)
+	fingerprint := grepRequestFingerprint(request)
+	cursor, err := encodeGrepCursorFingerprint(grepCursorState{Offset: 50_000, Prefix: "prefix"}, fingerprint)
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err := decodeGrepCursor(cursor, request)
+	state, err := decodeGrepCursorFingerprint(cursor, fingerprint)
 	if err != nil || state.Offset != 50_000 || state.Prefix != "prefix" {
 		t.Fatalf("large continuation cursor state=%#v err=%v", state, err)
 	}
@@ -741,11 +742,12 @@ func TestSearchProjectionBudgetsEnvelopeAndRewritesCursor(t *testing.T) {
 		strings.Repeat("a", 220), strings.Repeat("b", 220), strings.Repeat("c", 220),
 		strings.Repeat("d", 220), strings.Repeat("e", 220),
 	}
+	fingerprint := grepRequestFingerprint(request)
 	result, err := searchToolResult("grep", SearchResult{Entries: entries}, 900, func(returned int) (string, error) {
-		return encodeGrepCursor(grepCursorState{
+		return encodeGrepCursorFingerprint(grepCursorState{
 			Offset: initial.Offset + returned,
 			Prefix: advanceGrepPrefix(initial.Prefix, entries[:returned]),
-		}, request)
+		}, fingerprint)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -762,7 +764,7 @@ func TestSearchProjectionBudgetsEnvelopeAndRewritesCursor(t *testing.T) {
 	if err := json.Unmarshal([]byte(parts[0]), &envelope); err != nil {
 		t.Fatal(err)
 	}
-	state, err := decodeGrepCursor(envelope.Limits.NextCursor, request)
+	state, err := decodeGrepCursorFingerprint(envelope.Limits.NextCursor, fingerprint)
 	if err != nil {
 		t.Fatal(err)
 	}

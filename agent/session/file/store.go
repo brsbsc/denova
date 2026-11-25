@@ -96,14 +96,23 @@ func (store *Store) Open(ctx context.Context, key session.Key) (session.Log, err
 }
 
 func (store *Store) OpenReader(ctx context.Context, key session.Key) (session.Log, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	if store == nil || store.root == "" {
+		return nil, errors.New("agent Session file Store is nil")
 	}
-	base, _, err := store.baseForKey(key)
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+	key, err := session.NormalizeKey(key)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := os.Stat(base + ".manifest.json"); err != nil {
+	base, digest, err := store.baseForKey(key)
+	if err != nil {
+		return nil, err
+	}
+	if err := verifyManifest(base+".manifest.json", key, digest); err != nil {
 		return nil, err
 	}
 	return &logFile{path: base + ".jsonl", readOnly: true}, nil
@@ -172,7 +181,7 @@ func (store *Store) Delete(ctx context.Context, key session.Key) error {
 		return err
 	}
 	defer release()
-	for _, path := range []string{base + ".jsonl", base + ".manifest.json", base + ".idx.json", base + ".idx.json.current"} {
+	for _, path := range []string{base + ".manifest.json", base + ".jsonl", base + ".idx.json", base + ".idx.json.current"} {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("delete Agent Session file: %w", err)
 		}
@@ -384,6 +393,9 @@ func (log *logFile) replayLocked(ctx context.Context, apply func(session.Record)
 			}
 		}
 		line, readErr := reader.ReadBytes('\n')
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return stats, readErr
+		}
 		if len(line) == 0 && errors.Is(readErr, io.EOF) {
 			break
 		}
@@ -459,28 +471,36 @@ func (log *logFile) Close() error {
 	return log.closeErr
 }
 
+func verifyManifest(path string, key session.Key, digest [sha256.Size]byte) error {
+	existing, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var got manifest
+	if json.Unmarshal(existing, &got) != nil || got.Version != formatVersion || got.KeySHA256 != hex.EncodeToString(digest[:]) {
+		return errors.New("Agent Session manifest does not match Session identity")
+	}
+	gotKey, err := session.CanonicalKey(got.Key)
+	if err != nil {
+		return errors.New("Agent Session manifest does not match Session identity")
+	}
+	wantKey, err := session.CanonicalKey(key)
+	if err != nil {
+		return err
+	}
+	if gotKey != wantKey {
+		return errors.New("Agent Session manifest does not match Session identity")
+	}
+	return nil
+}
+
 func ensureManifest(path string, key session.Key, digest [sha256.Size]byte) error {
-	want := manifest{Version: formatVersion, KeySHA256: hex.EncodeToString(digest[:]), Key: key}
-	if existing, err := os.ReadFile(path); err == nil {
-		var got manifest
-		if json.Unmarshal(existing, &got) != nil || got.Version != want.Version || got.KeySHA256 != want.KeySHA256 {
-			return errors.New("Agent Session manifest does not match Session identity")
-		}
-		gotKey, err := session.CanonicalKey(got.Key)
-		if err != nil {
-			return errors.New("Agent Session manifest does not match Session identity")
-		}
-		wantKey, err := session.CanonicalKey(want.Key)
-		if err != nil {
-			return err
-		}
-		if gotKey != wantKey {
-			return errors.New("Agent Session manifest does not match Session identity")
-		}
+	if err := verifyManifest(path, key, digest); err == nil {
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	want := manifest{Version: formatVersion, KeySHA256: hex.EncodeToString(digest[:]), Key: key}
 	encoded, err := json.Marshal(want)
 	if err != nil {
 		return err

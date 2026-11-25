@@ -7,6 +7,8 @@ import (
 	"runtime/debug"
 
 	agentmodel "github.com/alfredxw/denova/agent/model"
+	"github.com/alfredxw/denova/agent/model/providers"
+	"github.com/alfredxw/denova/agent/model/providers/protocols/internal/protocolutil"
 	agentstream "github.com/alfredxw/denova/agent/model/stream"
 	agentschema "github.com/alfredxw/denova/agent/schema"
 	"github.com/openai/openai-go/v3/option"
@@ -22,7 +24,7 @@ func (model *ChatModel) Generate(ctx context.Context, input []*agentschema.Messa
 	requestOptions = append(requestOptions, option.WithResponseInto(&rawResponse))
 	response, err := model.client.Responses.New(ctx, params, requestOptions...)
 	if err != nil {
-		return nil, modelCallError(ctx, err)
+		return nil, protocolutil.ModelCallError(ctx, err, adaptAPIError)
 	}
 	if err := responseFailure(response, rawResponse); err != nil {
 		return nil, err
@@ -45,7 +47,7 @@ func (model *ChatModel) Stream(ctx context.Context, input []*agentschema.Message
 	providerStream := model.client.Responses.NewStreaming(ctx, params, requestOptions...)
 	if err := providerStream.Err(); err != nil {
 		_ = providerStream.Close()
-		return nil, modelCallError(ctx, err)
+		return nil, protocolutil.ModelCallError(ctx, err, adaptAPIError)
 	}
 
 	reader, writer := agentstream.Pipe[*agentschema.Message](1)
@@ -70,7 +72,16 @@ func (model *ChatModel) Stream(ctx context.Context, input []*agentschema.Message
 			}
 		}
 		if err := providerStream.Err(); err != nil {
-			writer.Send(nil, modelCallError(ctx, err))
+			writer.Send(nil, protocolutil.ModelCallError(ctx, err, adaptAPIError))
+			return
+		}
+		if !state.completed {
+			writer.Send(nil, &providers.APIError{
+				RequestID: responseRequestID(rawResponse),
+				Kind:      "server_error",
+				InStream:  true,
+				Message:   "openai responses stream ended before terminal response event",
+			})
 		}
 	}()
 	return reader, nil
@@ -83,11 +94,4 @@ func (model *ChatModel) WithTools(tools []*agentschema.ToolInfo) (agentmodel.Too
 	clone := *model
 	clone.options = agentmodel.GetCommonOptions(model.options, agentmodel.WithTools(tools))
 	return &clone, nil
-}
-
-func modelCallError(ctx context.Context, err error) error {
-	if ctx != nil && ctx.Err() != nil {
-		return ctx.Err()
-	}
-	return adaptAPIError(err)
 }

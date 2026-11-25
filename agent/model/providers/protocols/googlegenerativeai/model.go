@@ -6,6 +6,7 @@ import (
 	"runtime/debug"
 
 	agentmodel "github.com/alfredxw/denova/agent/model"
+	"github.com/alfredxw/denova/agent/model/providers/protocols/internal/protocolutil"
 	agentstream "github.com/alfredxw/denova/agent/model/stream"
 	agentschema "github.com/alfredxw/denova/agent/schema"
 )
@@ -18,7 +19,7 @@ func (model *ChatModel) Generate(ctx context.Context, input []*agentschema.Messa
 	}
 	response, err := model.client.Models.GenerateContent(ctx, model.config.Model, contents, config)
 	if err != nil {
-		return nil, modelCallError(ctx, err)
+		return nil, protocolutil.ModelCallError(ctx, err, adaptAPIError)
 	}
 	return responseMessage(response, model.config)
 }
@@ -44,7 +45,7 @@ func (model *ChatModel) Stream(ctx context.Context, input []*agentschema.Message
 		state := &streamState{}
 		for response, streamErr := range sequence {
 			if streamErr != nil {
-				writer.Send(nil, modelCallError(ctx, streamErr))
+				writer.Send(nil, protocolutil.ModelCallError(ctx, streamErr, adaptAPIError))
 				return
 			}
 			messages, err := state.convert(response, model.config)
@@ -77,11 +78,4 @@ func (model *ChatModel) WithTools(tools []*agentschema.ToolInfo) (agentmodel.Too
 	clone := *model
 	clone.options = agentmodel.GetCommonOptions(model.options, agentmodel.WithTools(tools))
 	return &clone, nil
-}
-
-func modelCallError(ctx context.Context, err error) error {
-	if ctx != nil && ctx.Err() != nil {
-		return ctx.Err()
-	}
-	return adaptAPIError(err)
 }
