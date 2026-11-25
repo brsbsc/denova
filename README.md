@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  当前版本：<strong>v0.8.0</strong>（2026-11-22） · Beta · <a href="https://github.com/BRSBSC/denova/releases">下载最新版本</a>
+  当前版本：<strong>v0.8.0fix1</strong>（2026-11-25） · Beta · <a href="https://github.com/BRSBSC/denova/releases">下载最新版本</a>
 </p>
 
 > [!NOTE]
@@ -85,7 +85,7 @@ Denova 把小说写作、互动故事、结构化资料库、AI Agent、图像�
 
 ### Docker 部署（推荐）
 
-本 fork 发布 `ghcr.io/brsbsc/denova` 镜像，支持 `linux/amd64` 与 `linux/arm64`。标签 `latest` 指向最新版本，也可以固定为具体版本（例如 `v0.8.0`）。镜像内置 Bash、Git、curl、Python 和 ripgrep，不包含其他语言工具链或外部 Agent CLI。
+本 fork 发布 `ghcr.io/brsbsc/denova` 镜像，支持 `linux/amd64` 与 `linux/arm64`。标签 `latest` 指向最新版本，也可以固定为具体版本（例如 `v0.8.0fix1`）。镜像内置 Bash、Git、curl、Python 和 ripgrep，不包含其他语言工具链或外部 Agent CLI。
 
 容器需要首次登录账号：`DENOVA_USERNAME` 和 `DENOVA_PASSWORD`（密码 1–72 个 UTF-8 字节）。它们只在数据目录还没有 `config.toml` 时生效，之后改密码请在应用设置中操作。
 
@@ -173,7 +173,7 @@ v0.7.0、v0.7.1 桌面版需手动安装本版一次，以切换自动更新通�
 macOS 和 Linux 可以使用一键安装脚本：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BRSBSC/denova/v0.8.0/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/BRSBSC/denova/v0.8.0fix1/scripts/install.sh | sh
 ```
 
 安装完成后运行 `denova`。Windows 用户以及希望手动安装的用户，可以从 [GitHub Releases](https://github.com/BRSBSC/denova/releases) 下载对应平台的压缩包；Windows 运行 `denova.exe`。

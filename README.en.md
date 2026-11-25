@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  Current version: <strong>v0.8.0</strong> (2026-11-22) · Beta · <a href="https://github.com/BRSBSC/denova/releases">Download the latest release</a>
+  Current version: <strong>v0.8.0fix1</strong> (2026-11-25) · Beta · <a href="https://github.com/BRSBSC/denova/releases">Download the latest release</a>
 </p>
 
 > [!NOTE]
@@ -85,7 +85,7 @@ Lore, Creative Setups, Skills, and version management are shared between the two
 
 ### Docker (Recommended)
 
-This fork publishes the `ghcr.io/brsbsc/denova` image for `linux/amd64` and `linux/arm64`. The `latest` tag follows the newest release; you can also pin a version such as `v0.8.0`. The image includes Bash, Git, curl, Python, and ripgrep, but no other language toolchains or external Agent CLIs.
+This fork publishes the `ghcr.io/brsbsc/denova` image for `linux/amd64` and `linux/arm64`. The `latest` tag follows the newest release; you can also pin a version such as `v0.8.0fix1`. The image includes Bash, Git, curl, Python, and ripgrep, but no other language toolchains or external Agent CLIs.
 
 The container needs a first-login account: `DENOVA_USERNAME` and `DENOVA_PASSWORD` (1–72 UTF-8 bytes). They only apply while the data directory has no `config.toml`; change the password in the app's settings afterwards.
 
@@ -173,7 +173,7 @@ Run the downloaded program on your computer or server, then open its address in 
 On macOS and Linux, run the installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BRSBSC/denova/v0.8.0/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/BRSBSC/denova/v0.8.0fix1/scripts/install.sh | sh
 ```
 
 Run `denova` after installation. Windows users and anyone who prefers manual installation can download the archive for their platform from [GitHub Releases](https://github.com/BRSBSC/denova/releases); on Windows, run `denova.exe`.

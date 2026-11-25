@@ -4,11 +4,41 @@ Denova 仅在此记录用户可感知的重大功能、重要不兼容或数据�
 
 Denova records only major user-visible features, important compatibility or data changes, security updates, and fixes affecting core workflows. Internal refactors, test changes, copy edits, and minor UI polish are omitted; see the [Git history](https://github.com/alfredxw/denova/commits/master) for full details.
 
-`Unreleased` 以最近一个已发布版本（当前为 v0.8.0）为比较基线，只描述升级用户最终可感知的净变化；内部接口、实现重构和 v0.5.1 后从未发布的中间格式不计入。
+`Unreleased` 以最近一个已发布版本（当前为 v0.8.0fix1）为比较基线，只描述升级用户最终可感知的净变化；内部接口、实现重构和 v0.5.1 后从未发布的中间格式不计入。
 
-`Unreleased` compares against the latest release (currently v0.8.0) and describes only the final user-visible delta. Internal APIs, implementation refactors, and intermediate formats never released after v0.5.1 are excluded.
+`Unreleased` compares against the latest release (currently v0.8.0fix1) and describes only the final user-visible delta. Internal APIs, implementation refactors, and intermediate formats never released after v0.5.1 are excluded.
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)。
+
+## [v0.8.0fix1] - 2026-11-25
+
+### Brief / 简要说明
+
+#### 中文
+
+- 加固仅限宿主机执行的平台管理接口校验，防止通过反向代理转发头或 DNS Rebinding 绕过本机限制。
+- 修复本 fork 一键安装脚本下载地址、思考过程展开偏好冲突、更新说明对 `fixN` 补丁版本与 fork 发布页链接的支持，以及 OpenAI Responses 流内未分类错误未触发重试的问题。
+
+#### English
+
+- Hardens host-only platform management endpoint checks against reverse-proxy forwarded host headers and DNS rebinding.
+- Fixes fork `install.sh` release downloads, duplicate thinking-expansion preferences, update notes for `fixN` hotfix versions and fork fallback links, and retries for unclassified OpenAI Responses in-stream errors.
+
+### Security / 安全
+
+- 加固仅限宿主机执行的平台管理接口校验，完整检查请求来源与 `Host` / `X-Forwarded-Host` 请求头，防止通过反向代理转发或 DNS Rebinding 绕过本机限制。
+- Hardens host-only platform management endpoints by enforcing full local-request checks across client addresses and `Host` / `X-Forwarded-Host` headers, preventing bypasses via reverse proxies or DNS rebinding.
+
+### Fixed / 修复
+
+- 本 fork 的 `scripts/install.sh` 默认从 `brsbsc/denova` 下载并校验安装包，同时支持通过 `DENOVA_REPOSITORY` 覆盖目标仓库。
+- Points this fork's `scripts/install.sh` installer to `brsbsc/denova` by default while supporting explicit repository overrides via `DENOVA_REPOSITORY`.
+- 将思考过程自动展开收口到 `agent_trace_display` 偏好中，保留旧版 `auto_expand_thinking` 配置的向后兼容，并在会话流重连期间保留用户手动展开状态。
+- Consolidates thinking auto-expansion into `agent_trace_display` while keeping legacy `auto_expand_thinking` fallback compatibility, and preserves manual expansion across live stream reattach.
+- 更新说明现可正确解析与比较 `fixN` 补丁版本，且加载失败时的兜底发布页链接指向本 fork 仓库。
+- Upgrade notes now parse and compare `fixN` hotfix versions properly, and fallback release links on load failure point to this fork's repository.
+- 修复 OpenAI Responses 协议流内返回未分类错误时未触发流内重试的问题，同时继续对不可重试错误立即停止。
+- Retries unclassified errors returned inside OpenAI Responses streams while continuing to stop immediately on permanent errors.
 
 ## [v0.8.0] - 2026-11-22
 
