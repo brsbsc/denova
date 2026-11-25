@@ -49,13 +49,18 @@ func (s *Store) boundedStorySnapshotWithLimitLocked(storyID, branchID string, li
 }
 
 func (s *Store) storySnapshotForViewLocked(storyID, branchID string, limit int, view storyHistoryView) (StoryMeta, Snapshot, error) {
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return StoryMeta{}, Snapshot{}, err
+	}
 	release, err := s.acquireStoryReadLeaseLocked(storyID)
 	if err != nil {
 		return StoryMeta{}, Snapshot{}, err
 	}
 	defer release()
 
-	handle, err := s.refreshStoryJournalLocked(storyID, true)
+	handle, err := s.refreshStoryJournalLocked(storyID, true, true)
 	if err != nil {
 		return StoryMeta{}, Snapshot{}, err
 	}
@@ -161,16 +166,6 @@ func cloneStorySnapshotCache(meta StoryMeta, snapshot Snapshot) (StoryMeta, Snap
 	return cloned.Meta, cloned.Snapshot, nil
 }
 
-func findEventBranch(lines []StoryEventRecord, eventID string) (string, bool) {
-	for _, record := range lines {
-		if record.Envelope.ID != eventID {
-			continue
-		}
-		return record.Envelope.BranchID, record.Envelope.BranchID != ""
-	}
-	return "", false
-}
-
 func branchIsTerminal(lines []StoryEventRecord, head string) bool {
 	turn := latestTurnForBranchHead(lines, head)
 	return turn != nil && turn.TerminalOutcome != nil && turn.TerminalOutcome.Terminal
@@ -179,38 +174,6 @@ func branchIsTerminal(lines []StoryEventRecord, head string) bool {
 func stateFromPath(path []StoryEventRecord) map[string]any {
 	state := initialStoryState()
 	for _, record := range path {
-		switch record.Envelope.Type {
-		case StoryEventTypeStateDelta:
-			var delta StateDeltaEvent
-			if err := mapToStruct(record.Raw, &delta); err == nil {
-				for _, op := range delta.Ops {
-					applyStateOp(state, op)
-				}
-				for _, op := range delta.ActorOps {
-					applyActorStateOp(state, op)
-				}
-			}
-		case StoryEventTypeTurn:
-			var turn TurnEvent
-			if err := mapToStruct(record.Raw, &turn); err == nil && turn.StateDelta != nil {
-				for _, op := range turn.StateDelta.Ops {
-					applyStateOp(state, op)
-				}
-				for _, op := range turn.StateDelta.ActorOps {
-					applyActorStateOp(state, op)
-				}
-			}
-		}
-	}
-	return state
-}
-
-func stateBeforeTurn(path []StoryEventRecord, turnID string) map[string]any {
-	state := initialStoryState()
-	for _, record := range path {
-		if record.Envelope.ID == turnID {
-			break
-		}
 		switch record.Envelope.Type {
 		case StoryEventTypeStateDelta:
 			var delta StateDeltaEvent

@@ -35,6 +35,11 @@ type legacyStoryCompactionInspection struct {
 // the current projection sees the journal. Detection is the migration receipt:
 // a successful rewrite contains no released event and is therefore idempotent.
 func (s *Store) migrateReleasedStoryCompactionJournal(storyID string) (bool, error) {
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return false, err
+	}
 	required, err := s.releasedStoryCompactionMigrationRequired()
 	if err != nil {
 		return false, err
@@ -53,6 +58,11 @@ func (s *Store) migrateReleasedStoryCompactionJournal(storyID string) (bool, err
 	if inspection.hasTransactions {
 		return false, fmt.Errorf("released story compaction migration does not accept a mixed transaction journal: %s", path)
 	}
+	releaseWrite, err := s.acquireStoryMutationLeaseLocked(storyID)
+	if err != nil {
+		return false, err
+	}
+	defer releaseWrite()
 	resolvedParents, err := resolveReleasedStoryCompactionParents(inspection.parentsByEventID)
 	if err != nil {
 		return false, fmt.Errorf("resolve released story compaction ancestry: %w", err)
@@ -292,11 +302,10 @@ func reconnectReleasedStoryBranches(meta map[string]any, removed, resolved map[s
 }
 
 func (s *Store) backupReleasedStoryCompactionJournal(sourcePath string) (string, error) {
-	dataRoot := strings.TrimSpace(s.novaDir)
-	if dataRoot == "" {
-		dataRoot = filepath.Join(s.root, ".denova")
+	backupRoot := filepath.Join(s.storyDir(), "migrations", legacyStoryCompactionMigrationName)
+	if dataRoot := strings.TrimSpace(s.novaDir); dataRoot != "" {
+		backupRoot = filepath.Join(dataRoot, "backups", legacyStoryCompactionMigrationName)
 	}
-	backupRoot := filepath.Join(dataRoot, "backups", legacyStoryCompactionMigrationName)
 	if err := os.MkdirAll(backupRoot, 0o700); err != nil {
 		return "", err
 	}

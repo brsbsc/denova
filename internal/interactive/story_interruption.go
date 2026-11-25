@@ -108,7 +108,7 @@ func (s *Store) PendingTurnInterruption(storyID, branchID string) (*TurnInterrup
 		return nil, err
 	}
 	defer release()
-	handle, err := s.refreshStoryJournalLocked(storyID, true)
+	handle, err := s.refreshStoryJournalLocked(storyID, true, true)
 	if err != nil {
 		return nil, err
 	}

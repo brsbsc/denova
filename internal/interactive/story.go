@@ -43,14 +43,19 @@ type Store struct {
 	lastStoryReplayByStory  map[string]StoryJournalReplayStats
 	storyProjectionFailures map[string]error
 	heldStoryLeases         map[string]int
+	heldStoryWriteLeases    map[string]int
+	storyLeaseReleases      map[string]func() error
+	heldIndexLeases         int
+	indexLeaseRelease       func() error
 	storyJournals           map[string]*storyJournalHandle
 }
 
 type storyJournalHandle struct {
-	journal    *conversationjournal.Journal
-	projection *storyJournalProjection
-	recent     map[string]storyRecentCache
-	snapshots  map[storySnapshotCacheKey]storySnapshotCache
+	journal         *conversationjournal.Journal
+	projection      *storyJournalProjection
+	migratingPreset bool
+	recent          map[string]storyRecentCache
+	snapshots       map[storySnapshotCacheKey]storySnapshotCache
 }
 
 type storyRecentCache struct {

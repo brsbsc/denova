@@ -153,19 +153,8 @@ func (s *Store) DeleteInScopeIfRevision(scope, id, expectedRevision string) erro
 			if tasks[index].ArchivedAt != nil {
 				return true, nil
 			}
-			entries, listErr := location.store.readDurableRunObligations(location.scope)
-			if listErr != nil {
-				return false, listErr
-			}
-			for _, entry := range entries {
-				if durableRunMatchesTask(entry, tasks[index]) && RunHasRuntimeObligation(entry.Run) {
-					return false, fmt.Errorf("%w: task_id=%s run_id=%s", ErrTaskHasActiveRun, tasks[index].CatalogID, entry.Run.ID)
-				}
-			}
-			for _, run := range tasks[index].RecentRuns {
-				if RunHasRuntimeObligation(run) {
-					return false, fmt.Errorf("%w: task_id=%s run_id=%s", ErrTaskHasActiveRun, tasks[index].CatalogID, run.ID)
-				}
+			if err := location.store.ensureNoActiveDurableRuns(location.scope, tasks[index]); err != nil {
+				return false, err
 			}
 			now := time.Now().UTC()
 			tasks[index].Enabled = false

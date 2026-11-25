@@ -233,13 +233,17 @@ func (s *Service) evaluateClaimedSemanticTrigger(
 		if summary == "" {
 			summary = fmt.Sprintf("Semantic condition matched: %s", record.Condition)
 		}
+		targetIdentity := strings.TrimSpace(record.ProjectID)
+		if targetIdentity == "" {
+			targetIdentity = canonicalAutomationWorkspace(record.Workspace)
+		}
 		canonical := automation.TriggerMatch{
 			TaskID:      record.TaskID,
 			TriggerID:   record.TriggerID,
 			Title:       title,
 			Summary:     summary,
 			Evidence:    record.Context.Evidence,
-			Fingerprint: automation.EvidenceFingerprint(record.Scope, record.Workspace, record.TaskID, record.TriggerID, record.Condition, record.ObservationFingerprint, evaluation.Reason),
+			Fingerprint: automation.EvidenceFingerprint(record.Scope, targetIdentity, record.TaskID, record.TriggerID, record.Condition, record.ObservationFingerprint, evaluation.Reason),
 		}
 		match = &canonical
 	}
@@ -263,6 +267,11 @@ func (s *Service) reconcileDurableTriggerAction(
 	item := automation.TriggerInboxItem{}
 	if plan.InboxID != "" {
 		status := automation.InboxStatusPending
+		runID := ""
+		if plan.RunID != "" {
+			status = automation.InboxStatusAutoRun
+			runID = plan.RunID
+		}
 		var created bool
 		var err error
 		item, created, err = store.EnsureInboxItem(ctx, automation.TriggerInboxItem{
@@ -272,6 +281,7 @@ func (s *Service) reconcileDurableTriggerAction(
 			Scope:        record.Scope,
 			ProjectID:    record.ProjectID,
 			Workspace:    record.Workspace,
+			RunID:        runID,
 			Status:       status,
 			ActionPolicy: plan.ActionPolicy,
 			NotifyPolicy: plan.NotifyPolicy,
@@ -287,6 +297,8 @@ func (s *Service) reconcileDurableTriggerAction(
 		}
 		if created {
 			visibleItem = item
+		} else if (item.Status == automation.InboxStatusConfirmed || item.Status == automation.InboxStatusDismissed) && item.RunID != plan.RunID {
+			return visibleItem, automation.RunResult{}, true, nil
 		}
 	}
 	if plan.RunID == "" {
@@ -316,7 +328,7 @@ func (s *Service) reconcileDurableTriggerAction(
 					visibleItem = failed
 				}
 			}
-			return visibleItem, automation.RunResult{}, false, fmt.Errorf("%w: %w", errDurableTriggerActionRetry, startErr)
+			return visibleItem, automation.RunResult{Task: task, Run: startedRun}, true, nil
 		} else {
 			return visibleItem, automation.RunResult{}, false, fmt.Errorf("%w: %w", errDurableTriggerActionRetry, startErr)
 		}
@@ -345,6 +357,9 @@ func runTriggerForEvaluation(record automation.TriggerEvaluationRecord) string {
 }
 
 func enabledSemanticTrigger(task automation.Task, triggerID string) (automation.TriggerDefinition, bool) {
+	if !task.Enabled || task.ArchivedAt != nil {
+		return automation.TriggerDefinition{}, false
+	}
 	for _, trigger := range task.Triggers {
 		if trigger.ID == triggerID && trigger.Enabled && trigger.Type == automation.TriggerTypeSemantic {
 			return trigger, true

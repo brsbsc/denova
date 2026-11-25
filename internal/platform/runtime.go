@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -409,15 +410,14 @@ func (m *Manager) stopLocked(ctx context.Context, id string) error {
 func (m *Manager) Close(ctx context.Context) error {
 	m.runtimeMu.Lock()
 	defer m.runtimeMu.Unlock()
+	var closeErr error
 	for id := range m.runtimes {
-		if err := m.stopLocked(ctx, id); err != nil {
-			return err
-		}
+		closeErr = errors.Join(closeErr, m.stopLocked(ctx, id))
 	}
 	if m.agents != nil {
-		return m.agents.Close(ctx)
+		closeErr = errors.Join(closeErr, m.agents.Close(ctx))
 	}
-	return nil
+	return closeErr
 }
 
 func (r *Runtime) close(ctx context.Context) error {

@@ -16,10 +16,23 @@ import (
 	"denova/internal/localfs"
 )
 
-func (s *Store) openStoryJournalLocked(storyID string) (*storyJournalHandle, error) {
-	storyID = strings.TrimSpace(storyID)
+func (s *Store) openStoryJournalLocked(storyID string, allowMigrate bool) (*storyJournalHandle, error) {
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return nil, err
+	}
 	if s.storyJournals != nil {
 		if handle := s.storyJournals[storyID]; handle != nil {
+			if allowMigrate && !handle.migratingPreset && strings.TrimSpace(handle.projection.Meta.StoryDirectorID) != "" {
+				handle.migratingPreset = true
+				meta := handle.projection.Meta
+				err := s.migrateReleasedGamePresetLocked(storyID, &meta)
+				handle.migratingPreset = false
+				if err != nil {
+					return nil, err
+				}
+			}
 			return handle, nil
 		}
 	}
@@ -28,8 +41,10 @@ func (s *Store) openStoryJournalLocked(storyID string) (*storyJournalHandle, err
 		return nil, err
 	}
 	defer releaseStory()
-	if _, err := s.migrateReleasedStoryCompactionJournal(storyID); err != nil {
-		return nil, err
+	if allowMigrate {
+		if _, err := s.migrateReleasedStoryCompactionJournal(storyID); err != nil {
+			return nil, err
+		}
 	}
 	meta, err := readStoryJournalHeader(s.storyPath(storyID))
 	if err != nil {
@@ -59,9 +74,12 @@ func (s *Store) openStoryJournalLocked(storyID string) (*storyJournalHandle, err
 		s.storyJournals = make(map[string]*storyJournalHandle)
 	}
 	s.storyJournals[storyID] = handle
-	if strings.TrimSpace(handle.projection.Meta.StoryDirectorID) != "" {
+	if allowMigrate && strings.TrimSpace(handle.projection.Meta.StoryDirectorID) != "" {
+		handle.migratingPreset = true
 		meta := handle.projection.Meta
-		if err := s.migrateReleasedGamePresetLocked(storyID, &meta); err != nil {
+		err := s.migrateReleasedGamePresetLocked(storyID, &meta)
+		handle.migratingPreset = false
+		if err != nil {
 			delete(s.storyJournals, storyID)
 			_ = journal.Close()
 			return nil, err
@@ -96,8 +114,13 @@ func readStoryJournalHeader(path string) (StoryMeta, error) {
 	return meta, nil
 }
 
-func (s *Store) readStoryConversationJournalLocked(storyID string, repairTornTail bool) (StoryMeta, []StoryEventRecord, error) {
-	handle, err := s.refreshStoryJournalLocked(storyID, repairTornTail)
+func (s *Store) readStoryConversationJournalLocked(storyID string, allowMigrate, repairTornTail bool) (StoryMeta, []StoryEventRecord, error) {
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return StoryMeta{}, nil, err
+	}
+	handle, err := s.refreshStoryJournalLocked(storyID, allowMigrate, repairTornTail)
 	if err != nil {
 		return StoryMeta{}, nil, err
 	}
@@ -105,8 +128,8 @@ func (s *Store) readStoryConversationJournalLocked(storyID string, repairTornTai
 	if err != nil {
 		// A maintenance rewrite may replace the canonical file behind a cached
 		// handle. Reopen once; incarnation validation remains authoritative.
-		delete(s.storyJournals, storyID)
-		handle, err = s.openStoryJournalLocked(storyID)
+		_ = s.evictStoryJournalLocked(storyID)
+		handle, err = s.openStoryJournalLocked(storyID, allowMigrate)
 		if err != nil {
 			return StoryMeta{}, nil, err
 		}
@@ -150,16 +173,21 @@ func (s *Store) readStoryConversationJournalLocked(storyID string, repairTornTai
 	return meta, events, nil
 }
 
-func (s *Store) refreshStoryJournalLocked(storyID string, repairTornTail bool) (*storyJournalHandle, error) {
-	handle, err := s.openStoryJournalLocked(storyID)
+func (s *Store) refreshStoryJournalLocked(storyID string, allowMigrate, repairTornTail bool) (*storyJournalHandle, error) {
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return nil, err
+	}
+	handle, err := s.openStoryJournalLocked(storyID, allowMigrate)
 	if err != nil {
 		return nil, err
 	}
 	// Refresh first so a complete transaction appended through another handle
 	// is distinguished from an incomplete physical tail.
 	if _, refreshErr := handle.journal.ReadRange(context.Background(), conversationjournal.Range{After: handle.journal.Head().Cursor}); refreshErr != nil {
-		delete(s.storyJournals, storyID)
-		handle, err = s.openStoryJournalLocked(storyID)
+		_ = s.evictStoryJournalLocked(storyID)
+		handle, err = s.openStoryJournalLocked(storyID, allowMigrate)
 		if err != nil {
 			return nil, err
 		}
@@ -176,6 +204,11 @@ func (s *Store) refreshStoryJournalLocked(storyID string, repairTornTail bool) (
 	if !repairTornTail {
 		return nil, fmt.Errorf("故事 journal 存在不完整尾行: verified=%d actual=%d", head.VerifiedBytes, info.Size())
 	}
+	releaseWrite, err := s.acquireStoryMutationLeaseLocked(storyID)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseWrite()
 	if err := backupStoryBeforeTailRepair(path); err != nil {
 		return nil, err
 	}

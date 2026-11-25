@@ -35,7 +35,6 @@ type Candidate struct {
 	Files    []string      `json:"files"`
 	Bytes    int           `json:"bytes"`
 	files    map[string][]byte
-	replaces *ReleaseRef
 }
 
 // Manager owns package and instance mutations. Runtime handles and candidate
@@ -342,9 +341,6 @@ func (m *Manager) Install(candidateID string, grants []string) (Release, error) 
 		return Release{}, err
 	}
 	index := slices.IndexFunc(items, func(item Installed) bool { return item.ID == manifest.ID })
-	if candidate.replaces != nil && (index < 0 || items[index].Removed || items[index].CurrentRelease != candidate.replaces.ReleaseID) {
-		return Release{}, failure("DOCUMENT_CONFLICT", "Installed package changed while its update was being reviewed")
-	}
 	if candidate.Kind == Plugin {
 		if err := validatePluginToolNames(items, manifest); err != nil {
 			return Release{}, err

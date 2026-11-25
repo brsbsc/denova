@@ -90,14 +90,6 @@ func defaultEventCardMarkdown(event DirectorEvent) string {
 %s`, details.Trigger, details.Fusion, details.Logic, details.Payoff, details.RewardCost, details.Guardrail))
 }
 
-func normalizeOrchestrationOption(value, fallback string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return fallback
-	}
-	return value
-}
-
 func normalizeEventPackagesNoDefault(packages []EventPackage) []EventPackage {
 	if packages == nil {
 		return []EventPackage{}

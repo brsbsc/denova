@@ -14,6 +14,11 @@ func (s *Store) StoryContextAtTurnParent(storyID, branchID, turnID string) (Stor
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return StoryContext{}, err
+	}
 	meta, lines, err := s.readStoryRecentLocked(storyID, branchID)
 	if err != nil {
 		return StoryContext{}, err
@@ -25,10 +30,11 @@ func (s *Store) StoryContextAtTurnParent(storyID, branchID, turnID string) (Stor
 	if !ok {
 		return StoryContext{}, fmt.Errorf("分支不存在: %s", branchID)
 	}
-	if err := requireLatestLogicalTurn(meta, lines, branchID, strings.TrimSpace(turnID)); err != nil {
+	targetTurnID := strings.TrimSpace(turnID)
+	if err := requireLatestLogicalTurn(meta, lines, branchID, targetTurnID); err != nil {
 		return StoryContext{}, err
 	}
-	parentID, err := regenerationParentOnCurrentPath(lines, branch.Head, strings.TrimSpace(turnID))
+	parentID, err := regenerationParentOnCurrentPath(lines, branch.Head, targetTurnID)
 	if err != nil {
 		return StoryContext{}, err
 	}
@@ -38,13 +44,23 @@ func (s *Store) StoryContextAtTurnParent(storyID, branchID, turnID string) (Stor
 	if err != nil {
 		return StoryContext{}, err
 	}
-	if projection, projectionErr := s.storyBranchProjectionLocked(storyID, branchID); projectionErr == nil {
-		snapshot.State = cloneStoryState(projection.StateBeforeLatest)
-		if projection.Depth > 0 {
-			snapshot.TurnCount = projection.Depth - 1
-		}
-		snapshot.BranchPlan = cloneBranchPlan(projection.PlanBeforeLatest)
+	parentState, parentPlan, parentDepth, _, err := s.stateAndPlanBeforeTurnLocked(storyID, branchID, targetTurnID, parentID)
+	if err != nil {
+		return StoryContext{}, err
 	}
+	snapshot.State = parentState
+	snapshot.TurnCount = parentDepth
+	snapshot.BranchPlan = parentPlan
+	initializeActors := true
+	if storyStateSchemaPolicyRequiresOpeningDraft(meta.StateSchemaPolicy) && meta.StateSchemaInitialization != nil && meta.StateSchemaInitialization.Status == StateSchemaInitializationWaitingOpening {
+		initializeActors = false
+	}
+	if initializeActors {
+		if err := applyFrozenMissingInitialActors(snapshot.State, meta.ActorStateSchema); err != nil {
+			return StoryContext{}, fmt.Errorf("补全冻结初始 Actor 失败: %w", err)
+		}
+	}
+	applyLegacyActorStateAliases(snapshot.State, meta.ActorStateSchema)
 	// This historical parent is a distinct canonical model-history revision.
 	// Reusing the live branch's monotonically accumulated counter would let
 	// Canonical replay must not mistake different regenerate content for an exact

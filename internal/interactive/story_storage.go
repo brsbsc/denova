@@ -10,13 +10,41 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"denova/internal/agents/conversationjournal"
 	"denova/internal/localfs"
+	"denova/internal/portablepath"
 	"denova/internal/presetlayout"
 )
 
 const storyIndexSchemaVersion = 1
+
+func validateStoryID(storyID string) error {
+	if storyID == "" || strings.TrimSpace(storyID) != storyID {
+		return fmt.Errorf("invalid story id %q", storyID)
+	}
+	if storyID == "." || storyID == ".." || strings.Contains(storyID, "..") || strings.ContainsAny(storyID, `/\:`) {
+		return fmt.Errorf("invalid story id %q", storyID)
+	}
+	for _, char := range storyID {
+		if char == 0 || unicode.IsSpace(char) || unicode.IsControl(char) {
+			return fmt.Errorf("invalid story id %q", storyID)
+		}
+	}
+	if err := portablepath.ValidateComponent(storyID); err != nil {
+		return fmt.Errorf("invalid story id %q: %w", storyID, err)
+	}
+	return nil
+}
+
+func normalizeStoryID(storyID string) (string, error) {
+	storyID = strings.TrimSpace(storyID)
+	if err := validateStoryID(storyID); err != nil {
+		return "", err
+	}
+	return storyID, nil
+}
 
 func (s *Store) storyDir() string {
 	return filepath.Join(s.root, "interactive", "story")
@@ -27,11 +55,11 @@ func (s *Store) indexPath() string {
 }
 
 func (s *Store) storyPath(storyID string) string {
-	return filepath.Join(s.storyDir(), "story-"+storyID+".jsonl")
+	return filepath.Join(s.storyDir(), "story-"+strings.TrimSpace(storyID)+".jsonl")
 }
 
 func (s *Store) actorStateSchemaPath(storyID string) string {
-	return filepath.Join(s.root, "interactive", "story-schema", "story-"+storyID+"-actor-state.json")
+	return filepath.Join(s.root, "interactive", "story-schema", "story-"+strings.TrimSpace(storyID)+"-actor-state.json")
 }
 
 func (s *Store) usageDir() string {
@@ -39,7 +67,7 @@ func (s *Store) usageDir() string {
 }
 
 func (s *Store) usagePath(storyID string) string {
-	return filepath.Join(s.usageDir(), "usage-"+storyID+".jsonl")
+	return filepath.Join(s.usageDir(), "usage-"+strings.TrimSpace(storyID)+".jsonl")
 }
 
 func (s *Store) readIndexLocked() (Index, error) {
@@ -58,6 +86,11 @@ func (s *Store) readIndexLocked() (Index, error) {
 		return Index{}, fmt.Errorf("unsupported interactive story index version: %d", index.Version)
 	}
 	if index.Version < storyIndexSchemaVersion {
+		releaseIndex, leaseErr := s.acquireIndexLeaseLocked()
+		if leaseErr != nil {
+			return Index{}, leaseErr
+		}
+		defer releaseIndex()
 		previousVersion := index.Version
 		migrated, migrateErr := s.rebuildStoryIndexLocked(index)
 		if migrateErr != nil {
@@ -101,7 +134,7 @@ func (s *Store) writeIndexLocked(index Index) error {
 func (s *Store) rebuildStoryIndexLocked(index Index) (Index, error) {
 	stories := make([]StorySummary, 0, len(index.Stories))
 	for _, indexed := range index.Stories {
-		handle, err := s.refreshStoryJournalLocked(indexed.ID, true)
+		handle, err := s.refreshStoryJournalLocked(indexed.ID, true, true)
 		if err != nil {
 			return Index{}, fmt.Errorf("rebuild story index failed story_id=%s: %w", indexed.ID, err)
 		}
@@ -115,11 +148,21 @@ func (s *Store) rebuildStoryIndexLocked(index Index) (Index, error) {
 // publishStorySummaryLocked replaces the rebuildable catalog row from the
 // canonical journal projection. Callers never increment counts independently.
 func (s *Store) publishStorySummaryLocked(storyID string) (StorySummary, error) {
-	handle, err := s.refreshStoryJournalLocked(storyID, true)
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return StorySummary{}, err
+	}
+	handle, err := s.refreshStoryJournalLocked(storyID, true, true)
 	if err != nil {
 		return StorySummary{}, err
 	}
 	summary := storySummaryFromProjection(handle.projection)
+	releaseIndex, err := s.acquireIndexLeaseLocked()
+	if err != nil {
+		return StorySummary{}, err
+	}
+	defer releaseIndex()
 	index, err := s.readIndexLocked()
 	if err != nil {
 		return StorySummary{}, err
@@ -176,12 +219,17 @@ func storySummaryFromProjection(projection *storyJournalProjection) StorySummary
 }
 
 func (s *Store) readStoryLocked(storyID string) (StoryMeta, []StoryEventRecord, error) {
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return StoryMeta{}, nil, err
+	}
 	release, err := s.acquireStoryReadLeaseLocked(storyID)
 	if err != nil {
 		return StoryMeta{}, nil, err
 	}
 	defer release()
-	meta, lines, err := s.readStoryJournalWithRepairLocked(storyID, true)
+	meta, lines, err := s.readStoryConversationJournalLocked(storyID, true, true)
 	if err != nil {
 		return StoryMeta{}, nil, err
 	}
@@ -189,7 +237,7 @@ func (s *Store) readStoryLocked(storyID string) (StoryMeta, []StoryEventRecord, 
 		if err := s.migrateReleasedGamePresetLocked(storyID, &meta); err != nil {
 			return StoryMeta{}, nil, err
 		}
-		meta, lines, err = s.readStoryJournalWithRepairLocked(storyID, true)
+		meta, lines, err = s.readStoryConversationJournalLocked(storyID, true, true)
 		if err != nil {
 			return StoryMeta{}, nil, err
 		}
@@ -212,6 +260,16 @@ func (s *Store) migrateReleasedGamePresetLocked(storyID string, meta *StoryMeta)
 	if meta == nil || strings.TrimSpace(meta.StoryDirectorID) == "" {
 		return nil
 	}
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return err
+	}
+	releaseWrite, err := s.acquireStoryMutationLeaseLocked(storyID)
+	if err != nil {
+		return err
+	}
+	defer releaseWrite()
 	legacyID := NormalizeStoryDirectorID(meta.StoryDirectorID)
 	refs := DefaultStoryDirectorModuleRefs()
 	if meta.ModuleRefs != nil {
@@ -297,16 +355,17 @@ func (s *Store) backupReleasedGamePresetStory(storyID, legacyID, legacyPresetPat
 // reconciliation uses it so opening an unfinished Agent operation cannot
 // trigger legacy migrations or any other canonical write.
 func (s *Store) readStoryJournalLocked(storyID string) (StoryMeta, []StoryEventRecord, error) {
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return StoryMeta{}, nil, err
+	}
 	release, err := s.acquireStoryReadLeaseLocked(storyID)
 	if err != nil {
 		return StoryMeta{}, nil, err
 	}
 	defer release()
-	return s.readStoryJournalWithRepairLocked(storyID, false)
-}
-
-func (s *Store) readStoryJournalWithRepairLocked(storyID string, repairTornTail bool) (StoryMeta, []StoryEventRecord, error) {
-	return s.readStoryConversationJournalLocked(storyID, repairTornTail)
+	return s.readStoryConversationJournalLocked(storyID, false, false)
 }
 
 func trimJSONLRecord(record []byte) []byte {
@@ -374,20 +433,12 @@ func (s *Store) freezeLegacyActorStateSchemaFromStateLocked(storyID string, meta
 }
 
 func (s *Store) writeActorStateSchemaSnapshot(storyID string, snapshot *ActorStateSchemaSnapshot) error {
-	schemaPath := s.actorStateSchemaPath(storyID)
-	if err := os.MkdirAll(filepath.Dir(schemaPath), 0o755); err != nil {
-		return fmt.Errorf("创建旧故事冻结状态 schema 目录失败: %w", err)
-	}
 	schemaData, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
 		return fmt.Errorf("序列化旧故事冻结状态 schema 失败: %w", err)
 	}
-	tmp := schemaPath + ".tmp"
-	if err := os.WriteFile(tmp, append(schemaData, '\n'), 0o644); err != nil {
+	if err := writeAtomicBytes(s.actorStateSchemaPath(storyID), append(schemaData, '\n'), 0o644); err != nil {
 		return fmt.Errorf("写入旧故事冻结状态 schema 失败: %w", err)
-	}
-	if err := os.Rename(tmp, schemaPath); err != nil {
-		return fmt.Errorf("提交旧故事冻结状态 schema 失败: %w", err)
 	}
 	return nil
 }

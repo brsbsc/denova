@@ -34,12 +34,22 @@ func (s *Store) removeBranchToolArtifacts(storyID, branchID string) error {
 }
 
 func storyToolArtifactScope(storyID string) (toolartifact.WorkspaceScope, error) {
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return toolartifact.WorkspaceScope{}, err
+	}
 	return toolartifact.NewWorkspaceScope(storyToolArtifactNamespace,
 		toolartifact.WorkspaceScopeOwner{Kind: "story", ID: storyID},
 	)
 }
 
 func storyBranchToolArtifactScope(storyID, branchID string) (toolartifact.WorkspaceScope, error) {
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return toolartifact.WorkspaceScope{}, err
+	}
 	return toolartifact.NewWorkspaceScope(storyToolArtifactNamespace,
 		toolartifact.WorkspaceScopeOwner{Kind: "story", ID: storyID},
 		toolartifact.WorkspaceScopeOwner{Kind: "branch", ID: branchID},

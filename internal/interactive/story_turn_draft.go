@@ -101,6 +101,11 @@ func (s *Store) SaveTurnDraft(storyID, branchID string, draft TurnDraft, checkpo
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return err
+	}
 	release, err := s.acquireStoryMutationLeaseLocked(storyID)
 	if err != nil {
 		return err
@@ -132,6 +137,11 @@ func (s *Store) SaveTurnDraft(storyID, branchID string, draft TurnDraft, checkpo
 // LoadTurnDraft uses a rebuildable locator, retaining every unfinished draft
 // regardless of the recent-turn window. It never executes a submission tool.
 func (s *Store) LoadTurnDraft(storyID, branchID string, identity DomainCommitIdentity) (TurnDraft, bool, error) {
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return TurnDraft{}, false, err
+	}
 	if strings.TrimSpace(identity.CommandID) == "" {
 		return TurnDraft{}, false, nil
 	}
@@ -141,7 +151,7 @@ func (s *Store) LoadTurnDraft(storyID, branchID string, identity DomainCommitIde
 }
 
 func (s *Store) loadTurnDraftLocked(storyID, branchID string, identity DomainCommitIdentity) (TurnDraft, bool, error) {
-	handle, err := s.openStoryJournalLocked(storyID)
+	handle, err := s.openStoryJournalLocked(storyID, false)
 	if err != nil {
 		return TurnDraft{}, false, err
 	}

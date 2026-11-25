@@ -40,7 +40,7 @@ func (s *Service) RunDue(ctx context.Context, now time.Time) []automation.RunRes
 }
 
 func (s *Service) runDueWithSnapshot(ctx context.Context, snap *automationWorkspaceSnapshot, now time.Time) []automation.RunResult {
-	_, results, err := s.processTriggers(ctx, snap, "", now.UTC(), "scheduler")
+	_, results, err := s.processTriggers(ctx, snap, "", now.Local(), "scheduler")
 	if err != nil {
 		slog.ErrorContext(ctx, fmt.Sprintf("[automation] process due triggers failed err=%v", err))
 		return nil

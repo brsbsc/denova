@@ -24,6 +24,33 @@ func (s *Service) confirmInboxItemWithStarter(ctx context.Context, store *automa
 	if err != nil {
 		return automation.InboxActionResult{}, err
 	}
+	if start == nil {
+		return automation.InboxActionResult{}, fmt.Errorf("automation inbox run starter is required")
+	}
+	if item.Status == automation.InboxStatusAutoRun && strings.TrimSpace(item.RunID) != "" {
+		autoRunID := strings.TrimSpace(item.RunID)
+		persisted, found, lookupErr := persistedAutomationRunByID(storeForSnapshot(snap), autoRunID)
+		if lookupErr != nil {
+			return automation.InboxActionResult{}, lookupErr
+		}
+		if found {
+			if validateAutomationRunRootReceipt(persisted) == nil {
+				return automation.InboxActionResult{Item: item, Run: &persisted}, nil
+			}
+			_, run, startErr := start(ctx, automationTaskStoreID(task), persisted.Trigger, persisted.SourceRunID, persisted.ID, item.Evidence)
+			if startErr != nil {
+				return automation.InboxActionResult{}, startErr
+			}
+			if run.ID != autoRunID {
+				return automation.InboxActionResult{}, fmt.Errorf("automation inbox auto-run identity changed: got %s want %s", run.ID, autoRunID)
+			}
+			if err := validateAutomationRunRootReceipt(run); err != nil {
+				return automation.InboxActionResult{}, fmt.Errorf("automation inbox auto-run %s has no valid durable root receipt: %w", run.ID, err)
+			}
+			return automation.InboxActionResult{Item: item, Run: &run}, nil
+		}
+		return automation.InboxActionResult{}, fmt.Errorf("%w: inbox_id=%s auto-run %s is already claimed", automation.ErrTriggerActionConflict, item.ID, autoRunID)
+	}
 	runID, err := automation.InboxConfirmationRunID(item)
 	if err != nil {
 		return automation.InboxActionResult{}, err
@@ -31,9 +58,6 @@ func (s *Service) confirmInboxItemWithStarter(ctx context.Context, store *automa
 	claimed, _, err := store.ClaimInboxRun(ctx, item.ID, runID)
 	if err != nil {
 		return automation.InboxActionResult{}, err
-	}
-	if start == nil {
-		return automation.InboxActionResult{}, fmt.Errorf("automation inbox run starter is required")
 	}
 	trigger := automation.TriggerInboxConfirmation
 	sourceRunID := ""

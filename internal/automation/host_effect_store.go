@@ -109,7 +109,10 @@ func (s *Store) ListHostEffects() ([]HostEffectObligation, error) {
 			if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 				continue
 			}
-			effect, found, readErr := readHostEffectObligation(filepath.Join(dir, entry.Name()))
+			effectPath := filepath.Join(dir, entry.Name())
+			unlock := storePathLocks.Lock(effectPath)
+			effect, found, readErr := readHostEffectObligation(effectPath)
+			unlock()
 			if readErr != nil {
 				return nil, readErr
 			}

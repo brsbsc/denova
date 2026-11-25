@@ -57,26 +57,6 @@ func (e *RevisionConflictError) Unwrap() error {
 	return ErrRevisionConflict
 }
 
-// WithWorkspaces returns the same user-level automation store configured to
-// discover tasks from every registered workspacelayout. Paths are canonicalized and
-// deduplicated so aliases never create duplicate catalog entries.
-func (s *Store) WithWorkspaces(workspaces ...string) *Store {
-	if s == nil {
-		return s
-	}
-	seen := map[string]bool{}
-	s.knownWorkspaces = s.knownWorkspaces[:0]
-	for _, workspace := range workspaces {
-		canonical := canonicalStoreRoot(workspace)
-		if canonical == "" || seen[canonical] {
-			continue
-		}
-		seen[canonical] = true
-		s.knownWorkspaces = append(s.knownWorkspaces, canonical)
-	}
-	return s
-}
-
 // WithProjects configures every registered Project visible to a user-level
 // catalog. A stable Project ID keeps automation identity intact after relink.
 func (s *Store) WithProjects(projects ...ProjectLocation) *Store {
@@ -178,9 +158,7 @@ func (s *Store) List() ([]Task, error) {
 //
 // ListForTarget keeps each execution target's list exclusive: a workspace
 // target returns only workspace-scoped tasks for that workspace, and the user
-// target returns only user-scoped tasks. Callers that need per-workspace trigger
-// evaluation (where user-scoped content triggers also fire against a specific
-// workspace) should use ListForTriggerEvaluation.
+// target returns only user-scoped tasks.
 func (s *Store) ListForTarget(target ExecutionTarget) ([]Task, error) {
 	tasks, err := s.List()
 	if err != nil {
@@ -216,40 +194,6 @@ func (s *Store) ListForTarget(target ExecutionTarget) ([]Task, error) {
 			}
 		}
 		filtered = append(filtered, task)
-	}
-	return filtered, nil
-}
-
-// ListForTriggerEvaluation returns the tasks that should be evaluated for one
-// execution target. Unlike ListForTarget it also includes user-scoped tasks
-// when evaluating a workspace target: user-scoped automations carry no fixed
-// workspace, so their content triggers (chapter_batch / semantic) are evaluated
-// individually against each workspace and produce per-workspace inbox items and
-// trigger state.
-func (s *Store) ListForTriggerEvaluation(target ExecutionTarget) ([]Task, error) {
-	tasks, err := s.List()
-	if err != nil {
-		return nil, err
-	}
-	kind := strings.TrimSpace(target.Kind)
-	if kind == "" {
-		kind = TargetKindUser
-	}
-	workspace := canonicalStoreRoot(target.Workspace)
-	filtered := make([]Task, 0, len(tasks))
-	for _, task := range tasks {
-		if task.Target.Kind == kind {
-			if kind == TargetKindWorkspace && canonicalStoreRoot(task.Target.Workspace) != workspace {
-				continue
-			}
-			filtered = append(filtered, task)
-			continue
-		}
-		// When evaluating a workspace target, also include user-scoped tasks so
-		// their content triggers fire against that workspacelayout.
-		if kind == TargetKindWorkspace && task.Target.Kind == TargetKindUser {
-			filtered = append(filtered, task)
-		}
 	}
 	return filtered, nil
 }
@@ -387,33 +331,8 @@ func (s *Store) Delete(id string) error {
 				if tasks[index].ArchivedAt != nil {
 					return true, nil
 				}
-				entries, listErr := location.store.readDurableRunObligations(location.scope)
-				if listErr != nil {
-					return false, listErr
-				}
-
-				// Resolve write-ahead and history revisions before fencing
-				// deletion; a stale hot copy must not resurrect a delivery.
-				candidates := make(map[string]durableRunFile, len(entries))
-				for _, entry := range entries {
-					if durableRunMatchesTask(entry, tasks[index]) {
-						candidates[entry.Run.ID] = entry
-					}
-				}
-				for _, run := range tasks[index].RecentRuns {
-					if _, found := candidates[run.ID]; !found {
-						candidates[run.ID] = durableRunFile{Run: run}
-					}
-				}
-				for runID, candidate := range candidates {
-					history, found, err := location.store.readDurableRun(location.scope, runID)
-					if err != nil {
-						return false, err
-					}
-					current, _ := authoritativeDurableRun(candidate, true, history, found)
-					if RunHasRuntimeObligation(current.Run) {
-						return false, fmt.Errorf("%w: task_id=%s run_id=%s", ErrTaskHasActiveRun, tasks[index].CatalogID, runID)
-					}
+				if err := location.store.ensureNoActiveDurableRuns(location.scope, tasks[index]); err != nil {
+					return false, err
 				}
 				now := time.Now().UTC()
 				tasks[index].Enabled = false
@@ -436,6 +355,37 @@ func (s *Store) Delete(id string) error {
 		}
 	}
 	return fmt.Errorf("automation task %s not found", id)
+}
+
+func (s *Store) ensureNoActiveDurableRuns(scope string, task Task) error {
+	entries, err := s.readDurableRunObligations(scope)
+	if err != nil {
+		return err
+	}
+	// Resolve write-ahead and history revisions before fencing deletion; a stale
+	// hot copy must not resurrect an already-settled delivery.
+	candidates := make(map[string]durableRunFile, len(entries))
+	for _, entry := range entries {
+		if durableRunMatchesTask(entry, task) {
+			candidates[entry.Run.ID] = entry
+		}
+	}
+	for _, run := range task.RecentRuns {
+		if _, found := candidates[run.ID]; !found {
+			candidates[run.ID] = durableRunFile{Run: run}
+		}
+	}
+	for runID, candidate := range candidates {
+		history, found, readErr := s.readDurableRun(scope, runID)
+		if readErr != nil {
+			return readErr
+		}
+		current, _ := authoritativeDurableRun(candidate, true, history, found)
+		if RunHasRuntimeObligation(current.Run) {
+			return fmt.Errorf("%w: task_id=%s run_id=%s", ErrTaskHasActiveRun, task.CatalogID, runID)
+		}
+	}
+	return nil
 }
 
 func (s *Store) Get(id string) (Task, error) {
@@ -520,13 +470,6 @@ func CatalogTaskID(scope, workspace, taskID string) string {
 			Kind: TargetKindWorkspace, Workspace: canonicalStoreRoot(workspace),
 		},
 	})
-}
-
-func (s *Store) availableScopes() []string {
-	if strings.TrimSpace(s.workspace) == "" {
-		return []string{ScopeUser}
-	}
-	return []string{ScopeUser, ScopeWorkspace}
 }
 
 func (s *Store) readScopeLocked(scope string) ([]Task, error) {
@@ -759,7 +702,11 @@ func NormalizeTask(task Task) (Task, error) {
 		return Task{}, err
 	}
 	task.Schedule = schedule
-	task.Triggers = normalizeTriggers(task.Triggers, task.Schedule)
+	triggers, err := normalizeTriggers(task.Triggers, task.Schedule)
+	if err != nil {
+		return Task{}, err
+	}
+	task.Triggers = triggers
 	if len(task.Triggers) == 0 {
 		task.Triggers = []TriggerDefinition{legacyScheduleTrigger(task.Schedule)}
 	}

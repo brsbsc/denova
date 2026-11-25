@@ -455,16 +455,6 @@ type interactiveModelContextCommitState struct {
 	stableLeadingMessage string
 }
 
-// StableLeadingMessage returns the stable prefix captured by AssembleModelContext.
-// Callers use it only when validating a manually prepared compaction candidate.
-func StableLeadingMessage(commitState any) (string, bool) {
-	state, ok := commitState.(interactiveModelContextCommitState)
-	if !ok {
-		return "", false
-	}
-	return state.stableLeadingMessage, true
-}
-
 func (c *Conversation) AssembleModelContext(ctx context.Context, originalMessage string, input agentcontext.ModelContextInput) (agentcontext.ModelContextResult, error) {
 	_ = originalMessage
 	if c == nil || c.store == nil {

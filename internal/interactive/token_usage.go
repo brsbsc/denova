@@ -17,6 +17,16 @@ const maxTokenUsageEventsPerAgent = 10
 func (s *Store) AppendTokenUsageEvent(storyID string, event TokenUsageEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return err
+	}
+	releaseStory, err := s.acquireStoryMutationLeaseLocked(storyID)
+	if err != nil {
+		return err
+	}
+	defer releaseStory()
 
 	meta, _, err := s.readStoryRecentLocked(storyID, event.BranchID)
 	if err != nil {
@@ -64,6 +74,11 @@ func (s *Store) readTokenUsageEventsLocked(storyID, branchID string) ([]TokenUsa
 }
 
 func (s *Store) readAllTokenUsageEventsLocked(storyID string) ([]TokenUsageEvent, error) {
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return nil, err
+	}
 	file, err := os.Open(s.usagePath(storyID))
 	if os.IsNotExist(err) {
 		return nil, nil

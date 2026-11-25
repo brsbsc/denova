@@ -58,19 +58,22 @@ func NormalizeInboxItem(item TriggerInboxItem) (TriggerInboxItem, error) {
 	return item, nil
 }
 
-func normalizeTriggers(triggers []TriggerDefinition, fallbackSchedule Schedule) []TriggerDefinition {
+func normalizeTriggers(triggers []TriggerDefinition, fallbackSchedule Schedule) ([]TriggerDefinition, error) {
 	out := make([]TriggerDefinition, 0, len(triggers))
 	for i, trigger := range triggers {
-		normalized := normalizeTriggerDefinition(trigger, i, fallbackSchedule)
+		normalized, err := normalizeTriggerDefinition(trigger, i, fallbackSchedule)
+		if err != nil {
+			return nil, err
+		}
 		if normalized.Type == "" {
 			continue
 		}
 		out = append(out, normalized)
 	}
-	return out
+	return out, nil
 }
 
-func normalizeTriggerDefinition(trigger TriggerDefinition, index int, fallbackSchedule Schedule) TriggerDefinition {
+func normalizeTriggerDefinition(trigger TriggerDefinition, index int, fallbackSchedule Schedule) (TriggerDefinition, error) {
 	trigger.Type = strings.TrimSpace(trigger.Type)
 	if trigger.Type == "" {
 		trigger.Type = TriggerTypeManual
@@ -98,11 +101,13 @@ func normalizeTriggerDefinition(trigger TriggerDefinition, index int, fallbackSc
 		if trigger.Schedule.Kind == "" {
 			trigger.Schedule = fallbackSchedule
 		}
-		if normalized, err := NormalizeSchedule(trigger.Schedule); err == nil {
-			trigger.Schedule = normalized
+		normalized, err := NormalizeSchedule(trigger.Schedule)
+		if err != nil {
+			return TriggerDefinition{}, err
 		}
+		trigger.Schedule = normalized
 	}
-	return trigger
+	return trigger, nil
 }
 
 func legacyScheduleTrigger(schedule Schedule) TriggerDefinition {

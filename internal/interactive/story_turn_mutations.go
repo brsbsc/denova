@@ -154,38 +154,62 @@ func (s *Store) RewindToTurnParent(storyID string, req RewindTurnRequest) error 
 	}
 	previousHead := branch.Head
 	branch.Head = parentIDFromRaw(target.Raw)
-	projected, err := projectStoryEventOverlays(lines)
+	handle, err := s.openStoryJournalLocked(storyID, true)
 	if err != nil {
 		return err
 	}
-	pathToParent, _ := eventPath(branch.Head, eventsByID(projected))
-	nextLatestTurnID := nearestTurnAncestor(branch.Head, eventsByID(projected))
-	nextDepth := 0
-	for _, record := range pathToParent {
-		if record.Envelope.Type == StoryEventTypeTurn {
-			nextDepth++
+	var (
+		stateCheckpoint  map[string]any
+		planCheckpoint   *BranchPlan
+		nextLatestTurnID string
+		nextDepth        int
+		parentState      map[string]any
+		parentPlan       *BranchPlan
+	)
+	if turnID == latestLogicalTurnID(meta, lines, branchID) {
+		stateCheckpoint, planCheckpoint, nextDepth, _, err = s.stateAndPlanBeforeTurnLocked(storyID, branchID, turnID, branch.Head)
+		if err != nil {
+			return err
 		}
+		for id := branch.Head; id != ""; {
+			node, ok := handle.projection.ModelNodes[id]
+			if !ok {
+				break
+			}
+			if node.TurnAt != "" {
+				nextLatestTurnID = id
+				break
+			}
+			id = node.Parent
+		}
+	} else {
+		checkpoint, checkpointErr := s.checkpointAtStoryEventLocked(handle, branch.Head)
+		if checkpointErr != nil {
+			return checkpointErr
+		}
+		stateCheckpoint = cloneStoryState(checkpoint.State)
+		planCheckpoint = cloneBranchPlan(checkpoint.Plan)
+		nextLatestTurnID = checkpoint.LatestTurnID
+		nextDepth = checkpoint.Depth
+	}
+	if nextLatestTurnID != "" {
+		nextParentID := handle.projection.ModelNodes[nextLatestTurnID].Parent
+		parentCheckpoint, parentErr := s.checkpointAtStoryEventLocked(handle, nextParentID)
+		if parentErr != nil {
+			return parentErr
+		}
+		parentState = cloneStoryState(parentCheckpoint.State)
+		parentPlan = cloneBranchPlan(parentCheckpoint.Plan)
 	}
 	meta.Branches[branchID] = branch
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	meta.UpdatedAt = now
-	stateCheckpoint := stateFromPath(pathToParent)
-	var planCheckpoint *BranchPlan
-	if turnID == latestLogicalTurnID(meta, lines, branchID) {
-		if projection, projectionErr := s.storyBranchProjectionLocked(storyID, branchID); projectionErr == nil {
-			stateCheckpoint = cloneStoryState(projection.StateBeforeLatest)
-			planCheckpoint = cloneBranchPlan(projection.PlanBeforeLatest)
-		}
-	} else if nextLatestTurnID != "" {
-		if checkpoint, checkpointErr := s.checkpointAtTurnLocked(storyID, nextLatestTurnID); checkpointErr == nil {
-			planCheckpoint = cloneBranchPlan(checkpoint.Plan)
-		}
-	}
 	event := BranchHeadMovedEvent{
 		V: schemaVersion, Type: StoryEventTypeBranchHeadMoved, ID: newID("bhm"),
 		ParentID: branch.Head, BranchID: branchID, Ts: now,
 		PreviousHead: previousHead, NextHead: branch.Head, NextLatestTurnID: nextLatestTurnID,
-		NextDepth: nextDepth, StateCheckpoint: stateCheckpoint, PlanCheckpoint: planCheckpoint, Reason: "rewind_to_turn_parent",
+		NextDepth: nextDepth, StateCheckpoint: stateCheckpoint, PlanCheckpoint: planCheckpoint,
+		ParentState: parentState, ParentPlan: parentPlan, Reason: "rewind_to_turn_parent",
 	}
 	if err := s.appendStoryTransactionLocked(storyID, meta, event); err != nil {
 		return err

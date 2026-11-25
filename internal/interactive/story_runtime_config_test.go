@@ -95,16 +95,15 @@ func TestSetBranchRuntimeConfigWithCapabilitiesIsAtomicSingleTransaction(t *test
 	if size := mustStoryJournalSize(t, storyJournal); size != beforeSize {
 		t.Fatalf("failed append touched the canonical journal: before=%d after=%d", beforeSize, size)
 	}
-	// The in-process handle stays deliberately poisoned until the journal is
-	// reopened: a same-process retry on the restored file must demand that
-	// instead of silently succeeding on an untrusted projection.
-	_, retryErr := store.SetBranchRuntimeConfigWithCapabilities(
-		story.ID, "main", nextCfg, saved.Revision, key,
-		func(sessionjournal.CapabilityReader) (map[string]json.RawMessage, error) {
-			return map[string]json.RawMessage{capabilityName: json.RawMessage(`{"phase":"idle"}`)}, nil
-		},
-	)
-	requireReopenJournalError(t, retryErr)
+	// ErrCommitUnknown evicts the poisoned in-process handle immediately so the
+	// long-lived Store neither serves a dirty in-memory capability projection
+	// nor stays permanently wedged until server restart.
+	store.mu.Lock()
+	evictedAfterFail := store.storyJournals[story.ID] == nil
+	store.mu.Unlock()
+	if !evictedAfterFail {
+		t.Fatal("expected poisoned story journal handle to be evicted after ErrCommitUnknown")
+	}
 
 	coldAfterFail := NewStore(root)
 	defer coldAfterFail.Close()
@@ -116,22 +115,30 @@ func TestSetBranchRuntimeConfigWithCapabilitiesIsAtomicSingleTransaction(t *test
 	if err != nil || !capFound || string(capAfterFail) != `{"phase":"suspended"}` {
 		t.Fatalf("write failure mutated capability: %s found=%t err=%v", capAfterFail, capFound, err)
 	}
+	sameStoreCap, sameStoreFound, err := store.LoadCapability(t.Context(), story.ID, key, capabilityName)
+	if err != nil || !sameStoreFound || string(sameStoreCap) != `{"phase":"suspended"}` {
+		t.Fatalf("same-store capability read after eviction saw dirty projection: %s found=%t err=%v", sameStoreCap, sameStoreFound, err)
+	}
 
-	// 3. Reopening the journal (a fresh Store replays the untouched canonical
-	// file) must again commit both config and capability in a single journal
-	// transaction.
-	committed, err := coldAfterFail.SetBranchRuntimeConfigWithCapabilities(
+	// 3. Retrying on the same Store after writability is restored reopens the
+	// untouched canonical journal cleanly and commits both config and capability
+	// in a single journal transaction.
+	committed, err := store.SetBranchRuntimeConfigWithCapabilities(
 		story.ID, "main", nextCfg, saved.Revision, key,
 		func(sessionjournal.CapabilityReader) (map[string]json.RawMessage, error) {
 			return map[string]json.RawMessage{capabilityName: json.RawMessage(`{"phase":"idle"}`)}, nil
 		},
 	)
 	if err != nil {
-		t.Fatalf("atomic commit after reopen failed: %v", err)
+		t.Fatalf("atomic commit after automatic journal reopen failed: %v", err)
 	}
-	coldAfterFail.mu.Lock()
-	cursorAfter := coldAfterFail.storyJournals[story.ID].journal.Head().Cursor
-	coldAfterFail.mu.Unlock()
+	store.mu.Lock()
+	reopenedHandle := store.storyJournals[story.ID]
+	cursorAfter := reopenedHandle.journal.Head().Cursor
+	store.mu.Unlock()
+	if reopenedHandle == handleBefore {
+		t.Fatal("expected Store to reopen a fresh journal handle after eviction")
+	}
 	if cursorAfter != cursorBefore+1 {
 		t.Fatalf("config and capability were not committed in one transaction: before=%d after=%d", cursorBefore, cursorAfter)
 	}
@@ -355,16 +362,6 @@ func makeStoryJournalReadOnly(t *testing.T, path string) {
 	if err == nil {
 		_ = probe.Close()
 		t.Skip("cannot inject append failure: journal still writable under chmod 0444 (running as root?)")
-	}
-}
-
-// requireReopenJournalError asserts the deliberate poison contract of one
-// Story journal handle: after an actual append failure, every same-process
-// write is rejected until the journal is reopened.
-func requireReopenJournalError(t *testing.T, err error) {
-	t.Helper()
-	if err == nil || !strings.Contains(err.Error(), "reopen the journal") {
-		t.Fatalf("operation after append failure must require reopening the journal: %v", err)
 	}
 }
 

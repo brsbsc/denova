@@ -168,13 +168,6 @@ func (s *Service) Create(definition automation.TaskDefinition) (automation.Task,
 	return s.storeAllWorkspaces().Create(definition)
 }
 
-func (s *Service) Update(id string, task automation.Task) (automation.Task, error) {
-	if err := s.requireProjectAutomationUpdate(id, task); err != nil {
-		return automation.Task{}, err
-	}
-	return s.storeAllWorkspaces().Update(id, task)
-}
-
 func (s *Service) UpdateIfRevision(id string, task automation.Task, baseRevision string) (automation.Task, error) {
 	if err := s.requireProjectAutomationUpdate(id, task); err != nil {
 		return automation.Task{}, err
@@ -273,29 +266,6 @@ func replayAutomationRunTask(run automation.RunRecord) *apptask.Task {
 	})
 }
 
-func (s *Service) StartTaskWithEvidence(ctx context.Context, id, trigger string, evidence []automation.TriggerEvidence) (*apptask.Task, automation.RunRecord, error) {
-	task, err := s.storeAllWorkspaces().Get(id)
-	if err != nil {
-		return nil, automation.RunRecord{}, err
-	}
-	if task.ArchivedAt != nil {
-		return nil, automation.RunRecord{}, fmt.Errorf("%w: task_id=%s", automation.ErrTaskArchived, automationTaskStoreID(task))
-	}
-	if err := requireProjectAutomationTask(task); err != nil {
-		return nil, automation.RunRecord{}, err
-	}
-	snap, operation, err := s.acquireTargetRuntime(ctx, task.Target)
-	if err != nil {
-		return nil, automation.RunRecord{}, err
-	}
-	defer operation.Release()
-	return s.startTaskWithSourceRun(operation.Context(), snap, automationTaskStoreID(task), trigger, "", evidence)
-}
-
-func (s *Service) startTaskWithSourceRun(ctx context.Context, snap *automationWorkspaceSnapshot, id, trigger, sourceRunID string, triggerEvidence []automation.TriggerEvidence) (*apptask.Task, automation.RunRecord, error) {
-	return s.startTaskWithSourceRunID(ctx, snap, id, trigger, sourceRunID, "", triggerEvidence)
-}
-
 // startTaskWithSourceRunID starts one automation run with an optional stable
 // identity supplied by a durable upstream command. Replaying the same identity
 // returns the active or persisted run when its semantics match; conflicting
@@ -343,8 +313,13 @@ func (s *Service) startTaskWithSourceRunID(ctx context.Context, snap *automation
 				return nil, automation.RunRecord{}, automationRunIDConflict(deterministicRunID)
 			}
 			run = persisted
+		} else if !taskDef.Enabled && (run.Trigger == automation.TriggerSchedule || run.Trigger == automation.TriggerCondition) {
+			return nil, automation.RunRecord{}, fmt.Errorf("automation task %s is disabled", automationTaskStoreID(taskDef))
 		}
 	} else {
+		if !taskDef.Enabled && (run.Trigger == automation.TriggerSchedule || run.Trigger == automation.TriggerCondition) {
+			return nil, automation.RunRecord{}, fmt.Errorf("automation task %s is disabled", automationTaskStoreID(taskDef))
+		}
 		release, err := storeForSnapshot(snap).AcquireRunLease(ctx, automationTaskStoreID(taskDef), run.ID)
 		if err != nil {
 			return nil, run, err

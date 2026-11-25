@@ -53,7 +53,7 @@ func NormalizeSchedule(schedule Schedule) (Schedule, error) {
 }
 
 func Due(now time.Time, task Task) bool {
-	if !task.Enabled {
+	if !task.Enabled || task.ArchivedAt != nil {
 		return false
 	}
 	if len(task.Triggers) == 0 {
@@ -115,6 +115,7 @@ func scheduleDue(now, last time.Time, schedule Schedule) bool {
 }
 
 func hasDailyDue(now, last time.Time, hour, minute int) bool {
+	last = last.In(now.Location())
 	for day := startOfDay(last); !day.After(now); day = day.AddDate(0, 0, 1) {
 		due := time.Date(day.Year(), day.Month(), day.Day(), hour, minute, 0, 0, now.Location())
 		if due.After(last) && !due.After(now) {
@@ -125,6 +126,7 @@ func hasDailyDue(now, last time.Time, hour, minute int) bool {
 }
 
 func hasWeeklyDue(now, last time.Time, weekday, hour, minute int) bool {
+	last = last.In(now.Location())
 	for day := startOfDay(last); !day.After(now); day = day.AddDate(0, 0, 1) {
 		if int(day.Weekday()) != weekday {
 			continue
@@ -138,6 +140,7 @@ func hasWeeklyDue(now, last time.Time, weekday, hour, minute int) bool {
 }
 
 func hasMonthlyDue(now, last time.Time, dayOfMonth, hour, minute int) bool {
+	last = last.In(now.Location())
 	for cursor := startOfMonth(last); !cursor.After(now); cursor = cursor.AddDate(0, 1, 0) {
 		due := time.Date(cursor.Year(), cursor.Month(), dayOfMonth, hour, minute, 0, 0, now.Location())
 		if due.Month() != cursor.Month() {

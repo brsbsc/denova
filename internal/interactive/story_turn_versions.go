@@ -77,7 +77,7 @@ func (s *Store) SwitchTurnVersion(storyID string, req SwitchTurnVersionRequest) 
 		return err
 	}
 	newEvents := append([]any(nil), projectedEvents...)
-	handle, err := s.openStoryJournalLocked(storyID)
+	handle, err := s.openStoryJournalLocked(storyID, true)
 	if err != nil {
 		return err
 	}

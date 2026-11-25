@@ -178,6 +178,9 @@ func (m *Manager) WithInstallBatch(ctx context.Context, expectedState string, se
 				writes = append(writes, InstallWrite{Path: filepath.ToSlash(relative), Expected: nextSettings.Revision, Content: previous.Content})
 			}
 		}
+		if item.Removed {
+			item.Enabled = true
+		}
 		item.CurrentRelease, item.Grants, item.Removed, item.Source = release.Digest, slices.Clone(grants), false, nil
 		path := filepath.Join(m.packagePath(ref), "installed.json")
 		before, err := revisionfile.Read(ctx, path)

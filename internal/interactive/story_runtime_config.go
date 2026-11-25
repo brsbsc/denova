@@ -93,7 +93,7 @@ func (s *Store) SetBranchRuntimeConfigWithCapabilities(
 	defer releaseStory()
 
 	if update != nil {
-		if _, err := s.refreshStoryJournalLocked(storyID, true); err != nil {
+		if _, err := s.refreshStoryJournalLocked(storyID, true, true); err != nil {
 			return conversationconfig.Snapshot{}, err
 		}
 	}
@@ -125,7 +125,7 @@ func (s *Store) SetBranchRuntimeConfigWithCapabilities(
 	}
 	newEvents := []any{event}
 	if update != nil {
-		handle, err := s.refreshStoryJournalLocked(storyID, true)
+		handle, err := s.refreshStoryJournalLocked(storyID, true, true)
 		if err != nil {
 			return conversationconfig.Snapshot{}, err
 		}

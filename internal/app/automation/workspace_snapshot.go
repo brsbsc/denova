@@ -27,19 +27,6 @@ type automationWorkspaceSnapshot struct {
 	executionRuntime *agentexecution.Runtime
 }
 
-// runtimeSnapshot captures the currently selected immutable runtime through
-// the Host boundary.
-func (s *Service) runtimeSnapshot() (*automationWorkspaceSnapshot, error) {
-	if s == nil || s.host == nil {
-		return nil, ErrNoWorkspace
-	}
-	runtime, err := s.host.CurrentRuntime()
-	if err != nil {
-		return nil, err
-	}
-	return snapshotFromRuntime(runtime), nil
-}
-
 func canonicalAutomationWorkspace(workspace string) string {
 	workspace = strings.TrimSpace(workspace)
 	if workspace == "" {

@@ -124,6 +124,10 @@ func (s *Store) CommitPlayerInput(storyID string, intent PlayerInputIntent) (Pla
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return PlayerInputReceipt{}, err
+	}
 	releaseStory, err := s.acquireStoryMutationLeaseLocked(storyID)
 	if err != nil {
 		return PlayerInputReceipt{}, err

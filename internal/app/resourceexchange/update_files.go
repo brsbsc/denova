@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path"
+	"slices"
 	"strings"
 
 	"denova/internal/revisionfile"
@@ -98,15 +99,19 @@ func (s *Service) reviewFiles(ctx context.Context, old Binding, next *Binding, i
 	return nil
 }
 
-func (s *Service) reviewExtension(old Binding, next *Binding, item *PlanItem, review *updateReview) error {
+func (s *Service) reviewExtension(old Binding, next *Binding, item *PlanItem, explicitGrants bool, review *updateReview) error {
 	installed, err := s.platform.List(item.Extension.Kind)
 	if err != nil {
 		return err
 	}
 	current := "missing"
+	var currentGrants []string
+	hasInstalled := false
 	for _, extension := range installed {
 		if extension.ID == next.Local.ID && !extension.Removed {
 			current = extension.CurrentRelease
+			currentGrants = extension.Grants
+			hasInstalled = true
 		}
 	}
 	base := old.AppliedRelease
@@ -114,6 +119,13 @@ func (s *Service) reviewExtension(old Binding, next *Binding, item *PlanItem, re
 		base = old.SourceDigest
 	}
 	apply, ack := review.decide(next.ResourceID, "", item.Name, old.SourceDigest, next.SourceDigest, base, current, item.Extension.Digest)
+	if !apply && hasInstalled && current == item.Extension.Digest && explicitGrants && !slices.Equal(currentGrants, item.Grants) {
+		apply = true
+		item.Action = "update"
+		if len(review.items) > 0 {
+			review.items[len(review.items)-1].State = "update"
+		}
+	}
 	next.AppliedRelease = base
 	if !apply {
 		item.Action = "keep"

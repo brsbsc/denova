@@ -18,7 +18,12 @@ func (s *Store) recentStoryCommitLocked(
 	eventType string,
 	identity DomainCommitIdentity,
 ) (StoryEventRecord, storyCommitLocator, bool, error) {
-	handle, err := s.refreshStoryJournalLocked(strings.TrimSpace(storyID), false)
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return StoryEventRecord{}, storyCommitLocator{}, false, err
+	}
+	handle, err := s.refreshStoryJournalLocked(storyID, false, false)
 	if err != nil {
 		return StoryEventRecord{}, storyCommitLocator{}, false, err
 	}

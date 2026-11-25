@@ -83,10 +83,12 @@ func (m *Manager) CreateInstance(request CreateInstance) (Instance, error) {
 	if request.StoryID != "" {
 		return Instance{}, failure("INVALID_ARGUMENT", "Only Story games can bind an existing Story")
 	}
-	if err := os.MkdirAll(filepath.Join(m.instancePath(instance.GameID, instance.ID), "data"), 0o700); err != nil {
+	instanceDir := m.instancePath(instance.GameID, instance.ID)
+	if err := os.MkdirAll(filepath.Join(instanceDir, "data"), 0o700); err != nil {
 		return Instance{}, err
 	}
-	if err := writeJSON(filepath.Join(m.instancePath(instance.GameID, instance.ID), "instance.json"), instance); err != nil {
+	if err := writeJSON(filepath.Join(instanceDir, "instance.json"), instance); err != nil {
+		_ = os.RemoveAll(instanceDir)
 		return Instance{}, err
 	}
 	slog.Info("platform_game_instance_created", "game", instance.GameID, "instance", instance.ID, "preview", instance.Preview)
@@ -288,9 +290,12 @@ func zipDirectory(directory string, writer io.Writer) error {
 		if err != nil {
 			return err
 		}
-		defer file.Close()
-		_, err = io.Copy(target, file)
-		return err
+		_, copyErr := io.Copy(target, file)
+		closeErr := file.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
 	})
 	closeErr := archive.Close()
 	if err != nil {

@@ -26,6 +26,9 @@ func (s *Store) FindDomainTurnCommit(
 	if storyID == "" || branchID == "" || identity.CommandID == "" || identity.OperationID == "" || identity.Cycle <= 0 || hash == "" {
 		return DomainCommitReceipt{}, false, fmt.Errorf("%w: story, branch, identity, and hash are required", ErrAgentTurnIdentityConflict)
 	}
+	if err := validateStoryID(storyID); err != nil {
+		return DomainCommitReceipt{}, false, err
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -85,6 +88,9 @@ func (s *Store) FindRecentDomainTurnCommit(
 	hash = strings.TrimSpace(hash)
 	if storyID == "" || branchID == "" || identity.CommandID == "" || identity.OperationID == "" || identity.Cycle <= 0 || hash == "" {
 		return DomainCommitReceipt{}, false, fmt.Errorf("%w: story, branch, identity, and hash are required", ErrAgentTurnIdentityConflict)
+	}
+	if err := validateStoryID(storyID); err != nil {
+		return DomainCommitReceipt{}, false, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -307,7 +307,8 @@ func (s *Service) Plan(ctx context.Context, request PlanRequest) (Plan, error) {
 		location := filepath.Join(dir, "files", filepath.FromSlash(resource.Path))
 		if resource.Extension != nil {
 			if previous, ok := oldBindings[resource.ID]; ok && previous.Ownership == "owned" {
-				if err := s.reviewExtension(previous, binding, &plan.Items[i], review); err != nil {
+				_, explicitGrants := request.Grants[resource.ID]
+				if err := s.reviewExtension(previous, binding, &plan.Items[i], explicitGrants, review); err != nil {
 					return Plan{}, err
 				}
 			} else {

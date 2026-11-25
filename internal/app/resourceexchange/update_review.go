@@ -35,21 +35,27 @@ type updateReview struct {
 func (r *updateReview) decide(resource, member, name, sourceBase, sourceNext, localBase, localNow, localNext string) (apply, acknowledge bool) {
 	item := UpdateItem{ResourceID: resource, MemberID: member, Name: name}
 	acknowledge = true
+	choice := r.choices[resource][member]
 	switch {
 	case localBase == "":
 		item.State, apply = "create", true
 	case localNow == localNext:
 		item.State = "unchanged"
 	case sourceBase != "" && sourceBase == sourceNext:
-		item.State = "keep"
-		if localNow == localBase {
-			item.State = "unchanged"
+		if choice == "remote" && localNow != localBase {
+			item.Resolution = "remote"
+			item.State, apply = "update", true
+		} else {
+			item.State = "keep"
+			if localNow == localBase {
+				item.State = "unchanged"
+			}
 		}
 	case localNow == localBase:
 		item.State, apply = "update", true
 	default:
 		item.Conflict = true
-		item.Resolution = r.choices[resource][member]
+		item.Resolution = choice
 		switch item.Resolution {
 		case "keep":
 			item.State = "keep"

@@ -196,6 +196,10 @@ func (s *Store) AppendModelContextBatch(storyID string, intent ModelContextBatch
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return ModelContextBatchReceipt{}, err
+	}
 	releaseStory, err := s.acquireStoryMutationLeaseLocked(storyID)
 	if err != nil {
 		return ModelContextBatchReceipt{}, err

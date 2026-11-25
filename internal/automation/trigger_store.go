@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"denova/internal/localfs"
 	workspacelayout "denova/internal/workspace"
 )
 
@@ -109,23 +108,18 @@ func (s *Store) CreateInboxItem(item TriggerInboxItem) (TriggerInboxItem, error)
 	if err != nil {
 		return TriggerInboxItem{}, err
 	}
-	unlock := storePathLocks.Lock(path)
-	defer unlock()
-	release, err := localfs.AcquireLease(context.Background(), path+".lock")
-	if err != nil {
-		return TriggerInboxItem{}, err
-	}
-	defer func() { _ = release() }()
-	items, err := destination.readInboxScope(normalized.Scope)
-	if err != nil {
-		return TriggerInboxItem{}, err
-	}
-	items = append([]TriggerInboxItem{normalized}, items...)
-	items = boundInboxProjection(items)
-	if err := destination.writeInboxScope(normalized.Scope, items); err != nil {
-		return TriggerInboxItem{}, err
-	}
-	return normalized, nil
+	return withTaskStoreWriteLease(context.Background(), path, func() (TriggerInboxItem, error) {
+		items, readErr := destination.readInboxScope(normalized.Scope)
+		if readErr != nil {
+			return TriggerInboxItem{}, readErr
+		}
+		items = append([]TriggerInboxItem{normalized}, items...)
+		items = boundInboxProjection(items)
+		if writeErr := destination.writeInboxScope(normalized.Scope, items); writeErr != nil {
+			return TriggerInboxItem{}, writeErr
+		}
+		return normalized, nil
+	})
 }
 
 func (s *Store) GetInboxItem(id string) (TriggerInboxItem, error) {
@@ -227,6 +221,13 @@ func (s *Store) DismissInboxItem(id string) (TriggerInboxItem, error) {
 		switch item.Status {
 		case InboxStatusDismissed:
 			return item, false, nil
+		case InboxStatusAutoRun:
+			item.Status = InboxStatusDismissed
+			item.HandledAt = &now
+			if item.ReadAt == nil {
+				item.ReadAt = &now
+			}
+			return item, true, nil
 		case InboxStatusPending:
 			// A non-empty RunID is the durable confirmation claim. Claim and
 			// dismiss share this file lease, so exactly one semantic action can
@@ -256,6 +257,7 @@ func (s *Store) ConfirmInboxItem(id, runID string) (TriggerInboxItem, error) {
 func (s *Store) MarkInboxItemRunStartFailed(id, summary string) (TriggerInboxItem, error) {
 	return s.updateInboxItem(id, func(item TriggerInboxItem, now time.Time) TriggerInboxItem {
 		item.Status = InboxStatusPending
+		item.RunID = ""
 		item.ActionError = strings.TrimSpace(summary)
 		item.UpdatedAt = now
 		return item
@@ -337,9 +339,9 @@ func (s *Store) writeInboxScope(scope string, items []TriggerInboxItem) error {
 }
 
 // boundInboxProjection treats MaxInboxItems as a soft display/history bound,
-// never as an obligation bound. Every pending or auto-run item remains durable
-// even when the actionable set alone exceeds the soft limit; only settled
-// confirmation/dismissal history is eligible for eviction.
+// never as an obligation bound. Every pending item remains durable even when
+// the actionable set alone exceeds the soft limit; auto-run, confirmed, and
+// dismissed history entries are bounded as settled history.
 func boundInboxProjection(items []TriggerInboxItem) []TriggerInboxItem {
 	sort.SliceStable(items, func(i, j int) bool {
 		return items[i].CreatedAt.After(items[j].CreatedAt)
@@ -348,7 +350,7 @@ func boundInboxProjection(items []TriggerInboxItem) []TriggerInboxItem {
 	settled := make([]TriggerInboxItem, 0, len(items))
 	for _, item := range items {
 		switch item.Status {
-		case InboxStatusPending, InboxStatusAutoRun:
+		case InboxStatusPending:
 			actionable = append(actionable, item)
 		default:
 			settled = append(settled, item)
@@ -382,66 +384,50 @@ func (s *Store) mutateInboxItem(ctx context.Context, id string, mutate func(Trig
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	type inboxMutationResult struct {
+		item  TriggerInboxItem
+		found bool
+	}
 	for _, location := range s.inboxLocations() {
 		path, err := location.store.inboxPathForScope(location.scope)
 		if err != nil {
 			return TriggerInboxItem{}, err
 		}
-		unlock := storePathLocks.Lock(path)
-		release, leaseErr := localfs.AcquireLease(ctx, path+".lock")
-		if leaseErr != nil {
-			unlock()
-			return TriggerInboxItem{}, leaseErr
-		}
-		items, err := location.store.readInboxScope(location.scope)
+		result, err := withTaskStoreWriteLease(ctx, path, func() (inboxMutationResult, error) {
+			items, readErr := location.store.readInboxScope(location.scope)
+			if readErr != nil {
+				return inboxMutationResult{}, readErr
+			}
+			for i := range items {
+				if items[i].ID != id || !s.visibleInboxItem(items[i]) {
+					continue
+				}
+				now := time.Now().UTC()
+				next, changed, mutateErr := mutate(items[i], now)
+				if mutateErr != nil {
+					return inboxMutationResult{}, mutateErr
+				}
+				if !changed {
+					return inboxMutationResult{item: items[i], found: true}, nil
+				}
+				next.UpdatedAt = now
+				normalized, normalizeErr := NormalizeInboxItem(next)
+				if normalizeErr != nil {
+					return inboxMutationResult{}, normalizeErr
+				}
+				items[i] = normalized
+				if writeErr := location.store.writeInboxScope(location.scope, items); writeErr != nil {
+					return inboxMutationResult{}, writeErr
+				}
+				return inboxMutationResult{item: normalized, found: true}, nil
+			}
+			return inboxMutationResult{}, nil
+		})
 		if err != nil {
-			_ = release()
-			unlock()
 			return TriggerInboxItem{}, err
 		}
-		for i := range items {
-			if items[i].ID != id || !s.visibleInboxItem(items[i]) {
-				continue
-			}
-			now := time.Now().UTC()
-			next, changed, mutateErr := mutate(items[i], now)
-			if mutateErr != nil {
-				_ = release()
-				unlock()
-				return TriggerInboxItem{}, mutateErr
-			}
-			if !changed {
-				releaseErr := release()
-				unlock()
-				if releaseErr != nil {
-					return TriggerInboxItem{}, releaseErr
-				}
-				return items[i], nil
-			}
-			next.UpdatedAt = now
-			normalized, err := NormalizeInboxItem(next)
-			if err != nil {
-				_ = release()
-				unlock()
-				return TriggerInboxItem{}, err
-			}
-			items[i] = normalized
-			if err := location.store.writeInboxScope(location.scope, items); err != nil {
-				_ = release()
-				unlock()
-				return TriggerInboxItem{}, err
-			}
-			releaseErr := release()
-			unlock()
-			if releaseErr != nil {
-				return TriggerInboxItem{}, releaseErr
-			}
-			return normalized, nil
-		}
-		releaseErr := release()
-		unlock()
-		if releaseErr != nil {
-			return TriggerInboxItem{}, releaseErr
+		if result.found {
+			return result.item, nil
 		}
 	}
 	return TriggerInboxItem{}, fmt.Errorf("automation inbox item %s not found", id)

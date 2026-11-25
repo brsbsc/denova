@@ -59,7 +59,12 @@ func (s *Store) ReadHistoryPage(storyID, branchID, beforeCursor string, limit in
 }
 
 func (s *Store) readStoryRecentLocked(storyID, branchID string) (StoryMeta, []StoryEventRecord, error) {
-	handle, err := s.refreshStoryJournalLocked(storyID, true)
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return StoryMeta{}, nil, err
+	}
+	handle, err := s.refreshStoryJournalLocked(storyID, true, true)
 	if err != nil {
 		return StoryMeta{}, nil, err
 	}
@@ -84,7 +89,7 @@ func (s *Store) readStoryRecentLocked(storyID, branchID string) (StoryMeta, []St
 		return StoryMeta{}, nil, err
 	}
 	loaded.records = completeStoryRecentRecords(handle.projection, loaded.meta, branchID, loaded.records)
-	handle, err = s.openStoryJournalLocked(storyID)
+	handle, err = s.openStoryJournalLocked(storyID, true)
 	if err != nil {
 		return StoryMeta{}, nil, err
 	}
@@ -261,7 +266,7 @@ func boundStoryRecentCacheRecords(meta StoryMeta, branchID string, records []Sto
 }
 
 func (s *Store) storyBranchProjectionLocked(storyID, branchID string) (*storyBranchProjection, error) {
-	handle, err := s.openStoryJournalLocked(storyID)
+	handle, err := s.openStoryJournalLocked(storyID, true)
 	if err != nil {
 		return nil, err
 	}
@@ -280,13 +285,18 @@ func (s *Store) readStoryHistoryPageLocked(storyID, branchID, beforeCursor strin
 }
 
 func (s *Store) readStoryHistoryForViewLocked(storyID, branchID, beforeCursor string, limit int, repairTornTail bool, view storyHistoryView) (loadedStoryHistoryPage, error) {
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return loadedStoryHistoryPage{}, err
+	}
 	release, err := s.acquireStoryReadLeaseLocked(storyID)
 	if err != nil {
 		return loadedStoryHistoryPage{}, err
 	}
 	defer release()
 
-	handle, err := s.refreshStoryJournalLocked(storyID, repairTornTail)
+	handle, err := s.refreshStoryJournalLocked(storyID, repairTornTail, repairTornTail)
 	if err != nil {
 		return loadedStoryHistoryPage{}, err
 	}

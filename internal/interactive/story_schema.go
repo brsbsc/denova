@@ -423,10 +423,6 @@ func validateTurnVersionSelection(selection TurnVersionSelectionEvent) error {
 	return nil
 }
 
-func newStateDelta(ops []interactivestate.Op) StateDelta {
-	return StateDelta{SchemaVersion: stateOpSchemaVersion, Ops: ops}
-}
-
 func newStateDeltaWithActorOps(ops []interactivestate.Op, actorOps []ActorStateOp) StateDelta {
 	return StateDelta{SchemaVersion: stateOpSchemaVersion, Ops: ops, ActorOps: actorOps}
 }

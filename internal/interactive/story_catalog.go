@@ -28,7 +28,16 @@ func (s *Store) SelectStory(storyID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	storyID = strings.TrimSpace(storyID)
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return err
+	}
+	releaseIndex, err := s.acquireIndexLeaseLocked()
+	if err != nil {
+		return err
+	}
+	defer releaseIndex()
 	index, err := s.readIndexLocked()
 	if err != nil {
 		return err
@@ -61,6 +70,11 @@ func (s *Store) CreateStory(req CreateStoryRequest) (StorySummary, error) {
 	if err := os.MkdirAll(s.storyDir(), 0o755); err != nil {
 		return StorySummary{}, fmt.Errorf("创建互动故事目录失败: %w", err)
 	}
+	releaseIndex, err := s.acquireIndexLeaseLocked()
+	if err != nil {
+		return StorySummary{}, err
+	}
+	defer releaseIndex()
 	index, err := s.readIndexLocked()
 	if err != nil {
 		return StorySummary{}, err
@@ -521,17 +535,27 @@ func storyConfigUpdatedFields(req UpdateStoryRequest) []string {
 func (s *Store) DeleteStory(storyID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return err
+	}
 	releaseStory, err := s.acquireStoryMutationLeaseLocked(storyID)
 	if err != nil {
 		return err
 	}
 	defer releaseStory()
+	releaseIndex, err := s.acquireIndexLeaseLocked()
+	if err != nil {
+		return err
+	}
+	defer releaseIndex()
 
 	index, err := s.readIndexLocked()
 	if err != nil {
 		return err
 	}
-	next := index.Stories[:0]
+	next := make([]StorySummary, 0, len(index.Stories))
 	removed := false
 	for _, story := range index.Stories {
 		if story.ID == storyID {
@@ -556,6 +580,12 @@ func (s *Store) DeleteStory(storyID string) error {
 	if closeErr := s.evictStoryJournalLocked(storyID); closeErr != nil {
 		slog.ErrorContext(context.Background(), fmt.Sprintf("[interactive-story] flush index before story delete failed story_id=%s error=%v", storyID, closeErr))
 	}
+	// Commit the catalog removal before deleting canonical story files so an
+	// index write failure never leaves a dangling index entry whose story JSONL
+	// has already been destroyed.
+	if err := s.writeIndexLocked(index); err != nil {
+		return err
+	}
 	if err := os.Remove(s.storyPath(storyID)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -569,9 +599,6 @@ func (s *Store) DeleteStory(storyID string) error {
 		return err
 	}
 	if err := os.RemoveAll(filepath.Join(s.root, "interactive", "stories", storyID)); err != nil {
-		return err
-	}
-	if err := s.writeIndexLocked(index); err != nil {
 		return err
 	}
 	// Artifact removal is post-commit garbage collection. Canonical story and

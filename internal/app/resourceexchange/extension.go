@@ -62,6 +62,7 @@ func (s *Service) PlanExtension(ctx context.Context, id string, grants []string)
 			request.InstallationID = item.ID
 			request.UpdateMode = item.UpdateMode
 			request.Resources = []string{item.Bindings[0].ResourceID}
+			request.Resolutions = map[string]map[string]string{item.Bindings[0].ResourceID: {"": "remote"}}
 			if item.Bindings[0].ResourceID != resource.ID {
 				return Plan{}, fmt.Errorf("extension binding differs; update its original installation")
 			}

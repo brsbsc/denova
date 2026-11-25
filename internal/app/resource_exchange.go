@@ -47,6 +47,9 @@ func (a *App) InstallExtensionCandidate(ctx context.Context, id string, grants [
 	if err != nil {
 		return platform.Release{}, err
 	}
+	if plan.PreviewID != "" {
+		defer func() { _ = a.ResourceExchange().DiscardPreview(plan.PreviewID) }()
+	}
 	if _, err := a.ApplyResourcePlan(ctx, plan.ID); err != nil {
 		return platform.Release{}, err
 	}
@@ -59,7 +62,7 @@ func (a *App) InstallExtensionCandidate(ctx context.Context, id string, grants [
 		return platform.Release{}, err
 	}
 	for _, item := range items {
-		if item.ID == candidate.Manifest.ID {
+		if item.ID == candidate.Manifest.ID && !item.Removed && item.CurrentRelease == candidate.Digest {
 			for _, release := range item.Releases {
 				if release.Digest == item.CurrentRelease {
 					return release, nil

@@ -33,10 +33,13 @@ func (s *Store) ReadSceneAtTurn(ctx context.Context, storyID, branchID, turnID, 
 	if err := ctx.Err(); err != nil {
 		return TurnSceneProjection{}, err
 	}
-	for _, value := range []string{branchID, turnID, sourceRevision} {
+	for _, value := range []string{storyID, branchID, turnID, sourceRevision} {
 		if value == "" || strings.TrimSpace(value) != value {
-			return TurnSceneProjection{}, fmt.Errorf("%w: exact branch, turn and revision are required", ErrStorySceneNotFound)
+			return TurnSceneProjection{}, fmt.Errorf("%w: exact story, branch, turn and revision are required", ErrStorySceneNotFound)
 		}
+	}
+	if err := validateStoryID(storyID); err != nil {
+		return TurnSceneProjection{}, err
 	}
 	// This independent handle touches no Store caches. Use the native lease
 	// directly so cancellation also interrupts contention with a writer, without

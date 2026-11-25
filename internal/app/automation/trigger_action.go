@@ -109,8 +109,13 @@ func (s *Service) claimOrResumeBuiltInTrigger(
 		return automation.TriggerEvaluationRecord{}, false, errors.Join(evaluationErr, persistErr)
 	}
 	if !matched {
-		_, err := store.UpdateTriggerState(automationTaskStoreID(task), stateKey, nextState)
-		return automation.TriggerEvaluationRecord{}, false, err
+		if nextState.LastObservationFingerprint != state.LastObservationFingerprint ||
+			nextState.LastEvidenceFingerprint != state.LastEvidenceFingerprint ||
+			!nextState.LastMatchedAt.Equal(state.LastMatchedAt) {
+			_, err := store.UpdateTriggerState(automationTaskStoreID(task), stateKey, nextState)
+			return automation.TriggerEvaluationRecord{}, false, err
+		}
+		return automation.TriggerEvaluationRecord{}, false, nil
 	}
 	legacyHandled, err := s.reconcileLegacyBuiltInTriggerState(store, task, trigger, stateKey, nextState, match)
 	if err != nil || legacyHandled {
@@ -158,6 +163,9 @@ func (s *Service) reconcileLegacyBuiltInTriggerState(store *automation.Store, ta
 }
 
 func enabledBuiltInTrigger(task automation.Task, triggerID, triggerType string) (automation.TriggerDefinition, bool) {
+	if !task.Enabled || task.ArchivedAt != nil {
+		return automation.TriggerDefinition{}, false
+	}
 	for _, trigger := range task.Triggers {
 		if trigger.ID == triggerID && trigger.Type == triggerType && trigger.Enabled && (trigger.Type == automation.TriggerTypeSchedule || trigger.Type == automation.TriggerTypeChapterBatch) {
 			return trigger, true

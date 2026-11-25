@@ -52,7 +52,7 @@ func (s *Service) CheckTriggers(ctx context.Context, id string) ([]automation.Tr
 		return nil, targetErr
 	}
 	defer operation.Release()
-	items, _, err := s.processTriggers(operation.Context(), snap, strings.TrimSpace(id), time.Now().UTC(), "manual_check")
+	items, _, err := s.processTriggers(operation.Context(), snap, strings.TrimSpace(id), time.Now().Local(), "manual_check")
 	return items, err
 }
 
@@ -101,24 +101,6 @@ func (s *Service) checkTriggersAfterWorkspaceMutation(ctx context.Context, snap 
 	if s.triggers == nil || !s.triggers.Enqueue(s, snap, source, targets) {
 		slog.WarnContext(ctx, fmt.Sprintf("[automation-trigger] mutation check skipped because app lifecycle is closed source=%s workspace=%q targets=%q", source, snap.workspace, targets))
 	}
-}
-
-func (s *Service) CheckContentTriggersForWorkspaceMutation(ctx context.Context, source string, paths []string) ([]automation.TriggerInboxItem, error) {
-	workspace := strings.TrimSpace(s.host.CurrentWorkspace())
-	if workspace == "" {
-		return nil, nil
-	}
-	snap, operation, err := s.acquireTargetRuntime(ctx, automation.ExecutionTarget{Kind: automation.TargetKindWorkspace, Workspace: workspace})
-	if err != nil {
-		return nil, err
-	}
-	defer operation.Release()
-	targets := s.chapterContentMutationPaths(snap, paths)
-	if len(targets) == 0 {
-		return nil, nil
-	}
-	items, _, err := s.processContentTriggers(operation.Context(), snap, time.Now().UTC(), source)
-	return items, err
 }
 
 func (s *Service) ConfirmInboxItem(ctx context.Context, id string) (automation.InboxActionResult, error) {
@@ -177,11 +159,12 @@ func (s *Service) processTriggersMatching(ctx context.Context, snap *automationW
 	}
 	items := []automation.TriggerInboxItem{}
 	runs := []automation.RunResult{}
+	var joinedErr error
 	for _, task := range tasks {
 		if onlyTaskID != "" && !automation.TaskMatchesID(task, onlyTaskID) {
 			continue
 		}
-		if !task.Enabled || task.Target.Kind == automation.TargetKindUser || task.Scope == automation.ScopeUser {
+		if !task.Enabled || task.ArchivedAt != nil || task.Target.Kind == automation.TargetKindUser || task.Scope == automation.ScopeUser {
 			continue
 		}
 		for _, trigger := range task.Triggers {
@@ -195,15 +178,16 @@ func (s *Service) processTriggersMatching(ctx context.Context, snap *automationW
 			var item automation.TriggerInboxItem
 			var run automation.RunResult
 			var processed bool
+			var triggerErr error
 			switch trigger.Type {
 			case automation.TriggerTypeSemantic:
-				item, run, processed, err = s.processDurableSemanticTrigger(ctx, snap, store, now, task, trigger, stateKey)
+				item, run, processed, triggerErr = s.processDurableSemanticTrigger(ctx, snap, store, now, task, trigger, stateKey)
 			case automation.TriggerTypeSchedule, automation.TriggerTypeChapterBatch:
-				item, run, processed, err = s.processDurableBuiltInTrigger(ctx, snap, store, now, task, trigger, stateKey)
+				item, run, processed, triggerErr = s.processDurableBuiltInTrigger(ctx, snap, store, now, task, trigger, stateKey)
 			case automation.TriggerTypeManual:
 				continue
 			default:
-				err = fmt.Errorf("unsupported automation trigger type %q", trigger.Type)
+				triggerErr = fmt.Errorf("unsupported automation trigger type %q", trigger.Type)
 			}
 			if item.ID != "" {
 				items = append(items, item)
@@ -211,14 +195,17 @@ func (s *Service) processTriggersMatching(ctx context.Context, snap *automationW
 			if run.Run.ID != "" {
 				runs = append(runs, run)
 			}
-			if err != nil {
-				slog.ErrorContext(ctx, fmt.Sprintf("[automation-trigger] durable processing failed source=%s task_id=%s trigger_id=%s type=%s processed=%t err=%v", source, task.ID, trigger.ID, trigger.Type, processed, err))
-				if errors.Is(err, errDurableTriggerActionRetry) {
+			if triggerErr != nil {
+				slog.ErrorContext(ctx, fmt.Sprintf("[automation-trigger] durable processing failed source=%s task_id=%s trigger_id=%s type=%s processed=%t err=%v", source, task.ID, trigger.ID, trigger.Type, processed, triggerErr))
+				if errors.Is(triggerErr, errDurableTriggerActionRetry) {
 					continue
 				}
-				return items, runs, err
+				if onlyTaskID != "" {
+					return items, runs, triggerErr
+				}
+				joinedErr = errors.Join(joinedErr, triggerErr)
 			}
 		}
 	}
-	return items, runs, nil
+	return items, runs, joinedErr
 }

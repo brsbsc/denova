@@ -17,6 +17,34 @@ type storyEventCheckpoint struct {
 	Depth          int
 	State          map[string]any
 	Plan           *BranchPlan
+	ParentState    map[string]any
+	ParentPlan     *BranchPlan
+}
+
+func (s *Store) stateAndPlanBeforeTurnLocked(storyID, branchID, turnID, parentID string) (map[string]any, *BranchPlan, int, bool, error) {
+	handle, err := s.openStoryJournalLocked(storyID, true)
+	if err != nil {
+		return nil, nil, 0, false, err
+	}
+	if branchID == "" {
+		branchID = handle.projection.Meta.CurrentBranch
+	}
+	projection := handle.projection.Branches[branchID]
+	if projection == nil {
+		return nil, nil, 0, false, fmt.Errorf("分支不存在: %s", branchID)
+	}
+	if projection.LatestTurnID == turnID && projection.StateBeforeLatest != nil && projection.LatestTurnParentID == parentID {
+		depth := 0
+		if projection.Depth > 0 {
+			depth = projection.Depth - 1
+		}
+		return cloneStoryState(projection.StateBeforeLatest), cloneBranchPlan(projection.PlanBeforeLatest), depth, false, nil
+	}
+	checkpoint, err := s.checkpointAtStoryEventLocked(handle, parentID)
+	if err != nil {
+		return nil, nil, 0, false, err
+	}
+	return cloneStoryState(checkpoint.State), cloneBranchPlan(checkpoint.Plan), checkpoint.Depth, true, nil
 }
 
 // checkpointAtStoryEventLocked resolves an exact parent, including state and
@@ -59,13 +87,22 @@ func (s *Store) checkpointAtStoryEventLocked(handle *storyJournalHandle, eventID
 // streaming passes then account for append-only state revisions and build the
 // exact branch checkpoint in chronological order.
 func (s *Store) checkpointAtTurnLocked(storyID, turnID string) (storyEventCheckpoint, error) {
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return storyEventCheckpoint{}, err
+	}
 	turnID = strings.TrimSpace(turnID)
 	if turnID == "" {
 		return storyEventCheckpoint{}, fmt.Errorf("父回合不能为空 / Parent turn is required")
 	}
-	handle, err := s.refreshStoryJournalLocked(storyID, true)
+	handle, err := s.refreshStoryJournalLocked(storyID, true, true)
 	if err != nil {
 		return storyEventCheckpoint{}, err
+	}
+	targetNode, hasTarget := handle.projection.ModelNodes[turnID]
+	if !hasTarget || targetNode.TurnAt == "" {
+		return storyEventCheckpoint{}, fmt.Errorf("父回合不存在 / Parent turn not found: %s", turnID)
 	}
 	branchIDs := make([]string, 0, len(handle.projection.Meta.Branches))
 	for branchID := range handle.projection.Meta.Branches {
@@ -74,48 +111,38 @@ func (s *Store) checkpointAtTurnLocked(storyID, turnID string) (storyEventCheckp
 	sort.Strings(branchIDs)
 
 	for _, pathBranchID := range branchIDs {
+		branchMeta := handle.projection.Meta.Branches[pathBranchID]
+		headID := strings.TrimSpace(branchMeta.Head)
+		if branchProj := handle.projection.Branches[pathBranchID]; branchProj != nil && strings.TrimSpace(branchProj.Head) != "" {
+			headID = strings.TrimSpace(branchProj.Head)
+		}
 		ancestorIDs := make(map[string]bool)
-		cursor := ""
+		visited := make(map[string]bool)
 		found := false
-		sourceBranchID := ""
 		depth := 0
-		for {
-			loaded, readErr := s.readStoryHistoryPageLocked(storyID, pathBranchID, cursor, maxStoryHistoryPageTurns, true)
-			if readErr != nil {
-				return storyEventCheckpoint{}, readErr
-			}
-			path, _ := eventPath(loaded.pageHeadID, eventsByID(loaded.records))
-			through := len(path)
-			if !found {
-				through = 0
-				for index, record := range path {
-					if record.Envelope.Type != StoryEventTypeTurn || record.Envelope.ID != turnID {
-						continue
-					}
-					found = true
-					through = index + 1
-					sourceBranchID = record.Envelope.BranchID
-					break
-				}
-			}
-			if found {
-				for _, record := range path[:through] {
-					if ancestorIDs[record.Envelope.ID] {
-						continue
-					}
-					ancestorIDs[record.Envelope.ID] = true
-					if record.Envelope.Type == StoryEventTypeTurn {
-						depth++
-					}
-				}
-			}
-			if !loaded.page.HasMore || strings.TrimSpace(loaded.page.BeforeCursor) == "" {
+		for id := headID; id != ""; {
+			node, ok := handle.projection.ModelNodes[id]
+			if !ok || visited[id] {
 				break
 			}
-			cursor = loaded.page.BeforeCursor
+			visited[id] = true
+			if id == turnID {
+				found = true
+			}
+			if found {
+				ancestorIDs[id] = true
+				if node.TurnAt != "" {
+					depth++
+				}
+			}
+			id = node.Parent
 		}
 		if !found {
 			continue
+		}
+		sourceBranchID, branchErr := s.turnEnvelopeBranchIDLocked(handle, turnID, targetNode.Cursor)
+		if branchErr != nil {
+			return storyEventCheckpoint{}, branchErr
 		}
 		state, stateErr := s.stateForStoryAncestorsLocked(handle, ancestorIDs)
 		if stateErr != nil {
@@ -131,15 +158,43 @@ func (s *Store) checkpointAtTurnLocked(storyID, turnID string) (storyEventCheckp
 		if branch := handle.projection.Branches[pathBranchID]; branch != nil && branch.LatestTurnID == turnID {
 			plan = cloneBranchPlan(branch.Plan)
 		}
+		parentCheckpoint, parentErr := s.checkpointAtStoryEventLocked(handle, targetNode.Parent)
+		if parentErr != nil {
+			return storyEventCheckpoint{}, parentErr
+		}
 		return storyEventCheckpoint{
 			SourceBranchID: sourceBranchID,
 			LatestTurnID:   turnID,
 			Depth:          depth,
 			State:          state,
 			Plan:           plan,
+			ParentState:    parentCheckpoint.State,
+			ParentPlan:     parentCheckpoint.Plan,
 		}, nil
 	}
 	return storyEventCheckpoint{}, fmt.Errorf("父回合不存在 / Parent turn not found: %s", turnID)
+}
+
+func (s *Store) turnEnvelopeBranchIDLocked(handle *storyJournalHandle, turnID string, cursor conversationjournal.Cursor) (string, error) {
+	if cursor == 0 {
+		return "", fmt.Errorf("missing journal locator for turn %s", turnID)
+	}
+	records, err := handle.journal.ReadRange(context.Background(), conversationjournal.Range{After: cursor - 1, Through: cursor})
+	if err != nil {
+		return "", err
+	}
+	for _, physical := range records {
+		_, events, decodeErr := decodeStoryProjectionPayload(physical.Payload)
+		if decodeErr != nil {
+			return "", decodeErr
+		}
+		for _, event := range events {
+			if event.Envelope.Type == StoryEventTypeTurn && event.Envelope.ID == turnID {
+				return event.Envelope.BranchID, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("父回合不存在 / Parent turn not found: %s", turnID)
 }
 
 func (s *Store) planForStoryAncestorsLocked(handle *storyJournalHandle, ancestorIDs map[string]bool) (*BranchPlan, error) {

@@ -59,7 +59,17 @@ func validateExtensionRecord(record ExtensionRecord) error {
 func (s *Store) ExtensionRecord(ctx context.Context, storyID, branchID string, address ExtensionRecord) (ExtensionRecord, uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	handle, err := s.refreshStoryJournalLocked(storyID, true)
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return ExtensionRecord{}, 0, err
+	}
+	release, err := s.acquireStoryReadLeaseLocked(storyID)
+	if err != nil {
+		return ExtensionRecord{}, 0, err
+	}
+	defer release()
+	handle, err := s.refreshStoryJournalLocked(storyID, true, true)
 	if err != nil {
 		return ExtensionRecord{}, 0, err
 	}
@@ -104,7 +114,7 @@ func (s *Store) SetExtensionRecord(ctx context.Context, storyID, branchID string
 		return 0, err
 	}
 	defer release()
-	handle, err := s.refreshStoryJournalLocked(storyID, true)
+	handle, err := s.refreshStoryJournalLocked(storyID, true, true)
 	if err != nil {
 		return 0, err
 	}
@@ -159,7 +169,17 @@ func (s *Store) SetExtensionRecord(ctx context.Context, storyID, branchID string
 func (s *Store) ExtensionRecordAddresses(storyID, owner string) ([]ExtensionRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	handle, err := s.refreshStoryJournalLocked(storyID, true)
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return nil, err
+	}
+	release, err := s.acquireStoryReadLeaseLocked(storyID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	handle, err := s.refreshStoryJournalLocked(storyID, true, true)
 	if err != nil {
 		return nil, err
 	}
@@ -190,12 +210,17 @@ func TurnNarrativeRevision(turn TurnEvent) string {
 func (s *Store) ExportJournal(ctx context.Context, storyID string, writer io.Writer) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return err
+	}
 	release, err := s.acquireStoryMutationLeaseLocked(storyID)
 	if err != nil {
 		return err
 	}
 	defer release()
-	if _, err := s.refreshStoryJournalLocked(storyID, true); err != nil {
+	if _, err := s.refreshStoryJournalLocked(storyID, true, true); err != nil {
 		return err
 	}
 	file, err := os.Open(s.storyPath(storyID))

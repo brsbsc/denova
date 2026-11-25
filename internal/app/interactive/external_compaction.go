@@ -20,6 +20,7 @@ func CompactExternal(ctx context.Context, cfg ExternalTurnConfig) (agentcompacti
 	if snapshot.CurrentTurn == nil {
 		return agentcompaction.Result{}, errors.New("Game context maintenance requires a completed turn")
 	}
+	c.WithBaseParentID(snapshot.CurrentTurn.ID)
 	turn := &ExternalTurn{config: cfg, ctx: ctx}
 	input, err := turn.prepareInput(ctx, external.OperationCompact)
 	if err != nil {

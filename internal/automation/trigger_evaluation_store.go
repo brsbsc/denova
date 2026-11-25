@@ -216,32 +216,35 @@ func (s *Store) EnsureInboxItem(ctx context.Context, item TriggerInboxItem) (Tri
 	if err != nil {
 		return TriggerInboxItem{}, false, err
 	}
-	unlock := storePathLocks.Lock(path)
-	defer unlock()
-	release, err := localfs.AcquireLease(ctx, path+".lock")
+	type ensureResult struct {
+		item    TriggerInboxItem
+		created bool
+	}
+	res, err := withTaskStoreWriteLease(ctx, path, func() (ensureResult, error) {
+		items, readErr := destination.readInboxScope(normalized.Scope)
+		if readErr != nil {
+			return ensureResult{}, readErr
+		}
+		for _, existing := range items {
+			if existing.ID != normalized.ID {
+				continue
+			}
+			if triggerInboxIntentHash(existing) != triggerInboxIntentHash(normalized) {
+				return ensureResult{}, fmt.Errorf("%w: inbox_id=%s", ErrTriggerActionConflict, normalized.ID)
+			}
+			return ensureResult{item: existing, created: false}, nil
+		}
+		items = append([]TriggerInboxItem{normalized}, items...)
+		items = boundInboxProjection(items)
+		if writeErr := destination.writeInboxScope(normalized.Scope, items); writeErr != nil {
+			return ensureResult{}, writeErr
+		}
+		return ensureResult{item: normalized, created: true}, nil
+	})
 	if err != nil {
 		return TriggerInboxItem{}, false, err
 	}
-	defer func() { _ = release() }()
-	items, err := destination.readInboxScope(normalized.Scope)
-	if err != nil {
-		return TriggerInboxItem{}, false, err
-	}
-	for _, existing := range items {
-		if existing.ID != normalized.ID {
-			continue
-		}
-		if triggerInboxIntentHash(existing) != triggerInboxIntentHash(normalized) {
-			return TriggerInboxItem{}, false, fmt.Errorf("%w: inbox_id=%s", ErrTriggerActionConflict, normalized.ID)
-		}
-		return existing, false, nil
-	}
-	items = append([]TriggerInboxItem{normalized}, items...)
-	items = boundInboxProjection(items)
-	if err := destination.writeInboxScope(normalized.Scope, items); err != nil {
-		return TriggerInboxItem{}, false, err
-	}
-	return normalized, true, nil
+	return res.item, res.created, nil
 }
 
 func (s *Store) mutateTriggerEvaluation(ctx context.Context, taskID, stateKey string, mutate func(TriggerState) (TriggerState, TriggerEvaluationRecord, bool, error)) (TriggerEvaluationRecord, error) {
@@ -338,6 +341,11 @@ func triggerEvaluationConflict(evaluationID, reason string) error {
 }
 
 func triggerInboxIntentHash(item TriggerInboxItem) string {
+	projectID := strings.TrimSpace(item.ProjectID)
+	workspace := canonicalStoreRoot(item.Workspace)
+	if projectID != "" {
+		workspace = ""
+	}
 	return deterministicTriggerHash(struct {
 		TaskID       string            `json:"task_id"`
 		TriggerID    string            `json:"trigger_id"`
@@ -352,8 +360,8 @@ func triggerInboxIntentHash(item TriggerInboxItem) string {
 		Evidence     []TriggerEvidence `json:"evidence"`
 		Fingerprint  string            `json:"fingerprint"`
 	}{
-		strings.TrimSpace(item.TaskID), strings.TrimSpace(item.TriggerID), normalizeInboxPurpose(item.Purpose), item.Scope, strings.TrimSpace(item.ProjectID),
-		canonicalStoreRoot(item.Workspace), normalizeActionPolicy(item.ActionPolicy, ActionPolicyConfirm), normalizeNotifyPolicy(item.NotifyPolicy, NotifyPolicyInbox),
+		strings.TrimSpace(item.TaskID), strings.TrimSpace(item.TriggerID), normalizeInboxPurpose(item.Purpose), item.Scope, projectID,
+		workspace, normalizeActionPolicy(item.ActionPolicy, ActionPolicyConfirm), normalizeNotifyPolicy(item.NotifyPolicy, NotifyPolicyInbox),
 		strings.TrimSpace(item.Title), strings.TrimSpace(item.Summary), item.Evidence, strings.TrimSpace(item.Fingerprint),
 	})
 }

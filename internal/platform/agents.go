@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -418,15 +419,22 @@ func (s *AgentService) StopRuntime(ctx context.Context, runtime *Runtime) error 
 func (s *AgentService) Close(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, live := range s.live {
-		if err := live.owner.Close(ctx); err != nil {
-			return err
+	var closeErr error
+	for id, live := range s.live {
+		if live.run != nil {
+			_, _ = live.run.Abort(ctx, agentevent.AbortRequest{Reason: "Agent service closed"})
 		}
-	}
-	for _, store := range s.projects {
-		if err := store.Close(); err != nil {
-			return err
+		select {
+		case <-live.done:
+		case <-ctx.Done():
+			closeErr = errors.Join(closeErr, ctx.Err())
 		}
+		closeErr = errors.Join(closeErr, live.owner.Close(ctx))
+		delete(s.live, id)
 	}
-	return nil
+	for id, store := range s.projects {
+		closeErr = errors.Join(closeErr, store.Close())
+		delete(s.projects, id)
+	}
+	return closeErr
 }

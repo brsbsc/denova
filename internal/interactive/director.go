@@ -46,48 +46,6 @@ func directorEventTemplate(id, name, category, summary string) DirectorEvent {
 	}
 }
 
-func upsertDirectorEvent(events []DirectorEvent, next DirectorEvent) []DirectorEvent {
-	normalized := normalizeDirectorEvents([]DirectorEvent{next})
-	if len(normalized) == 0 {
-		return events
-	}
-	next = normalized[0]
-	for i := range events {
-		if events[i].ID == next.ID {
-			events[i] = next
-			return events
-		}
-	}
-	if len(events) >= maxInteractiveListItems {
-		return events
-	}
-	return append(events, next)
-}
-
-func appendDefaultDirectorEventTemplates(events []DirectorEvent) []DirectorEvent {
-	for _, event := range DefaultDirectorEventTemplates() {
-		events = appendDirectorEventIfMissing(events, event)
-	}
-	return events
-}
-
-func appendDirectorEventIfMissing(events []DirectorEvent, next DirectorEvent) []DirectorEvent {
-	normalized := normalizeDirectorEvents([]DirectorEvent{next})
-	if len(normalized) == 0 {
-		return events
-	}
-	next = normalized[0]
-	for _, event := range events {
-		if event.ID == next.ID {
-			return events
-		}
-	}
-	if len(events) >= maxInteractiveListItems {
-		return events
-	}
-	return append(events, next)
-}
-
 func latestTurnForBranchHead(lines []StoryEventRecord, head string) *TurnEvent {
 	if projected, err := projectStoryEventOverlays(lines); err == nil {
 		lines = projected

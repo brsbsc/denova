@@ -76,7 +76,9 @@ func (s *Service) UpdateDue(ctx context.Context, now time.Time, apply func(conte
 		}
 		var preview Preview
 		if item.UpdateMode == "auto_apply" && item.PendingPreviewID != "" {
+			s.mu.Lock()
 			preview, _, _ = s.loadPreview(item.PendingPreviewID)
+			s.mu.Unlock()
 		}
 		if preview.ID == "" {
 			if !item.CheckedAt.IsZero() && now.Sub(item.CheckedAt) < 24*time.Hour {
@@ -90,7 +92,9 @@ func (s *Service) UpdateDue(ctx context.Context, now time.Time, apply func(conte
 		}
 		func() {
 			defer s.DiscardPreview(preview.ID)
+			s.mu.Lock()
 			current, _, err := s.loadInstallation(ctx, item.ID)
+			s.mu.Unlock()
 			if err != nil || current.RemoteState != "update_available" || current.UpdateMode != "auto_apply" || !automaticKinds(current.Bindings) {
 				return
 			}

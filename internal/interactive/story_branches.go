@@ -72,6 +72,8 @@ func (s *Store) CreateBranch(storyID string, req CreateBranchRequest) (BranchSum
 		BranchID: branchID, From: fromBranch, Ts: now, Title: title,
 		StateCheckpoint: cloneStoryState(checkpoint.State), LatestTurnID: checkpoint.LatestTurnID, Depth: checkpoint.Depth,
 		PlanCheckpoint: cloneBranchPlan(checkpoint.Plan),
+		ParentState:    cloneStoryStateIfPresent(checkpoint.ParentState),
+		ParentPlan:     cloneBranchPlan(checkpoint.ParentPlan),
 	}
 	switched := BranchSwitchedEvent{
 		V: schemaVersion, Type: StoryEventTypeBranchSwitched, ID: newID("bsw"),

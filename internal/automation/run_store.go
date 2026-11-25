@@ -165,9 +165,11 @@ func (s *Store) listDurableRuns(obligationsOnly bool) ([]DurableRun, error) {
 			unlock()
 			return nil, err
 		}
-		entries, err := location.store.readDurableRuns(location.scope)
+		var entries []durableRunFile
 		if obligationsOnly {
 			entries, err = location.store.readDurableRunObligations(location.scope)
+		} else {
+			entries, err = location.store.readDurableRuns(location.scope)
 		}
 		if err != nil {
 			unlock()
@@ -306,6 +308,13 @@ func (s *Store) appendRun(ctx context.Context, id string, run RunRecord) (Task, 
 					run = preserveLegacyEffects(entry.Run, run)
 					if transitionErr := validateRunAppendTransition(entry.Run, run); transitionErr != nil {
 						return Task{}, transitionErr
+					}
+				} else {
+					if task.ArchivedAt != nil {
+						return Task{}, fmt.Errorf("%w: task_id=%s", ErrTaskArchived, task.CatalogID)
+					}
+					if !task.Enabled && (run.Trigger == TriggerSchedule || run.Trigger == TriggerCondition) {
+						return Task{}, fmt.Errorf("automation task %s is disabled", task.CatalogID)
 					}
 				}
 				revision := maxDurableRunRevision(obligation, obligationFound, history, historyFound) + 1

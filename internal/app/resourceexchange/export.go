@@ -542,8 +542,6 @@ func (s *Service) Export(ctx context.Context, request ExportRequest) ([]byte, er
 			resource.Path = path.Join(prefix, book.CreatorFileName)
 		} else if ref.Kind == "style.reference" {
 			resource.Path = path.Join(prefix, "resource.md")
-		} else if ref.Kind == "project.cover" {
-			resource.Path = path.Join(prefix, "resource.png")
 		}
 		if ref.Kind == "lore.collection" {
 			for name, data := range content {

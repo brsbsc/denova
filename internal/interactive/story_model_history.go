@@ -57,11 +57,14 @@ func (s *Store) ReadModelHistory(storyID string, query StoryModelHistoryQuery) (
 	if storyID == "" {
 		return StoryModelHistory{}, fmt.Errorf("故事 ID 不能为空")
 	}
+	if err := validateStoryID(storyID); err != nil {
+		return StoryModelHistory{}, err
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	handle, err := s.refreshStoryJournalLocked(storyID, true)
+	handle, err := s.refreshStoryJournalLocked(storyID, true, true)
 	if err != nil {
 		return StoryModelHistory{}, err
 	}
@@ -125,7 +128,7 @@ func (s *Store) ReadModelHistory(storyID string, query StoryModelHistoryQuery) (
 
 	// Each page refreshes the shared handle. Reject an externally advanced path
 	// instead of combining two branch revisions into one model request.
-	currentHandle, err := s.openStoryJournalLocked(storyID)
+	currentHandle, err := s.openStoryJournalLocked(storyID, true)
 	if err != nil {
 		return StoryModelHistory{}, err
 	}

@@ -4,9 +4,9 @@ import (
 	"archive/zip"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -33,12 +33,14 @@ func (h Stories) Instances(ctx context.Context) ([]platform.Instance, error) {
 	for _, project := range projects {
 		store, err := h.host.OpenStoryStore(ctx, project.ID)
 		if err != nil {
+			slog.WarnContext(ctx, "platform_story_store_unavailable", "project", project.ID, "error", err)
 			continue
 		}
 		values, err := platformStoryInstancesInStore(ctx, store)
 		store.Close()
 		if err != nil {
-			return nil, err
+			slog.WarnContext(ctx, "platform_story_instances_unavailable", "project", project.ID, "error", err)
+			continue
 		}
 		items = append(items, values...)
 	}
@@ -50,26 +52,31 @@ func platformStoryInstancesInStore(ctx context.Context, store *StoryStore) ([]pl
 	if err != nil {
 		return nil, err
 	}
+	projectID := store.Operation.Layout().ProjectID
 	items := []platform.Instance{}
 	for _, story := range index.Stories {
 		addresses, err := store.ExtensionRecordAddresses(story.ID, platformStoryBindingOwner)
 		if err != nil {
-			return nil, err
+			slog.WarnContext(ctx, "platform_story_binding_addresses_unavailable", "project", projectID, "story", story.ID, "error", err)
+			continue
 		}
 		for _, address := range addresses {
 			record, _, err := store.ExtensionRecord(ctx, story.ID, "", address)
 			if err != nil {
-				return nil, err
+				slog.WarnContext(ctx, "platform_story_binding_read_failed", "project", projectID, "story", story.ID, "game", address.Key, "error", err)
+				continue
 			}
 			var binding platformStoryBinding
 			if err := json.Unmarshal(record.Value, &binding); err != nil {
-				return nil, err
+				slog.WarnContext(ctx, "platform_story_binding_invalid_json", "project", projectID, "story", story.ID, "game", address.Key, "error", err)
+				continue
 			}
 			if binding.Removed {
 				continue
 			}
-			if binding.Instance.ProjectID != store.Operation.Layout().ProjectID || binding.Instance.StoryID != story.ID || binding.Instance.GameID != address.Key {
-				return nil, fmt.Errorf("Story application binding identity is invalid")
+			if binding.Instance.ProjectID != projectID || binding.Instance.StoryID != story.ID || binding.Instance.GameID != address.Key {
+				slog.WarnContext(ctx, "platform_story_binding_identity_mismatch", "project", projectID, "story", story.ID, "game", address.Key)
+				continue
 			}
 			items = append(items, binding.Instance)
 		}
@@ -210,9 +217,12 @@ func (h Stories) Export(ctx context.Context, instance platform.Instance, writer 
 		if err != nil {
 			return err
 		}
-		defer file.Close()
-		_, err = io.Copy(target, file)
-		return err
+		_, copyErr := io.Copy(target, file)
+		closeErr := file.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
 	})
 	if err != nil {
 		return err

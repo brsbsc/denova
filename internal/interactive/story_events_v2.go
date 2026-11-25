@@ -43,6 +43,7 @@ type TurnStateRevisedEvent struct {
 	ClearRuleResolution  bool             `json:"clear_rule_resolution,omitempty"`
 	TerminalOutcome      *TerminalOutcome `json:"terminal_outcome,omitempty"`
 	ClearTerminalOutcome bool             `json:"clear_terminal_outcome,omitempty"`
+	ParentState          map[string]any   `json:"parent_state,omitempty"`
 	Reason               string           `json:"reason,omitempty"`
 }
 
@@ -91,5 +92,7 @@ type BranchHeadMovedEvent struct {
 	NextDepth        int            `json:"next_depth,omitempty"`
 	StateCheckpoint  map[string]any `json:"state_checkpoint"`
 	PlanCheckpoint   *BranchPlan    `json:"plan_checkpoint,omitempty"`
+	ParentState      map[string]any `json:"parent_state,omitempty"`
+	ParentPlan       *BranchPlan    `json:"parent_plan,omitempty"`
 	Reason           string         `json:"reason"`
 }

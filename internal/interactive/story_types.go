@@ -539,6 +539,8 @@ type BranchEvent struct {
 	LatestTurnID    string         `json:"latest_turn_id,omitempty"`
 	Depth           int            `json:"depth,omitempty"`
 	PlanCheckpoint  *BranchPlan    `json:"plan_checkpoint,omitempty"`
+	ParentState     map[string]any `json:"parent_state,omitempty"`
+	ParentPlan      *BranchPlan    `json:"parent_plan,omitempty"`
 }
 
 type Snapshot struct {

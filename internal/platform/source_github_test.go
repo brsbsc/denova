@@ -136,20 +136,11 @@ func TestGitHubInstallAndUpdateUseReviewedBytes(t *testing.T) {
 			}
 			installed := testInstall(t, m, candidate)
 			ref := installed.Ref.Package
-			update, err := m.CheckGitHubUpdate(context.Background(), ref)
-			if err != nil || update.Status != "current" {
-				t.Fatalf("incorrect initial update state: %+v %v", update, err)
-			}
 			files["index.html"] = append(bytes.Clone(files["index.html"]), []byte("\n<!-- updated -->")...)
 			// Both fixtures distribute index.html, retaining their declared version.
 			archives[secondSHA] = githubTestArchive(t, files)
-			head = secondSHA
-			update, err = m.CheckGitHubUpdate(context.Background(), ref)
-			if err != nil || update.Status != "available" || update.Source.Commit != secondSHA {
-				t.Fatalf("missing upstream update: %+v %v", update, err)
-			}
 			head = strings.Repeat("c", 40)
-			next, err := m.PreviewGitHubUpdate(context.Background(), ref, update.Source.Commit)
+			next, err := m.PreviewGitHub(context.Background(), GitHubSource{URL: "https://github.com/author/repo", Ref: "main", Commit: secondSHA})
 			if err != nil || next.Source.Commit != secondSHA || next.Digest == candidate.Digest {
 				t.Fatalf("update did not freeze reviewed commit: %+v %v", next, err)
 			}
@@ -165,38 +156,7 @@ func TestGitHubInstallAndUpdateUseReviewedBytes(t *testing.T) {
 			if _, _, err := m.release(installed.Ref); err != nil {
 				t.Fatal("update removed the previous snapshot", err)
 			}
-			if _, err := m.Install(next.ID, next.Manifest.Permissions.Required); err == nil {
-				t.Fatal("stale update replaced an intervening installation")
-			}
 		})
-	}
-}
-
-func TestGitHubRejectsChangedIdentityAndPreservesInstallation(t *testing.T) {
-	m, projectID := testManager(t)
-	original := testCandidate(t, m, projectID, "static", "test.identity", Game)
-	head := strings.Repeat("a", 40)
-	archives := map[string][]byte{head: githubTestArchive(t, original.files)}
-	githubTestServer(t, m, &head, archives)
-	candidate, err := m.PreviewGitHub(context.Background(), GitHubSource{URL: "https://github.com/author/repo"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	installed := testInstall(t, m, candidate)
-	files := maps.Clone(original.files)
-	manifest := original.Manifest
-	manifest.ID = "test.replaced"
-	files[Game.manifestFile()], _ = json.Marshal(manifest)
-	head = strings.Repeat("b", 40)
-	archives[head] = githubTestArchive(t, files)
-	_, err = m.PreviewGitHubUpdate(context.Background(), installed.Ref.Package, head)
-	_, problem := ErrorResponse(err)
-	if problem.Code != "GITHUB_IDENTITY_CHANGED" {
-		t.Fatalf("unexpected identity error: %v", err)
-	}
-	current, _, err := m.currentPackage(Game, installed.Manifest.ID)
-	if err != nil || current.Ref != installed.Ref {
-		t.Fatal("failed update changed current installation", err)
 	}
 }
 

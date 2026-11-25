@@ -20,7 +20,7 @@ func (s *Store) CanonicalHistoryHead(ctx context.Context, storyID, branchID stri
 		return agentcanonical.CanonicalHistoryHead{}, err
 	}
 	defer release()
-	handle, err := s.refreshStoryJournalLocked(storyID, false)
+	handle, err := s.refreshStoryJournalLocked(storyID, false, false)
 	if err != nil {
 		return agentcanonical.CanonicalHistoryHead{}, err
 	}

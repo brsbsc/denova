@@ -300,7 +300,7 @@ func (m *Manager) downloadGitHubArchive(ctx context.Context, source GitHubSource
 // PreviewGitHub only downloads and validates files. Build commands run solely
 // through the existing visible workbench terminal after an explicit import.
 func (m *Manager) PreviewGitHub(ctx context.Context, source GitHubSource) (Candidate, error) {
-	source, files, err := m.downloadGitHubSource(ctx, source)
+	source, files, err := m.SourceFiles(ctx, source)
 	if err != nil {
 		return Candidate{}, err
 	}
@@ -319,54 +319,6 @@ func (m *Manager) PreviewGitHub(ctx context.Context, source GitHubSource) (Candi
 	m.mu.Lock()
 	m.candidates[candidate.ID].Source = &source
 	candidate.Source = &source
-	m.mu.Unlock()
-	return candidate, nil
-}
-
-func (m *Manager) CheckGitHubUpdate(ctx context.Context, ref PackageRef) (GitHubUpdate, error) {
-	_, item, err := m.currentPackage(ref.Kind, ref.ID)
-	if err != nil {
-		return GitHubUpdate{}, err
-	}
-	if item.Source == nil {
-		return GitHubUpdate{}, failure("UNSUPPORTED", "Extension has no GitHub update source")
-	}
-	source := *item.Source
-	source.Commit = ""
-	source, err = m.resolveGitHubSource(ctx, source)
-	if err != nil {
-		return GitHubUpdate{}, err
-	}
-	status := "current"
-	if source.Commit != item.Source.Commit {
-		status = "available"
-	}
-	slog.Info("platform_github_update_checked", "kind", ref.Kind, "package", ref.ID, "status", status, "commit", source.Commit)
-	return GitHubUpdate{Status: status, Source: source}, nil
-}
-
-// PreviewGitHubUpdate fixes the reviewed commit and binds installation to the
-// current package. A remote rename or an intervening install cannot replace it.
-func (m *Manager) PreviewGitHubUpdate(ctx context.Context, ref PackageRef, commit string) (Candidate, error) {
-	current, item, err := m.currentPackage(ref.Kind, ref.ID)
-	if err != nil {
-		return Candidate{}, err
-	}
-	if item.Source == nil || !githubCommit.MatchString(commit) {
-		return Candidate{}, failure("GITHUB_REF_INVALID", "A GitHub update requires an installed source and reviewed commit")
-	}
-	source := *item.Source
-	source.Commit = commit
-	candidate, err := m.PreviewGitHub(ctx, source)
-	if err != nil {
-		return Candidate{}, err
-	}
-	if candidate.Kind != ref.Kind || candidate.Manifest.ID != ref.ID {
-		m.DiscardCandidate(candidate.ID)
-		return Candidate{}, failure("GITHUB_IDENTITY_CHANGED", "GitHub update changed the extension identity")
-	}
-	m.mu.Lock()
-	m.candidates[candidate.ID].replaces = &current.Ref
 	m.mu.Unlock()
 	return candidate, nil
 }

@@ -9,7 +9,6 @@ import (
 
 	agents "denova/internal/agents"
 	agentcontext "denova/internal/agents/context"
-	agentcompaction "denova/internal/agents/context/compaction"
 	"denova/internal/book/lore"
 	"denova/internal/interactive/teller"
 )
@@ -31,13 +30,6 @@ type interactiveContextSource struct {
 	// ExactMessage prevents a compaction summary that merely paraphrases an old
 	// turn from making the original message look retained.
 	ExactMessage bool
-}
-
-// PreserveStableLeadingMessage keeps complete resident Lore outside
-// the compactable history tail, mirroring the stable-prefix behavior used by
-// writing-mode sessions.
-func PreserveStableLeadingMessage(messages []*agents.Message, content string) []*agents.Message {
-	return agentcompaction.PreserveLeadingMessage(messages, content)
 }
 
 func interactiveStoryContextSources(title, origin, protagonist string, teller teller.Definition, historyCheckpoint, branchPlan, residentLore, loreRevision, loreRuntime, ruleSummary, actorStateRuntime, stateSchemaInitialization string, turnHistory interactiveTurnHistory, userAction string) []interactiveContextSource {

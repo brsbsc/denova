@@ -234,6 +234,11 @@ func (r *Runtime) serveView(w http.ResponseWriter, request *http.Request) {
 			continue
 		}
 		if view.Source.Kind == "backend" {
+			targetPath, err := resolveBackendViewPath(view.Source.Path, parts[1], request.URL.RawPath)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
 			if r.owner.process == nil {
 				writeError(w, failure("RUNTIME_UNAVAILABLE", "Backend is not ready"))
 				return
@@ -244,7 +249,8 @@ func (r *Runtime) serveView(w http.ResponseWriter, request *http.Request) {
 			original := proxy.Director
 			proxy.Director = func(req *http.Request) {
 				original(req)
-				req.URL.Path = path.Join(view.Source.Path, parts[1])
+				req.URL.Path = targetPath
+				req.URL.RawPath = ""
 				req.Header.Del("Cookie")
 				req.Header.Set("Authorization", "Bearer "+r.owner.process.token)
 			}
@@ -291,6 +297,49 @@ func (r *Runtime) serveView(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writeError(w, failure("NOT_FOUND", "Undeclared view"))
+}
+
+func resolveBackendViewPath(basePath, relative, rawPath string) (string, error) {
+	cleanBase := path.Clean(basePath)
+	if !strings.HasPrefix(cleanBase, "/") {
+		return "", failure("INVALID_ARGUMENT", "Invalid backend view root")
+	}
+	lowerRaw := strings.ToLower(rawPath)
+	if strings.Contains(lowerRaw, "%2f") || strings.Contains(lowerRaw, "%5c") || strings.Contains(lowerRaw, "%00") {
+		return "", failure("INVALID_ARGUMENT", "Invalid encoded view path")
+	}
+	if strings.ContainsAny(relative, "\x00\\\r\n") {
+		return "", failure("INVALID_ARGUMENT", "Invalid view path")
+	}
+	if relative == "" {
+		return cleanBase, nil
+	}
+	trailingSlash := strings.HasSuffix(relative, "/")
+	trimmed := strings.TrimSuffix(relative, "/")
+	if trimmed == "" || strings.HasPrefix(trimmed, "/") {
+		return "", failure("INVALID_ARGUMENT", "Invalid view path")
+	}
+	for _, segment := range strings.Split(trimmed, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return "", failure("INVALID_ARGUMENT", "View path traversal is not allowed")
+		}
+		if err := portablepath.ValidateComponent(segment); err != nil {
+			return "", failure("INVALID_ARGUMENT", "%v", err)
+		}
+	}
+	joined := path.Join(cleanBase, trimmed)
+	cleaned := path.Clean(joined)
+	if cleanBase == "/" {
+		if !strings.HasPrefix(cleaned, "/") || cleaned == "/" {
+			return "", failure("INVALID_ARGUMENT", "View path escapes declared backend prefix")
+		}
+	} else if !strings.HasPrefix(cleaned, cleanBase+"/") {
+		return "", failure("INVALID_ARGUMENT", "View path escapes declared backend prefix")
+	}
+	if trailingSlash {
+		return cleaned + "/", nil
+	}
+	return cleaned, nil
 }
 
 type FileSnapshot struct {

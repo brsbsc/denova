@@ -22,6 +22,11 @@ func OpenAgentLog(
 	storyID string,
 	key agentsession.Key,
 ) (agentsession.Log, error) {
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return nil, err
+	}
 	canonical, err := agentsession.CanonicalKey(key)
 	if err != nil {
 		return nil, err
@@ -34,7 +39,7 @@ func OpenAgentLog(
 		return nil, fmt.Errorf("acquire embedded game Agent Session lease: %w", err)
 	}
 	store.mu.Lock()
-	handle, err := store.openStoryJournalLocked(storyID)
+	handle, err := store.openStoryJournalLocked(storyID, true)
 	store.mu.Unlock()
 	if err != nil {
 		_ = release()
@@ -54,9 +59,14 @@ func OpenAgentLog(
 
 // AgentSessionKeys returns the derived Agent streams embedded in one Story.
 func AgentSessionKeys(contentRoot, novaDir, storyID string) ([]agentsession.Key, error) {
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return nil, err
+	}
 	store := NewStoreWithNovaDir(contentRoot, novaDir)
 	store.mu.Lock()
-	handle, err := store.openStoryJournalLocked(storyID)
+	handle, err := store.openStoryJournalLocked(storyID, false)
 	store.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -67,6 +77,11 @@ func AgentSessionKeys(contentRoot, novaDir, storyID string) ([]agentsession.Key,
 
 // OpenAgentReader observes a branch without opening an execution writer.
 func OpenAgentReader(ctx context.Context, contentRoot, novaDir, storyID string, key agentsession.Key) (agentsession.Log, error) {
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return nil, err
+	}
 	store := NewStoreWithNovaDir(contentRoot, novaDir)
 	path := store.storyPath(storyID)
 	meta, err := readStoryJournalHeader(path)

@@ -36,8 +36,12 @@ func (s *Store) LastStoryJournalReplayStats(storyID string) StoryJournalReplaySt
 // appendStoryTransactionLocked publishes domain events plus the resulting
 // metadata through the shared checksummed conversation journal.
 func (s *Store) appendStoryTransactionLocked(storyID string, meta StoryMeta, newEvents ...any) error {
-	storyID = strings.TrimSpace(storyID)
-	if s.heldStoryLeases == nil || s.heldStoryLeases[storyID] <= 0 {
+	var err error
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return err
+	}
+	if s.heldStoryWriteLeases == nil || s.heldStoryWriteLeases[storyID] <= 0 {
 		return fmt.Errorf("story append transaction requires the cross-store mutation lease")
 	}
 	if len(newEvents) == 0 {
@@ -86,7 +90,7 @@ func (s *Store) appendStoryTransactionLocked(storyID string, meta StoryMeta, new
 		return err
 	}
 	payloads = append(payloads, metaPayload)
-	handle, err := s.openStoryJournalLocked(storyID)
+	handle, err := s.openStoryJournalLocked(storyID, true)
 	if err != nil {
 		return err
 	}
@@ -100,13 +104,16 @@ func (s *Store) appendStoryTransactionLocked(storyID string, meta StoryMeta, new
 		return nil
 	}
 	if errors.Is(appendErr, conversationjournal.ErrCommitUnknown) {
+		_ = s.evictStoryJournalLocked(storyID)
 		return appendErr
 	}
 	committed, reconcileErr := s.reconcileStoryAppendLocked(storyID, meta, events)
 	if reconcileErr != nil {
+		_ = s.evictStoryJournalLocked(storyID)
 		return errors.Join(appendErr, fmt.Errorf("reconcile ambiguous story append: %w", reconcileErr))
 	}
 	if !committed {
+		_ = s.evictStoryJournalLocked(storyID)
 		return appendErr
 	}
 	handle.recent = make(map[string]storyRecentCache)

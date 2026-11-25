@@ -375,9 +375,16 @@ func serveAgentEvents(w http.ResponseWriter, request *http.Request, execution *a
 		select {
 		case <-request.Context().Done():
 			return
+		case <-execution.done:
 		case <-ticker.C:
 		}
 		execution.mu.Lock()
+		done := false
+		select {
+		case <-execution.done:
+			done = true
+		default:
+		}
 		events := slices.Clone(execution.events)
 		next := execution.next
 		execution.mu.Unlock()
@@ -394,10 +401,8 @@ func serveAgentEvents(w http.ResponseWriter, request *http.Request, execution *a
 			}
 		}
 		after = next
-		select {
-		case <-execution.done:
+		if done {
 			return
-		default:
 		}
 	}
 }

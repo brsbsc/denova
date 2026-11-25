@@ -149,7 +149,7 @@ func (s *Store) ReadCanonicalWindow(ctx context.Context, storyID string, snapsho
 		return nil, err
 	}
 	defer release()
-	handle, err := s.refreshStoryJournalLocked(storyID, false)
+	handle, err := s.refreshStoryJournalLocked(storyID, false, false)
 	if err != nil {
 		return nil, err
 	}

@@ -181,7 +181,7 @@ func (c *automationTriggerCoordinator) run(workspace string, request *automation
 		if processOverride := c.processOverride; processOverride != nil {
 			err = processOverride(request.operation.Context(), service, snapshot, source)
 		} else {
-			items, runs, processErr := service.processContentTriggers(request.operation.Context(), snapshot, time.Now().UTC(), source)
+			items, runs, processErr := service.processContentTriggers(request.operation.Context(), snapshot, time.Now().Local(), source)
 			itemsCount, runsCount, err = len(items), len(runs), processErr
 		}
 		if err != nil {

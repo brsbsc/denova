@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	// Version 21 rebuilds turn-version selections with their shared parent state.
-	storyProjectionVersion      = 21
+	// Version 22 maintains LatestTurnParentID and parent checkpoints across branches and rewinds.
+	storyProjectionVersion      = 22
 	storyRecentTransactionLimit = 200
 	storyRecentCommitLimit      = 200
 	storyTurnAnchorEvery        = 256
@@ -351,6 +351,9 @@ func (projection *storyJournalProjection) applyEvent(cursor conversationjournal.
 			return err
 		}
 		if revision.TurnID == branch.LatestTurnID && (revision.ClearStateDelta || revision.StateDelta != nil) {
+			if revision.ParentState != nil {
+				branch.StateBeforeLatest = cloneStoryState(revision.ParentState)
+			}
 			branch.State = cloneStoryState(branch.StateBeforeLatest)
 			if !revision.ClearStateDelta && revision.StateDelta != nil {
 				applyStateDeltaToProjection(branch.State, *revision.StateDelta)
@@ -363,6 +366,11 @@ func (projection *storyJournalProjection) applyEvent(cursor conversationjournal.
 		}
 		branch.Head = event.ParentID
 		branch.LatestTurnID = event.LatestTurnID
+		if event.LatestTurnID != "" {
+			branch.LatestTurnParentID = projection.ModelNodes[event.LatestTurnID].Parent
+		} else {
+			branch.LatestTurnParentID = ""
+		}
 		branch.Depth = event.Depth
 		// A fork inherits the complete model-visible prefix at its parent. Its
 		// revision therefore starts at that canonical depth rather than at the
@@ -371,8 +379,9 @@ func (projection *storyJournalProjection) applyEvent(cursor conversationjournal.
 		if event.StateCheckpoint != nil {
 			branch.State = cloneStoryState(event.StateCheckpoint)
 		}
+		branch.StateBeforeLatest = cloneStoryStateIfPresent(event.ParentState)
 		branch.Plan = cloneBranchPlan(event.PlanCheckpoint)
-		branch.PlanBeforeLatest = nil
+		branch.PlanBeforeLatest = cloneBranchPlan(event.ParentPlan)
 	case StoryEventTypeBranchHeadMoved:
 		var event BranchHeadMovedEvent
 		if err := mapToStruct(record.Raw, &event); err != nil {
@@ -380,11 +389,16 @@ func (projection *storyJournalProjection) applyEvent(cursor conversationjournal.
 		}
 		branch.Head = event.NextHead
 		branch.LatestTurnID = event.NextLatestTurnID
+		if event.NextLatestTurnID != "" {
+			branch.LatestTurnParentID = projection.ModelNodes[event.NextLatestTurnID].Parent
+		} else {
+			branch.LatestTurnParentID = ""
+		}
 		branch.Depth = event.NextDepth
 		branch.State = cloneStoryState(event.StateCheckpoint)
-		branch.StateBeforeLatest = nil
+		branch.StateBeforeLatest = cloneStoryStateIfPresent(event.ParentState)
 		branch.Plan = cloneBranchPlan(event.PlanCheckpoint)
-		branch.PlanBeforeLatest = nil
+		branch.PlanBeforeLatest = cloneBranchPlan(event.ParentPlan)
 	case StoryEventTypeTurnVersionSelected:
 		var event TurnVersionSelectionEvent
 		if err := mapToStruct(record.Raw, &event); err != nil {
@@ -536,6 +550,13 @@ func applyStateDeltaToProjection(state map[string]any, delta StateDelta) {
 	for _, op := range delta.ActorOps {
 		applyActorStateOp(state, op)
 	}
+}
+
+func cloneStoryStateIfPresent(state map[string]any) map[string]any {
+	if state == nil {
+		return nil
+	}
+	return cloneStoryState(state)
 }
 
 func cloneStoryState(state map[string]any) map[string]any {

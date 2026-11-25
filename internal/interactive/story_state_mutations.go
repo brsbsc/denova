@@ -75,19 +75,22 @@ func (s *Store) AppendStateDelta(storyID string, req AppendStateDeltaRequest) (S
 	}
 	delta := newStateDeltaWithActorOps(nextOps, nextActorOps)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	projection, err := s.storyBranchProjectionLocked(storyID, branchID)
+	parentState, _, _, fromCheckpoint, err := s.stateAndPlanBeforeTurnLocked(storyID, branchID, parentID, parentIDFromRaw(record.Raw))
 	if err != nil {
 		return StateDeltaEvent{}, err
 	}
 	director := s.storyDirectorForMeta(meta)
 	actorState := actorStateSystemFromSnapshot(meta.ActorStateSchema, director.ActorState)
-	if err := validateActorResourcesAfterOps(actorState, projection.StateBeforeLatest, nextOps, nextActorOps); err != nil {
+	if err := validateActorResourcesAfterOps(actorState, parentState, nextOps, nextActorOps); err != nil {
 		return StateDeltaEvent{}, err
 	}
 	revision := TurnStateRevisedEvent{
 		V: schemaVersion, Type: StoryEventTypeTurnStateRevised, ID: newID("tsr"),
 		ParentID: parentID, BranchID: branchID, Ts: now, TurnID: parentID,
 		StateDelta: &delta, StateStatus: "ready", Reason: "state_settled",
+	}
+	if fromCheckpoint {
+		revision.ParentState = cloneStoryState(parentState)
 	}
 	event := newStateDeltaEventWithActorOps(revision.ID, parentID, branchID, now, ops, actorOps)
 	meta.UpdatedAt = now
@@ -189,6 +192,7 @@ func (s *Store) RerollRuleResolution(storyID, resolutionID string, req RuleResol
 	}
 	path, _ := eventPath(branch.Head, eventsByID(projected))
 	var target TurnEvent
+	targetParentID := ""
 	for _, record := range path {
 		if record.Envelope.Type != StoryEventTypeTurn {
 			continue
@@ -202,6 +206,7 @@ func (s *Store) RerollRuleResolution(storyID, resolutionID string, req RuleResol
 		}
 		if turn.RuleResolution != nil && turn.RuleResolution.ID == resolutionID {
 			target = turn
+			targetParentID = parentIDFromRaw(record.Raw)
 			break
 		}
 	}
@@ -209,11 +214,10 @@ func (s *Store) RerollRuleResolution(storyID, resolutionID string, req RuleResol
 		return RuleResolution{}, fmt.Errorf("当前分支路径中未找到规则结算: %s", resolutionID)
 	}
 	request := NormalizeTurnCheckRequest(target.RuleResolution.Request)
-	branchProjection, err := s.storyBranchProjectionLocked(storyID, branchID)
+	state, _, _, fromCheckpoint, err := s.stateAndPlanBeforeTurnLocked(storyID, branchID, target.ID, targetParentID)
 	if err != nil {
 		return RuleResolution{}, err
 	}
-	state := cloneStoryState(branchProjection.StateBeforeLatest)
 	director := s.storyDirectorForMeta(meta)
 	actorState := actorStateSystemFromSnapshot(meta.ActorStateSchema, director.ActorState)
 	applyLegacyActorStateAliases(state, meta.ActorStateSchema)
@@ -255,6 +259,9 @@ func (s *Store) RerollRuleResolution(storyID, resolutionID string, req RuleResol
 		V: schemaVersion, Type: StoryEventTypeTurnStateRevised, ID: newID("tsr"),
 		ParentID: target.ID, BranchID: branchID, Ts: now, TurnID: target.ID,
 		RuleResolution: &next, Reason: "rule_rerolled",
+	}
+	if fromCheckpoint {
+		revision.ParentState = cloneStoryState(state)
 	}
 	if len(nextOps) > 0 || len(nextActorOps) > 0 {
 		delta := newStateDeltaWithActorOps(nextOps, nextActorOps)

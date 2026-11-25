@@ -97,6 +97,10 @@ func (s *Store) AppendTurnWithState(storyID string, req AppendTurnWithStateReque
 	req.ProviderContinuation = providerContinuation
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	storyID, err = normalizeStoryID(storyID)
+	if err != nil {
+		return TurnEvent{}, nil, err
+	}
 	releaseStory, err := s.acquireStoryMutationLeaseLocked(storyID)
 	if err != nil {
 		return TurnEvent{}, nil, err
@@ -193,8 +197,12 @@ func (s *Store) AppendTurnWithState(storyID string, req AppendTurnWithStateReque
 		parentID = commitParentID
 	}
 	state := cloneStoryState(branchProjection.State)
-	if strings.TrimSpace(req.ReplaceTurnID) != "" {
-		state = cloneStoryState(branchProjection.StateBeforeLatest)
+	replaceTurnFromCheckpoint := false
+	if replaceTurnID := strings.TrimSpace(req.ReplaceTurnID); replaceTurnID != "" {
+		state, _, _, replaceTurnFromCheckpoint, err = s.stateAndPlanBeforeTurnLocked(storyID, branchID, replaceTurnID, commitParentID)
+		if err != nil {
+			return TurnEvent{}, nil, err
+		}
 	}
 	director := s.storyDirectorForMeta(meta)
 	actorState := actorStateSystemFromSnapshot(meta.ActorStateSchema, director.ActorState)
@@ -310,6 +318,20 @@ func (s *Store) AppendTurnWithState(storyID string, req AppendTurnWithStateReque
 	meta.Branches[branchID] = branch
 	meta.UpdatedAt = now
 	newEvents := []any{turn}
+	if replaceTurnFromCheckpoint {
+		// Pre-fix journals without ParentState on Branch/BranchHeadMoved leave
+		// StateBeforeLatest nil on replay. Persist the resolved parent checkpoint
+		// on an idempotent state-settlement side record so cold replay matches live state.
+		revision := TurnStateRevisedEvent{
+			V: schemaVersion, Type: StoryEventTypeTurnStateRevised, ID: newID("tsr"),
+			ParentID: turn.ID, BranchID: branchID, Ts: now, TurnID: turn.ID,
+			StateDelta: turn.StateDelta, ClearStateDelta: turn.StateDelta == nil,
+			StateStatus: turn.StateStatus, RuleResolution: turn.RuleResolution,
+			TerminalOutcome: turn.TerminalOutcome, ParentState: cloneStoryState(state),
+			Reason: "turn_replaced_parent_checkpoint",
+		}
+		newEvents = append(newEvents, revision)
+	}
 	var committedPlanUpdate *string
 	if meta.PlanningMode == StoryPlanningModeEnabled && turn.TurnResult != nil {
 		committedPlanUpdate = cloneStringPointer(turn.TurnResult.PlanUpdate)

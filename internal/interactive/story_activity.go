@@ -36,7 +36,7 @@ func (s *Store) ReadActivity(ctx context.Context, storyID string, from, until ti
 			return err
 		}
 		defer release()
-		handle, err := s.refreshStoryJournalLocked(storyID, false)
+		handle, err := s.refreshStoryJournalLocked(storyID, false, false)
 		if err != nil {
 			return err
 		}

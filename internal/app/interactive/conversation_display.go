@@ -79,17 +79,18 @@ func (c *Conversation) AppendDisplayEvent(event session.DisplayEvent) error {
 	}
 	turnID := ""
 	branchID := c.branchID
+	storyID := c.storyID
+	store := c.store
+	maintenanceCompaction := role == "context_compaction" && c.user == "" && c.lastTurn == nil && c.baseParentID != nil
 	if c.lastTurn != nil {
 		turnID = c.lastTurn.ID
 		branchID = c.lastTurn.BranchID
 		c.lastTurn.DisplayEvents = appendOrReplaceDisplayEvent(c.lastTurn.DisplayEvents, next)
-	} else if role == "context_compaction" && c.user == "" && c.baseParentID != nil {
+	} else if maintenanceCompaction {
 		// A maintenance command has no new story turn. Its observation belongs
 		// to the accepted branch head and remains visible after a reload.
 		turnID = *c.baseParentID
 	}
-	storyID := c.storyID
-	store := c.store
 	if turnID == "" || store == nil {
 		terminalRuntimeObservation := event.RuntimeManaged && (role == "context_compaction" || (role == "tool_call" && status != "running"))
 		if store != nil && (role == "todo_updated" || terminalRuntimeObservation) && c.agentCycleIdentity.CommandID != "" {
@@ -102,6 +103,13 @@ func (c *Conversation) AppendDisplayEvent(event session.DisplayEvent) error {
 	}
 	c.mu.Unlock()
 	err := store.AppendTurnDisplayEvent(storyID, branchID, turnID, next)
+	if err != nil && maintenanceCompaction {
+		// When the branch head is a structural revision (e.g. BranchPlanRevised),
+		// baseParentID points to that revision rather than the latest logical Turn.
+		if snapshot, snapshotErr := store.Snapshot(storyID, branchID); snapshotErr == nil && snapshot.CurrentTurn != nil && snapshot.CurrentTurn.ID != turnID {
+			err = store.AppendTurnDisplayEvent(storyID, snapshot.BranchID, snapshot.CurrentTurn.ID, next)
+		}
+	}
 	c.mu.Lock()
 	return err
 }

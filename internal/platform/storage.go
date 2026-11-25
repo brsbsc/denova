@@ -88,17 +88,6 @@ func (m *Manager) Instance(id string) (Instance, error) {
 	if _, err := uuid.Parse(id); err != nil {
 		return Instance{}, failure("INVALID_ARGUMENT", "Invalid instance ID")
 	}
-	if m.stories != nil {
-		items, err := m.stories.Instances(context.Background())
-		if err != nil {
-			return Instance{}, err
-		}
-		for _, item := range items {
-			if item.ID == id {
-				return item, nil
-			}
-		}
-	}
 	ids, err := m.packageIDs(Game)
 	if err != nil {
 		return Instance{}, err
@@ -116,6 +105,17 @@ func (m *Manager) Instance(id string) (Instance, error) {
 			return Instance{}, failure("INVALID_PACKAGE", "Instance identity does not match directory")
 		}
 		return item, nil
+	}
+	if m.stories != nil {
+		items, err := m.stories.Instances(context.Background())
+		if err != nil {
+			return Instance{}, err
+		}
+		for _, item := range items {
+			if item.ID == id {
+				return item, nil
+			}
+		}
 	}
 	return Instance{}, failure("NOT_FOUND", "Instance %s is unavailable", id)
 }
@@ -146,14 +146,17 @@ func (m *Manager) Instances() ([]Instance, error) {
 				continue
 			}
 			if _, err := uuid.Parse(entry.Name()); err != nil {
-				return nil, err
+				slog.Warn("platform_instance_directory_invalid", "game", gameID, "directory", entry.Name(), "error", err)
+				continue
 			}
 			var item Instance
 			if err := readJSON(filepath.Join(m.instancePath(gameID, entry.Name()), "instance.json"), &item); err != nil {
-				return nil, err
+				slog.Warn("platform_instance_unavailable", "game", gameID, "instance", entry.Name(), "error", err)
+				continue
 			}
 			if item.ID != entry.Name() || item.GameID != gameID {
-				return nil, failure("INVALID_PACKAGE", "Instance identity does not match directory")
+				slog.Warn("platform_instance_identity_mismatch", "game", gameID, "directory", entry.Name(), "instance_id", item.ID, "instance_game", item.GameID)
+				continue
 			}
 			items = append(items, item)
 		}
