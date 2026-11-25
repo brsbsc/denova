@@ -237,6 +237,7 @@ export function InputArea({
   const hasReviewFeedback = Boolean(reviewFeedback && reviewFeedbackCommentCount(reviewFeedback) > 0)
   const canResume = resumeAvailable && !goalMode
   const hasReferences = textSelections.length > 0 || hasReviewFeedback || attachments.items.length > 0
+  const knownSkills = useMemo(() => skills.map((skill) => skill.name), [skills])
   const knownFileTokens = useMemo(() => Array.from(new Set([...fileSuggestions, ...referencedFiles])), [fileSuggestions, referencedFiles])
   const knownLoreTokens = useMemo(() => {
     const byID = new Map<string, string>()
@@ -649,7 +650,7 @@ export function InputArea({
               onTriggerChange={handleTriggerChange}
               onTokenRemove={handleTokenRemove}
               onEditorKeyDown={handleKeyDown}
-              knownSkills={skills.map((skill) => skill.name)}
+              knownSkills={knownSkills}
               knownFiles={knownFileTokens}
               knownLore={knownLoreTokens}
               knownStyleScenes={styleSceneSuggestions}

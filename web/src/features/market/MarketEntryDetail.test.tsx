@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { expect, it, vi } from 'vitest'
 import { MarketEntryDetail } from './MarketEntryDetail'
+import { ResourceDiscovery } from './ResourceDiscovery'
 import { discardPreview, previewSource, type MarketEntry } from './api'
 vi.mock('./api', async (original) => ({ ...await original<typeof import('./api')>(), previewSource: vi.fn(), discardPreview: vi.fn() }))
 const detail: MarketEntry = { id: 'mixed', name: { 'zh-CN': '混合包' }, description: { 'zh-CN': '写作与游戏资源' }, author: 'Author', kinds: ['preset.image'], tags: ['writing'], format: 'denova.resource-pack', updated_at: '2026-09-25', source: { kind: 'github', url: 'https://github.com/author/repo', ref: 'main', path: 'resources/mixed' } }
@@ -19,4 +20,27 @@ it('browses catalog metadata without downloading and delegates acquisition on de
   view.unmount()
   expect(previewSource).not.toHaveBeenCalled()
   expect(discardPreview).not.toHaveBeenCalled()
+})
+
+it('renders non-http source URLs as inert text and tolerates malformed registry URLs', () => {
+  const unsafeDetail: MarketEntry = {
+    ...detail,
+    source: { kind: 'https_zip', url: 'javascript:alert(1)' },
+  }
+  render(
+    <StrictMode>
+      <MarketEntryDetail detail={unsafeDetail} acquired={0} onBack={vi.fn()} onManage={vi.fn()} onImport={vi.fn()} />
+      <ResourceDiscovery
+        loading={false}
+        category="all"
+        setCategory={vi.fn()}
+        installations={[]}
+        onOpen={vi.fn()}
+        onRefresh={vi.fn()}
+        registryURL="not a valid url"
+      />
+    </StrictMode>,
+  )
+  expect(screen.getByText('javascript:alert(1)')).toBeVisible()
+  expect(screen.queryByRole('link', { name: /javascript:/i })).not.toBeInTheDocument()
 })

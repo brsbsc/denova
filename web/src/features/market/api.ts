@@ -1,4 +1,4 @@
-import { fetchAPI, jsonHeaders, requestJSON } from '@/lib/api-client/client'
+import { fetchAPI, jsonHeaders, requestJSON, responseAPIError } from '@/lib/api-client/client'
 import type { CharacterCardImportResult } from '@/lib/api'
 import type { Candidate } from '@/features/platform/api'
 import type { GameCreationDefaults, GameDefaultField } from '@/features/interactive/game-creation-defaults'
@@ -237,6 +237,7 @@ export async function downloadExport(plan: ExportPlan) {
   const response = await fetchAPI(
     `/api/resource-exchange/exports/${plan.export_id}/download`,
   )
+  if (!response.ok) throw await responseAPIError(response)
   const url = URL.createObjectURL(await response.blob())
   const a = document.createElement('a')
   a.href = url

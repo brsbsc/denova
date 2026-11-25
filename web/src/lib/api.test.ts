@@ -6,17 +6,15 @@ import {
   deleteSession,
   executeCommand,
   getActiveChatTask,
-  getMessages,
   getMessagesPage,
   getSessions,
   projectSkillTarget,
   renameSession,
   recoverChatAgentRuntime,
   saveSkillDocument,
-  sendMessage,
   switchSession,
 } from './api'
-import { apiRoute, installApiMock, jsonResponse, textResponse } from '@/test/api-mock'
+import { apiRoute, installApiMock, jsonResponse } from '@/test/api-mock'
 
 let apiMock: ReturnType<typeof installApiMock>
 
@@ -58,7 +56,7 @@ describe('api', () => {
   })
 
   it('通过 MSW 获取会话和活跃任务', async () => {
-    await expect(getMessages()).resolves.toEqual([])
+    await expect(getMessagesPage()).resolves.toMatchObject({ messages: [] })
     await expect(getSessions()).resolves.toEqual([])
     await expect(getActiveChatTask('session-a')).resolves.toEqual({ active: false })
   })
@@ -176,13 +174,15 @@ describe('api', () => {
     await expect(deleteSession('session-b')).resolves.toMatchObject({
       id: 'session-a',
     })
-    await expect(getMessages('session-a')).resolves.toEqual([
-      {
-        id: 'message-1',
-        role: 'user',
-        parts: [{ type: 'text', text: '会话消息' }],
-      },
-    ])
+    await expect(getMessagesPage('session-a')).resolves.toMatchObject({
+      messages: [
+        {
+          id: 'message-1',
+          role: 'user',
+          parts: [{ type: 'text', text: '会话消息' }],
+        },
+      ],
+    })
 
     expect(requests).toEqual([
       { path: '/api/sessions', body: { title: '会话 B' } },
@@ -192,33 +192,8 @@ describe('api', () => {
         body: { id: 'session-a', title: '新标题' },
       },
       { path: '/api/sessions/delete', body: { id: 'session-b' } },
-      { path: '/api/session/messages?session_id=session-a' },
+      { path: '/api/session/messages?session_id=session-a&limit=100' },
     ])
-  })
-
-  it('读取 AI SDK UI 消息历史时使用 canonical 消息接口', async () => {
-    const requests: string[] = []
-    apiMock.use(
-      apiRoute.get('/api/session/messages', ({ request }) => {
-        requests.push(new URL(request.url).pathname + new URL(request.url).search)
-        return jsonResponse([
-          {
-            id: 'message-1',
-            role: 'assistant',
-            parts: [{ type: 'text', text: '你好', state: 'done' }],
-          },
-        ])
-      }),
-    )
-
-    await expect(getMessages('session-ui')).resolves.toEqual([
-      {
-        id: 'message-1',
-        role: 'assistant',
-        parts: [{ type: 'text', text: '你好', state: 'done' }],
-      },
-    ])
-    expect(requests).toEqual(['/api/session/messages?session_id=session-ui'])
   })
 
   it('从最新消息向前分页读取会话展示历史', async () => {
@@ -288,90 +263,5 @@ describe('api', () => {
       target_name: 'beat-plan',
       base_revision: 'skill-r1',
     })
-  })
-
-  it('发送聊天请求时提交引用、场景风格、选中文本和 planMode，并解析 SSE', async () => {
-    let requestBody: unknown
-    apiMock.use(
-      apiRoute.post('/api/chat', async ({ request }) => {
-        requestBody = await request.json()
-        return new Response(
-          'data: {"type":"start","messageId":"assistant-1"}\n\n' +
-            'data: {"type":"text-start","id":"text-1"}\n\n' +
-            'data: {"type":"text-delta","id":"text-1","delta":"你好"}\n\n' +
-            'data: {"type":"text-end","id":"text-1"}\n\n' +
-            'data: {"type":"finish","finishReason":"stop"}\n\n' +
-            'data: [DONE]\n\n',
-          { headers: { 'Content-Type': 'text/event-stream' } },
-        )
-      }),
-    )
-
-    const stream = await sendMessage(
-      'session-a',
-      '写下一章',
-      ['chapters/ch01.md'],
-      [],
-      ['激烈打斗'],
-      [
-        {
-          fileName: 'chapters/ch02.md',
-          startLine: 1,
-          endLine: 2,
-          content: '选中文本',
-        },
-      ],
-      undefined,
-      true,
-      'scene-first',
-      {
-        currentFile: 'chapters/ch02.md',
-        openFiles: ['chapters/ch01.md', 'chapters/ch02.md'],
-      },
-      'game-cg',
-      'slow-burn',
-      'command-direct-chat',
-    )
-    const reader = stream.getReader()
-
-    await expect(reader.read()).resolves.toEqual({
-      done: false,
-      value: { type: 'start', messageId: 'assistant-1' },
-    })
-    await expect(reader.read()).resolves.toEqual({
-      done: false,
-      value: { type: 'text-start', id: 'text-1' },
-    })
-
-    expect(requestBody).toEqual({
-      session_id: 'session-a',
-      command_id: 'command-direct-chat',
-      message: '写下一章',
-      references: ['chapters/ch01.md'],
-      lore_references: [],
-      style_scenes: ['激烈打斗'],
-      selections: [
-        {
-          file_name: 'chapters/ch02.md',
-          start_line: 1,
-          end_line: 2,
-          content: '选中文本',
-        },
-      ],
-      ide_context: {
-        current_file: 'chapters/ch02.md',
-        open_files: ['chapters/ch01.md', 'chapters/ch02.md'],
-      },
-      plan_mode: true,
-      writing_skill: 'scene-first',
-      image_preset_id: 'game-cg',
-      teller_id: 'slow-burn',
-    })
-  })
-
-  it('聊天接口失败时抛出 HTTP 错误', async () => {
-    apiMock.use(apiRoute.post('/api/chat', () => textResponse('bad gateway', { status: 502 })))
-
-    await expect(sendMessage('session-a', '失败场景')).rejects.toThrow('HTTP 502')
   })
 })

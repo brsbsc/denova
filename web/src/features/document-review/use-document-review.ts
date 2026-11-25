@@ -31,6 +31,8 @@ export function useDocumentReview({ projectId, agentVisible, onShowAgent }: UseD
   const [thread, setThread] = useState<DocumentReviewThread>(EMPTY_THREAD)
   const [hiddenCommentIDs, setHiddenCommentIDs] = useState<ReadonlySet<string>>(() => new Set())
   const requestEpochRef = useRef(0)
+  const activeProjectIdRef = useRef(projectId)
+  activeProjectIdRef.current = projectId
   const [source] = useState(() => ++documentReviewSourceSequence)
   const updateHiddenCommentIDs = useCallback((update: (current: ReadonlySet<string>) => ReadonlySet<string>) => {
     setHiddenCommentIDs((current) => {
@@ -102,34 +104,54 @@ export function useDocumentReview({ projectId, agentVisible, onShowAgent }: UseD
   }, [projectId, refresh])
 
   const addComment = useCallback(async (request: CreateDocumentCommentRequest) => {
-    const result = await createDocumentComment(projectId, request)
-    setThread(result.reviewThread)
-    updateHiddenCommentIDs((current) => {
-      const next = new Set(current)
+    const targetProjectId = projectId
+    const result = await createDocumentComment(targetProjectId, request)
+    if (activeProjectIdRef.current === targetProjectId) {
+      requestEpochRef.current += 1
+      setThread(result.reviewThread)
+      updateHiddenCommentIDs((current) => {
+        const next = new Set(current)
+        next.delete(result.comment.id)
+        return next
+      })
+      if (!agentVisible) onShowAgent()
+    } else if (targetProjectId) {
+      const next = new Set(projectHiddenCommentIDs.get(targetProjectId) ?? [])
       next.delete(result.comment.id)
-      return next
-    })
-    if (!agentVisible) onShowAgent()
-    notifyDocumentReviewUpdated(projectId, source, 'refresh')
+      projectHiddenCommentIDs.set(targetProjectId, next)
+    }
+    notifyDocumentReviewUpdated(targetProjectId, source, 'refresh')
     return result.comment
   }, [agentVisible, onShowAgent, projectId, source, updateHiddenCommentIDs])
 
   const editComment = useCallback(async (comment: DocumentReviewComment, body: string) => {
-    const result = await updateDocumentComment(projectId, comment.id, body)
-    setThread(result.reviewThread)
-    notifyDocumentReviewUpdated(projectId, source, 'refresh')
+    const targetProjectId = projectId
+    const result = await updateDocumentComment(targetProjectId, comment.id, body)
+    if (activeProjectIdRef.current === targetProjectId) {
+      requestEpochRef.current += 1
+      setThread(result.reviewThread)
+    }
+    notifyDocumentReviewUpdated(targetProjectId, source, 'refresh')
     return result.comment
   }, [projectId, source])
 
   const removeComment = useCallback(async (comment: DocumentReviewComment) => {
-    const result = await deleteDocumentComment(projectId, comment.id)
-    setThread(result.reviewThread)
-    updateHiddenCommentIDs((current) => {
-      const next = new Set(current)
+    const targetProjectId = projectId
+    const result = await deleteDocumentComment(targetProjectId, comment.id)
+    if (activeProjectIdRef.current === targetProjectId) {
+      requestEpochRef.current += 1
+      setThread(result.reviewThread)
+      updateHiddenCommentIDs((current) => {
+        const next = new Set(current)
+        next.delete(comment.id)
+        return next
+      })
+    } else if (targetProjectId) {
+      const next = new Set(projectHiddenCommentIDs.get(targetProjectId) ?? [])
       next.delete(comment.id)
-      return next
-    })
-    notifyDocumentReviewUpdated(projectId, source, 'refresh')
+      projectHiddenCommentIDs.set(targetProjectId, next)
+    }
+    notifyDocumentReviewUpdated(targetProjectId, source, 'refresh')
     return result.comment
   }, [projectId, source, updateHiddenCommentIDs])
 

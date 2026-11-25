@@ -34,6 +34,7 @@ import {
   selectAgentTokenUsageRecords,
   type AgentMessageView,
   type AgentPartRef,
+  type AgentTokenUsageRecord,
 } from '@/lib/agent-message-view'
 import { useSkillCommands } from '@/hooks/useSkillCommands'
 import { DEFAULT_WRITING_SKILL, resolveWritingSkillSelection, useWritingSkillOptions } from '@/hooks/useWritingSkillOptions'
@@ -324,7 +325,16 @@ function AgentPanelComponent({
   const writingSkillOptions = useWritingSkillOptions(projectId, skillCatalogEnabled)
   const writingSkill = useMemo(() => resolveWritingSkillSelection(configuredWritingSkill, writingSkillOptions), [configuredWritingSkill, writingSkillOptions])
   const changeGroupsQuery = useProjectChangeGroups(active && projectId && activeSessionId && !sessionDraft ? projectId : '', { sessionID: activeSessionId })
-  const tokenUsageMessages = useMemo(() => selectAgentTokenUsageRecords(messages), [messages])
+  const previousTokenUsageRef = useRef<AgentTokenUsageRecord[]>([])
+  const tokenUsageMessages = useMemo(() => {
+    const next = selectAgentTokenUsageRecords(messages)
+    const prev = previousTokenUsageRef.current
+    if (prev.length === next.length && prev.every((item, index) => item === next[index])) {
+      return prev
+    }
+    previousTokenUsageRef.current = next
+    return next
+  }, [messages])
   const effectiveConversationBinding = useMemo<ConversationConfigBinding | undefined>(() => conversationBinding ?? (activeSessionId
     ? { mode: generalAgent ? 'agent_chat' : 'writing', project_id: projectId, session_id: activeSessionId }
     : undefined), [activeSessionId, conversationBinding, generalAgent, projectId])

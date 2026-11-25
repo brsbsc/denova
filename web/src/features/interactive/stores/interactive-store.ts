@@ -51,7 +51,7 @@ interface InteractiveStore {
   setPlanningTemplates: (templates: GamePlanningTemplate[]) => void
   setBranches: (branches: BranchSummary[]) => void
   setSnapshot: (snapshot: Snapshot | null) => void
-  applyTurnPersisted: (event: InteractiveTurnPersistedEvent) => Snapshot | null
+  applyTurnPersisted: (event: InteractiveTurnPersistedEvent, options?: { expectedStoryId?: string; expectedBranchId?: string }) => Snapshot | null
   setStoryStageRun: (stageKey: string, updater: Partial<StoryStageRunState> | ((current: StoryStageRunState) => StoryStageRunState)) => void
   clearStoryStageRun: (stageKey: string) => void
   setCurrentStoryId: (storyId: string) => void
@@ -207,11 +207,13 @@ export const useInteractiveStore = create<InteractiveStore>((set) => ({
       currentBranchId: snapshot?.branch_id || state.currentBranchId,
     }
   }),
-  applyTurnPersisted: (event) => {
+  applyTurnPersisted: (event, options) => {
     let appliedSnapshot: Snapshot | null = null
     set((state) => {
       if (!event?.story_id || !event.branch_id || !event.turn) return state
-      if (state.currentStoryId && state.currentStoryId !== event.story_id) return state
+      if (options?.expectedStoryId !== undefined && event.story_id !== options.expectedStoryId) return state
+      if (options?.expectedBranchId && event.branch_id !== options.expectedBranchId) return state
+      if (!state.currentStoryId || state.currentStoryId !== event.story_id) return state
       if (state.currentBranchId && state.currentBranchId !== event.branch_id) return state
       const snapshot = mergeInteractiveTurnPersistedSnapshot(state.snapshot, event)
       appliedSnapshot = snapshot

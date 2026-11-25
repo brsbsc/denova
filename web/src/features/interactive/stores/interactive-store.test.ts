@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createRenderedStoryStageRunSelector, emptyStoryStageRun, mergeInteractiveTurnPersistedSnapshot, useInteractiveStore } from './interactive-store'
+import { abortStoryRunStream, clearStoryRunAbortController, registerStoryRunAbortController } from '../use-active-story-run'
 import type { InteractiveTurnPersistedEvent, Snapshot, StorySummary, TurnEvent } from '../types'
 
 describe('interactive-store', () => {
@@ -296,6 +297,35 @@ describe('interactive-store', () => {
     })
     expect(ignored).toBeNull()
     expect(useInteractiveStore.getState().snapshot?.current_turn?.id).toBe('turn-2')
+
+    const mismatchedExpectedStory = useInteractiveStore.getState().applyTurnPersisted(
+      persistedEvent(turn('turn-3', 'turn-2', '错位故事', '不应合并。')),
+      { expectedStoryId: 'story-2' },
+    )
+    expect(mismatchedExpectedStory).toBeNull()
+
+    useInteractiveStore.getState().resetWorkspaceState()
+    const afterWorkspaceReset = useInteractiveStore.getState().applyTurnPersisted(
+      persistedEvent(turn('turn-late', 'turn-2', '跨项目迟到事件', '不应写回新项目。')),
+    )
+    expect(afterWorkspaceReset).toBeNull()
+    expect(useInteractiveStore.getState().currentStoryId).toBe('')
+    expect(useInteractiveStore.getState().snapshot).toBeNull()
+  })
+
+  it('aborts any existing story run controller when registering a replacement or aborting the stage', () => {
+    const first = new AbortController()
+    const second = new AbortController()
+    registerStoryRunAbortController('proj:story-1:main', first)
+    expect(first.signal.aborted).toBe(false)
+
+    registerStoryRunAbortController('proj:story-1:main', second)
+    expect(first.signal.aborted).toBe(true)
+    expect(second.signal.aborted).toBe(false)
+
+    abortStoryRunStream('proj:story-1:main')
+    expect(second.signal.aborted).toBe(true)
+    expect(clearStoryRunAbortController('proj:story-1:main', second)).toBe(true)
   })
 
   it('syncs the story turn count when a branch snapshot is loaded', () => {

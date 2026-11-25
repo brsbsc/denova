@@ -27,8 +27,7 @@ export function ResourceDiscovery({ catalog, loading, error, category, setCatego
   onRefresh: () => void
 }) {
   const { t, i18n } = useTranslation()
-  const registry = registryURL ? new URL(registryURL) : undefined
-  const registryName = registry?.pathname.split('/').filter(Boolean).at(-2) || registry?.hostname
+  const registryName = useMemo(() => parseRegistryName(registryURL), [registryURL])
   const [query, setQuery] = useState('')
   const [tag, setTag] = useState('all')
   const [sort, setSort] = useState('featured')
@@ -234,4 +233,14 @@ export function ResourceDiscovery({ catalog, loading, error, category, setCatego
                     </>
                   )}
   </div>
+}
+
+function parseRegistryName(registryURL?: string): string | undefined {
+  if (!registryURL) return undefined
+  try {
+    const registry = new URL(registryURL)
+    return registry.pathname.split('/').filter(Boolean).at(-2) || registry.hostname || undefined
+  } catch {
+    return undefined
+  }
 }

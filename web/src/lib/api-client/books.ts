@@ -46,7 +46,7 @@ export async function setBookSortMode(mode: BookSortMode): Promise<{ message: st
 
 export async function previewNovelImportStream(
   file: File,
-  options: { structure?: ChapterStructure; sampleChars?: number; splitRegex?: string; splitStrategy?: string } = {},
+  options: { structure?: ChapterStructure; sampleChars?: number; splitRegex?: string; splitStrategy?: string; signal?: AbortSignal } = {},
 ): Promise<ReadableStream<SSEEvent>> {
   const form = new FormData()
   form.append('file', file)
@@ -57,6 +57,7 @@ export async function previewNovelImportStream(
   const res = await fetchAPI('/api/books/import-novel/preview/stream', {
     method: 'POST',
     body: form,
+    signal: options.signal,
   })
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))

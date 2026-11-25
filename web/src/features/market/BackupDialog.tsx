@@ -10,7 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { fetchAPI } from '@/lib/api-client/client'
+import { fetchAPI, responseAPIError } from '@/lib/api-client/client'
 import { exchange, type Installation, type Plan } from './api'
 
 type Backup = {
@@ -107,6 +107,7 @@ export function BackupDialog({
                         const response = await fetchAPI(
                           `/api/resource-exchange/backups/${backup.backup_id}/download`,
                         )
+                        if (!response.ok) throw await responseAPIError(response)
                         const url = URL.createObjectURL(await response.blob())
                         const link = document.createElement('a')
                         link.href = url

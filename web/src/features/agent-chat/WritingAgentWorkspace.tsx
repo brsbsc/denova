@@ -99,9 +99,12 @@ export function WritingAgentWorkspace(props: WritingAgentWorkspaceProps) {
   }, [activeSessionId, loading, props.active, props.projectId])
   const sessionsRef = useRef(sessions)
   sessionsRef.current = sessions
+  const activeProjectIdRef = useRef(props.projectId)
+  activeProjectIdRef.current = props.projectId
+  const refreshGenerationRef = useRef(0)
 
-  const storeActiveSession = useCallback((sessionId: string) => {
-    writeAgentChatActiveSession(props.projectId, sessionId, activeSessionPreferenceScope)
+  const storeActiveSession = useCallback((sessionId: string, projectId = props.projectId) => {
+    writeAgentChatActiveSession(projectId, sessionId, activeSessionPreferenceScope)
   }, [activeSessionPreferenceScope, props.projectId])
 
   const selectSession = useCallback((sessionId: string) => {
@@ -113,24 +116,30 @@ export function WritingAgentWorkspace(props: WritingAgentWorkspaceProps) {
   }, [storeActiveSession])
 
   const refreshSessions = useCallback(async () => {
-    const projects = await getAgentChatProjects(props.projectId)
-    const project = projects.find((candidate) => candidate.id === props.projectId)
-    if (!project) throw new Error(`Writing Agent Project is unavailable: ${props.projectId}`)
+    const targetProjectId = props.projectId.trim()
+    if (!targetProjectId) return []
+    const generation = ++refreshGenerationRef.current
+    const projects = await getAgentChatProjects(targetProjectId)
+    if (activeProjectIdRef.current.trim() !== targetProjectId || refreshGenerationRef.current !== generation) {
+      return sessionsRef.current
+    }
+    const project = projects.find((candidate) => candidate.id === targetProjectId)
+    if (!project) throw new Error(`Writing Agent Project is unavailable: ${targetProjectId}`)
     const persistedIDs = new Set(project.sessions.map((session) => session.id))
     const pending = sessionsRef.current.filter((session) => (session.draft || session.pendingTitle !== undefined) && !persistedIDs.has(session.id))
     const nextSessions = sortSessions([...pending, ...project.sessions])
     sessionsRef.current = nextSessions
     setSessions(nextSessions)
     setActiveSessionId((current) => {
-      const stored = readAgentChatActiveSession(props.projectId, activeSessionPreferenceScope)
+      const stored = readAgentChatActiveSession(targetProjectId, activeSessionPreferenceScope)
       const next = firstAvailableSession(nextSessions, current, stored, props.activeSessionId)
-      if (next) storeActiveSession(next)
+      if (next) storeActiveSession(next, targetProjectId)
       return next
     })
     setMountedSessionIds((current) => {
       const available = new Set(nextSessions.map((session) => session.id))
       const retained = current.filter((sessionId) => available.has(sessionId))
-      const selected = firstAvailableSession(nextSessions, activeSessionId, readAgentChatActiveSession(props.projectId, activeSessionPreferenceScope), props.activeSessionId)
+      const selected = firstAvailableSession(nextSessions, activeSessionId, readAgentChatActiveSession(targetProjectId, activeSessionPreferenceScope), props.activeSessionId)
       return uniqueStrings([
         ...retained,
         ...nextSessions.filter((session) => session.running).map((session) => session.id),
@@ -170,13 +179,20 @@ export function WritingAgentWorkspace(props: WritingAgentWorkspaceProps) {
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
+    refreshGenerationRef.current += 1
     setError('')
     setSessions([])
     sessionsRef.current = []
     setActiveSessionId('')
     setMountedSessionIds([])
-    if (!props.projectId.trim()) return () => { cancelled = true }
+    if (!props.projectId.trim()) {
+      setLoading(false)
+      return () => {
+        cancelled = true
+        refreshGenerationRef.current += 1
+      }
+    }
+    setLoading(true)
     void refreshSessions()
       .then((nextSessions) => {
         if (!cancelled && nextSessions.length === 0) {
@@ -194,7 +210,10 @@ export function WritingAgentWorkspace(props: WritingAgentWorkspaceProps) {
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      refreshGenerationRef.current += 1
+    }
   }, [activeSessionPreferenceScope, props.projectId]) // Project or surface preference changes reset mounted transports.
 
   useEffect(() => {

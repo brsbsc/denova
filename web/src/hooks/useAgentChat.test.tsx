@@ -2430,6 +2430,171 @@ describe('useAgentChat', () => {
     ])
     expect(result.current.hasEarlierMessages).toBe(false)
   })
+
+  it('does not leak Session A references or resume Session A when switching sessions during an in-flight start_turn', async () => {
+    writingAgentChatClient.fixedSessionId = ''
+    const sessionA: SessionSummary = {
+      id: 'session-a',
+      title: 'Session A',
+      active: true,
+      message_count: 1,
+      created_at: '',
+      updated_at: '',
+    }
+    const sessionB: SessionSummary = {
+      id: 'session-b',
+      title: 'Session B',
+      active: false,
+      message_count: 0,
+      created_at: '',
+      updated_at: '',
+    }
+    let currentSessions = [sessionA, sessionB]
+    vi.mocked(getSessions).mockImplementation(async () => currentSessions)
+    vi.mocked(switchSession).mockImplementation(async () => {
+      const activeB = { ...sessionB, active: true }
+      currentSessions = [{ ...sessionA, active: false }, activeB]
+      return activeB
+    })
+    const inFlightSubmit = deferred<void>()
+    chatMock.sendMessage.mockReturnValue(inFlightSubmit.promise)
+    chatMock.stop.mockImplementation(() => {
+      chatMock.status = 'ready'
+      inFlightSubmit.resolve(undefined)
+    })
+
+    const { result } = renderHook(() => useAgentChat())
+    await act(async () => {
+      await result.current.loadSessions()
+    })
+    expect(result.current.activeSessionId).toBe('session-a')
+
+    const transport = (chatMock.options as { transport: AgentChatTransport }).transport
+    vi.spyOn(transport, 'takeInitialSubmissionOutcome').mockReturnValueOnce('uncertain')
+
+    act(() => {
+      result.current.addReference('chapters/session-a-only.md')
+    })
+
+    let sendOutcomePromise!: Promise<boolean>
+    act(() => {
+      chatMock.status = 'submitted'
+      sendOutcomePromise = result.current.send('message in session A')
+    })
+    expect(result.current.references).toEqual([])
+
+    vi.mocked(getActiveChatTask).mockClear()
+    await act(async () => {
+      await result.current.switchChatSession('session-b')
+    })
+    await expect(sendOutcomePromise).resolves.toBe(false)
+
+    expect(result.current.activeSessionId).toBe('session-b')
+    expect(result.current.references).toEqual([])
+    expect(vi.mocked(getActiveChatTask).mock.calls.map((call) => call[0])).not.toContain('session-a')
+    expect(toastMock.error).not.toHaveBeenCalled()
+  })
+
+  it('does not trigger uncertain recovery when local stream abort cancels an in-flight start_turn', async () => {
+    const inFlightSubmit = deferred<void>()
+    chatMock.sendMessage.mockReturnValue(inFlightSubmit.promise)
+    chatMock.stop.mockImplementation(() => {
+      chatMock.status = 'ready'
+      inFlightSubmit.resolve(undefined)
+    })
+
+    const { result } = renderHook(() => useAgentChat())
+    const transport = (chatMock.options as { transport: AgentChatTransport }).transport
+    vi.spyOn(transport, 'takeInitialSubmissionOutcome').mockReturnValueOnce('aborted')
+
+    act(() => {
+      result.current.addReference('chapters/restore-on-stop.md')
+    })
+
+    let sendOutcomePromise!: Promise<boolean>
+    act(() => {
+      chatMock.status = 'submitted'
+      sendOutcomePromise = result.current.send('stop me')
+    })
+    expect(result.current.references).toEqual([])
+
+    vi.mocked(getActiveChatTask).mockClear()
+    await act(async () => {
+      chatMock.stop()
+      await expect(sendOutcomePromise).resolves.toBe(false)
+    })
+
+    expect(result.current.references).toEqual(['chapters/restore-on-stop.md'])
+    expect(vi.mocked(getActiveChatTask)).not.toHaveBeenCalled()
+    expect(toastMock.error).not.toHaveBeenCalled()
+  })
+
+  it('clears pending displayRehydrateRequest across session switch so Session A rehydrate never runs in Session B', async () => {
+    writingAgentChatClient.fixedSessionId = ''
+    const sessionA: SessionSummary = {
+      id: 'session-a',
+      title: 'Session A',
+      active: true,
+      message_count: 1,
+      created_at: '',
+      updated_at: '',
+    }
+    const sessionB: SessionSummary = {
+      id: 'session-b',
+      title: 'Session B',
+      active: false,
+      message_count: 0,
+      created_at: '',
+      updated_at: '',
+    }
+    let currentSessions = [sessionA, sessionB]
+    vi.mocked(getSessions).mockImplementation(async () => currentSessions)
+    vi.mocked(switchSession).mockImplementation(async () => {
+      const activeB = { ...sessionB, active: true }
+      currentSessions = [{ ...sessionA, active: false }, activeB]
+      return activeB
+    })
+
+    chatMock.status = 'streaming'
+    const { result, rerender } = renderHook(() => useAgentChat())
+    await act(async () => {
+      await result.current.loadSessions()
+    })
+    expect(result.current.activeSessionId).toBe('session-a')
+
+    const transport = (chatMock.options as { transport: AgentChatTransport }).transport
+    const setTargetSpy = vi.spyOn(transport, 'setActiveStreamTarget')
+
+    act(() => {
+      chatMock.options?.onData({
+        type: 'data-agent-activity',
+        data: {
+          event: 'task_rehydrate_required',
+          task_id: 'task-from-session-a',
+          cursor: 18,
+          settled: true,
+          lossless: false,
+          status: 'error',
+          terminal_reason: 'session_a_boom',
+        },
+      })
+    })
+
+    chatMock.stop.mockImplementation(() => {
+      chatMock.status = 'ready'
+    })
+    toastMock.error.mockClear()
+    setTargetSpy.mockClear()
+
+    await act(async () => {
+      await result.current.switchChatSession('session-b')
+    })
+    rerender()
+
+    expect(result.current.activeSessionId).toBe('session-b')
+    expect(toastMock.error).not.toHaveBeenCalled()
+    expect(setTargetSpy).not.toHaveBeenCalledWith('task-from-session-a', expect.anything(), expect.anything())
+  })
 })
 
 function deferred<T>() {

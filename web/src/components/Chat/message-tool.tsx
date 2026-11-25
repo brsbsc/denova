@@ -465,10 +465,3 @@ function buildPreview(content: string, maxLength: number) {
   if (normalized.length <= maxLength) return normalized
   return `${normalized.slice(0, maxLength)}...`
 }
-
-export function buildMarkdownPreview(content: string, maxLength: number) {
-  const trimmed = content.trim()
-  const chars = Array.from(trimmed)
-  if (chars.length <= maxLength) return trimmed
-  return `${chars.slice(0, maxLength).join('').trimEnd()}\n\n...`
-}

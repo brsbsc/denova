@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { DiffLineAnnotation, SelectedLineRange } from '@pierre/diffs/react'
 import { AlertTriangle } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -49,26 +49,115 @@ interface UseReviewDiffAnnotationsOptions {
   onDelete: (comment: WorkspaceChangeComment) => Promise<void>
 }
 
+interface DraftInputStore {
+  getBody: (key: string) => string
+  setBody: (key: string, body: string) => void
+  ensureKey: (key: string) => void
+  isSubmitting: (key: string) => boolean
+  setSubmitting: (key: string, submitting: boolean) => void
+  deleteKey: (key: string) => void
+  reset: () => void
+  subscribe: (listener: () => void) => () => void
+}
+
+function createDraftInputStore(): DraftInputStore {
+  let bodies: Record<string, string> = {}
+  const submitting = new Set<string>()
+  const listeners = new Set<() => void>()
+  const emit = () => listeners.forEach((listener) => listener())
+  return {
+    getBody: (key) => bodies[key] ?? '',
+    setBody: (key, body) => {
+      if (bodies[key] === body) return
+      bodies = { ...bodies, [key]: body }
+      emit()
+    },
+    ensureKey: (key) => {
+      if (Object.prototype.hasOwnProperty.call(bodies, key)) return
+      bodies = { ...bodies, [key]: '' }
+      emit()
+    },
+    isSubmitting: (key) => submitting.has(key),
+    setSubmitting: (key, value) => {
+      if (submitting.has(key) === value) return
+      if (value) submitting.add(key)
+      else submitting.delete(key)
+      emit()
+    },
+    deleteKey: (key) => {
+      const hadBody = Object.prototype.hasOwnProperty.call(bodies, key)
+      const hadSubmitting = submitting.delete(key)
+      if (hadBody) {
+        const next = { ...bodies }
+        delete next[key]
+        bodies = next
+      }
+      if (hadBody || hadSubmitting) emit()
+    },
+    reset: () => {
+      const changed = Object.keys(bodies).length > 0 || submitting.size > 0
+      bodies = {}
+      submitting.clear()
+      if (changed) emit()
+    },
+    subscribe: (listener) => {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+  }
+}
+
+function DraftCommentAnnotation({
+  draftKey,
+  anchorLabelText,
+  quote,
+  disabled,
+  store,
+  onSubmit,
+  onCancel,
+}: {
+  draftKey: string
+  anchorLabelText: string
+  quote?: string
+  disabled: boolean
+  store: DraftInputStore
+  onSubmit: (key: string) => void
+  onCancel: (key: string) => void
+}) {
+  const body = useSyncExternalStore(store.subscribe, () => store.getBody(draftKey), () => store.getBody(draftKey))
+  const submitting = useSyncExternalStore(store.subscribe, () => store.isSubmitting(draftKey), () => store.isSubmitting(draftKey))
+  return (
+    <InlineCommentThread
+      anchorLabel={anchorLabelText}
+      quote={quote}
+      disabled={disabled}
+      draft={{
+        body,
+        submitting,
+        onChange: (nextBody) => store.setBody(draftKey, nextBody),
+        onSubmit: () => onSubmit(draftKey),
+        onCancel: () => onCancel(draftKey),
+      }}
+    />
+  )
+}
+
 /** Owns durable comment anchors and local draft state independently of virtualized rows. */
 export function useReviewDiffAnnotations({ identity, files, comments, busy, onCreate, onUpdate, onDelete }: UseReviewDiffAnnotationsOptions) {
   const { t } = useTranslation()
   const [drafts, setDrafts] = useState<CommentDraft[]>([])
-  const [draftBodies, setDraftBodies] = useState<Readonly<Record<string, string>>>(() => ({}))
-  const [submittingDraftKeys, setSubmittingDraftKeys] = useState<ReadonlySet<string>>(() => new Set())
   const [editingThreadKeys, setEditingThreadKeys] = useState<ReadonlySet<string>>(() => new Set())
+  const [draftStore] = useState(createDraftInputStore)
   const draftsRef = useRef(drafts)
-  const draftBodiesRef = useRef(draftBodies)
   const busyRef = useRef(busy)
   draftsRef.current = drafts
-  draftBodiesRef.current = draftBodies
   busyRef.current = busy
 
   useEffect(() => {
     setDrafts([])
-    setDraftBodies({})
-    setSubmittingDraftKeys(new Set())
+    draftStore.reset()
     setEditingThreadKeys(new Set())
-  }, [identity])
+  }, [draftStore, identity])
 
   const filesByPath = useMemo(() => new Map(files.map((file) => [file.path, file])), [files])
   const resolvedByPath = useMemo(() => new Map(files.map((file) => [
@@ -133,40 +222,24 @@ export function useReviewDiffAnnotations({ identity, files, comments, busy, onCr
 
   const removeDraft = useCallback((key: string) => {
     setDrafts((current) => current.filter((draft) => draft.key !== key))
-    setDraftBodies((current) => {
-      if (!Object.prototype.hasOwnProperty.call(current, key)) return current
-      const next = { ...current }
-      delete next[key]
-      return next
-    })
-    setSubmittingDraftKeys((current) => {
-      if (!current.has(key)) return current
-      const next = new Set(current)
-      next.delete(key)
-      return next
-    })
-  }, [])
+    draftStore.deleteKey(key)
+  }, [draftStore])
 
   const submitDraft = useCallback(async (key: string) => {
     const draft = draftsRef.current.find((candidate) => candidate.key === key)
-    const body = (draftBodiesRef.current[key] ?? '').trim()
+    const body = draftStore.getBody(key).trim()
     const file = draft ? filesByPath.get(draft.path) : undefined
     if (!draft || !file || !body || busyRef.current) return
-    setSubmittingDraftKeys((current) => new Set(current).add(key))
+    draftStore.setSubmitting(key, true)
     try {
       await onCreate({ ...reviewCommentTarget(file, draft.side), body, anchor: draft.anchor })
       removeDraft(key)
     } catch (reason) {
         logWorkspaceChangeError('Failed to create a review comment', reason)
     } finally {
-      setSubmittingDraftKeys((current) => {
-        if (!current.has(key)) return current
-        const next = new Set(current)
-        next.delete(key)
-        return next
-      })
+      draftStore.setSubmitting(key, false)
     }
-  }, [filesByPath, onCreate, removeDraft])
+  }, [draftStore, filesByPath, onCreate, removeDraft])
 
   const handleSelection = useCallback((surfaceFile: CodeDiffSurfaceFile, range: SelectedLineRange) => {
     if (busyRef.current) return
@@ -181,10 +254,8 @@ export function useReviewDiffAnnotations({ identity, files, comments, busy, onCr
     setDrafts((current) => current.some((draft) => draft.key === key)
       ? current
       : [...current, { key, path: file.path, side: selectedSide, lineNumber, anchor }])
-    setDraftBodies((current) => Object.prototype.hasOwnProperty.call(current, key)
-      ? current
-      : { ...current, [key]: '' })
-  }, [filesByPath])
+    draftStore.ensureKey(key)
+  }, [draftStore, filesByPath])
 
   const handleEditingChange = useCallback((key: string, editing: boolean) => {
     setEditingThreadKeys((current) => {
@@ -242,25 +313,24 @@ export function useReviewDiffAnnotations({ identity, files, comments, busy, onCr
     if (!draft) return null
     const index = new Utf8OffsetIndex(draft.side === 'before' ? file.before_content : file.after_content)
     return (
-      <InlineCommentThread
-        anchorLabel={anchorLabel(file.path, index, draft.anchor.start ?? 0)}
+      <DraftCommentAnnotation
+        draftKey={metadata.key}
+        anchorLabelText={anchorLabel(file.path, index, draft.anchor.start ?? 0)}
         quote={draft.anchor.quote}
         disabled={busy}
-        draft={{
-          body: draftBodies[metadata.key] ?? '',
-          submitting: submittingDraftKeys.has(metadata.key),
-          onChange: (body) => setDraftBodies((current) => ({ ...current, [metadata.key]: body })),
-          onSubmit: () => void submitDraft(metadata.key),
-          onCancel: () => removeDraft(metadata.key),
-        }}
+        store={draftStore}
+        onSubmit={(key) => void submitDraft(key)}
+        onCancel={removeDraft}
       />
     )
-  }, [busy, draftBodies, handleEditingChange, onDelete, onUpdate, removeDraft, submitDraft, submittingDraftKeys, t])
+  }, [busy, draftStore, handleEditingChange, onDelete, onUpdate, removeDraft, submitDraft, t])
+
+  const draftPaths = useMemo(() => new Set(drafts.map((draft) => draft.path)), [drafts])
 
   return {
     annotationsByPath,
     annotationRevisionByPath,
-    draftPaths: new Set(drafts.map((draft) => draft.path)),
+    draftPaths,
     hasDraft: drafts.length > 0 || editingThreadKeys.size > 0,
     onLineSelectionEnd: handleSelection,
     renderAnnotation,

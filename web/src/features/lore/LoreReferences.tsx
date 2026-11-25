@@ -7,9 +7,13 @@ import type { LoreItem } from '@/lib/api'
 import { loreNameKey, loreReferenceNames } from './lore-reference'
 
 export function useLoreBacklinks(items: LoreItem[], name: string, id: string) {
-  return useMemo(() => items.filter(item => item.id !== id && loreReferenceNames(item.content).some(
-    reference => loreNameKey(reference) === loreNameKey(name),
-  )), [items, name, id])
+  return useMemo(() => {
+    const targetKey = loreNameKey(name)
+    if (!targetKey) return []
+    return items.filter(item => item.id !== id && loreReferenceNames(item.content).some(
+      reference => loreNameKey(reference) === targetKey,
+    ))
+  }, [items, name, id])
 }
 
 /** Warn before editing the name; renaming intentionally does not rewrite user prose. */

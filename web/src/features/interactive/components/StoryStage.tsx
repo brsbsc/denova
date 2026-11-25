@@ -384,6 +384,7 @@ export function StoryStage({ active = true, projectId, workspace, styleSceneSugg
   }, [snapshotKey])
 
   const { commandSubmitting, deleteQueuedCommand, queueActionPendingCommandID, send, steerQueuedCommand, stop, suspend, resumeTask, abandonPendingTurn } = useStoryStageRuntime({
+    projectId,
     stageKey,
     storyId,
     branchId,

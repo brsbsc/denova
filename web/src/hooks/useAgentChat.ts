@@ -100,6 +100,8 @@ export function useAgentChat(options: ChatOptions = {}) {
   const [runtimeRecoverySignal, setRuntimeRecoverySignal] = useState(0)
   const projectStreamCycleRef = useRef<(operationID: string, cycle?: number) => void>(() => undefined)
   const refreshSessionsRef = useRef<() => Promise<SessionSummary[]>>(async () => [])
+  const activeSessionIdRef = useRef((client.fixedSessionId || '').trim())
+  const sessionTransitionGenerationRef = useRef(0)
   const [displayRehydrateRequest, setDisplayRehydrateRequest] = useState<WritingDisplayRehydrateRequest | null>(null)
   const {
     messages: uiMessages,
@@ -143,11 +145,13 @@ export function useAgentChat(options: ChatOptions = {}) {
           return
         }
         if (data.event === 'task_rehydrate_required' || data.code === 'agent_stream.rehydrate_required') {
+          const sessionID = activeSessionIdRef.current
           const taskID = typeof data.task_id === 'string' ? data.task_id.trim() : ''
           const cursor = typeof data.cursor === 'number' ? data.cursor : Number(data.cursor)
-          if (taskID && Number.isSafeInteger(cursor) && cursor >= 0) {
+          if (sessionID && taskID && Number.isSafeInteger(cursor) && cursor >= 0) {
             setDisplayRehydrateRequest((current) => ({
               signal: (current?.signal || 0) + 1,
+              sessionID,
               taskID,
               cursor,
               settled: data.settled === true,
@@ -183,13 +187,24 @@ export function useAgentChat(options: ChatOptions = {}) {
       void refreshSessionsRef.current()
     },
   })
+  const strippedMessageCacheRef = useRef(new WeakMap<AgentUIMessage, AgentUIMessage | null>())
   const { messages, textConflicts } = useMemo(() => {
     const textConflicts: string[] = []
+    const strippedCache = strippedMessageCacheRef.current
     const normalized = normalizeAgentUIMessages(uiMessages, identity => textConflicts.push(identity)).flatMap<AgentUIMessage>((message) => {
+      if (strippedCache.has(message)) {
+        const cached = strippedCache.get(message)
+        return cached ? [cached] : []
+      }
+      const hasErrorPart = message.parts.some((part) => part.type === 'data-agent-error')
+      if (!hasErrorPart) {
+        strippedCache.set(message, message)
+        return [message]
+      }
       const visibleParts = message.parts.filter((part) => part.type !== 'data-agent-error')
-      if (visibleParts.length === message.parts.length) return [message]
-      if (visibleParts.length === 0) return []
-      return [{ ...message, parts: visibleParts }]
+      const stripped = visibleParts.length === 0 ? null : { ...message, parts: visibleParts }
+      strippedCache.set(message, stripped)
+      return stripped ? [stripped] : []
     })
     // Manual maintenance uses a non-streaming API. Keep its pending display outside
     // canonical history so a background reload cannot erase the submission feedback.
@@ -210,6 +225,7 @@ export function useAgentChat(options: ChatOptions = {}) {
     sessions,
     setActiveSessionId,
   } = useWritingAgentHistory({ setMessages: setUIMessages, client, transportStreaming })
+  activeSessionIdRef.current = (client.fixedSessionId || activeSessionId).trim()
   refreshSessionsRef.current = loadSessions
   const [references, setReferences] = useState<string[]>([])
   const [loreReferences, setLoreReferences] = useState<string[]>([])
@@ -409,9 +425,11 @@ export function useAgentChat(options: ChatOptions = {}) {
   const send = useCallback(
     async (input: string, sendOptions: ChatSendOptions = {}) => {
       if (sessionTransitionPendingRef.current || commandSubmittingRef.current) return false
+      const transitionGeneration = sessionTransitionGenerationRef.current
       let targetSessionID = (client.fixedSessionId || activeSessionId).trim()
       if (!targetSessionID) {
         const availableSessions = await loadSessions()
+        if (sessionTransitionGenerationRef.current !== transitionGeneration) return false
         targetSessionID = (
           client.fixedSessionId || availableSessions.find((session) => session.active)?.id || availableSessions[0]?.id || ''
         ).trim()
@@ -472,6 +490,7 @@ export function useAgentChat(options: ChatOptions = {}) {
           toast.error(t('chat.attachment.readFailed', { error: String(error) }))
           return false
         }
+        if (sessionTransitionGenerationRef.current !== transitionGeneration) return false
       }
 
       const body = buildAgentChatRequestBody({
@@ -572,6 +591,8 @@ export function useAgentChat(options: ChatOptions = {}) {
       const initialRetryKey = agentCommandRetryKey('', 'start_turn', retryBody)
       const initialCommandID = rememberAgentCommandID(initialStartCommandIDsRef.current, initialRetryKey, createAgentCommandID)
       body.command_id = initialCommandID
+      const isCurrentSessionTransition = () =>
+        sessionTransitionGenerationRef.current === transitionGeneration && activeSessionIdRef.current === targetSessionID
       let submissionStarted = false
       try {
         const pendingRequest = sendMessage(
@@ -599,7 +620,10 @@ export function useAgentChat(options: ChatOptions = {}) {
           initialStartCommandIDsRef.current.delete(initialRetryKey)
           return true
         }
-        if (acceptance === 'rejected') initialStartCommandIDsRef.current.delete(initialRetryKey)
+        if (acceptance === 'rejected' || acceptance === 'aborted') {
+          initialStartCommandIDsRef.current.delete(initialRetryKey)
+        }
+        if (!isCurrentSessionTransition()) return false
         setReferences((current) => Array.from(new Set([...prepared.composerReferences, ...current])))
         setLoreReferences((current) => Array.from(new Set([...prepared.composerLoreReferences, ...current])))
         setStyleScenes((current) => Array.from(new Set([...prepared.composerStyleScenes, ...current])))
@@ -610,6 +634,7 @@ export function useAgentChat(options: ChatOptions = {}) {
       } catch (e) {
         const acceptance = transport.takeInitialSubmissionOutcome(initialCommandID)
         if (acceptance !== 'uncertain') initialStartCommandIDsRef.current.delete(initialRetryKey)
+        if (!isCurrentSessionTransition()) return false
         if (submissionStarted) {
           setReferences((current) => Array.from(new Set([...prepared.composerReferences, ...current])))
           setLoreReferences((current) => Array.from(new Set([...prepared.composerLoreReferences, ...current])))
@@ -617,6 +642,7 @@ export function useAgentChat(options: ChatOptions = {}) {
           setTextSelections((current) => [...prepared.composerTextSelections.filter((item) => !current.includes(item)), ...current])
           sendOptions.onSubmissionError?.()
         }
+        if (acceptance === 'aborted') return false
         if (acceptance === 'uncertain') await resumeActiveChat(targetSessionID)
         toast.error(t('chat.activity.requestFailed', { error: String(e) }))
         return false
@@ -842,11 +868,14 @@ export function useAgentChat(options: ChatOptions = {}) {
 
   const runSessionTransition = useCallback(async (mutation: () => Promise<SessionSummary>) => {
     if (sessionTransitionPendingRef.current || commandSubmittingRef.current) return
+    sessionTransitionGenerationRef.current += 1
     sessionTransitionPendingRef.current = true
     setSessionTransitionPending(true)
+    setDisplayRehydrateRequest(null)
     stopAIStream()
     try {
       const session = await mutation()
+      activeSessionIdRef.current = (client.fixedSessionId || session.id).trim()
       setActiveSessionId(session.id)
       // The server binding has changed. Clear the previous Session display
       // before loading so a failed history request cannot leave A visible while
@@ -858,7 +887,7 @@ export function useAgentChat(options: ChatOptions = {}) {
       sessionTransitionPendingRef.current = false
       setSessionTransitionPending(false)
     }
-  }, [loadHistoryAuthoritative, loadSessions, resumeActiveChat, setActiveSessionId, setUIMessages, stopAIStream])
+  }, [client.fixedSessionId, loadHistoryAuthoritative, loadSessions, resumeActiveChat, setActiveSessionId, setUIMessages, stopAIStream])
 
   const createChatSession = useCallback(
     async (title?: string, customAgentId?: string) => {

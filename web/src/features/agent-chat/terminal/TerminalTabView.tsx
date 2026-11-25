@@ -57,7 +57,8 @@ export function TerminalTabView({ tab, active, onSessionEstablished, onTitleChan
   /** Survives effect re-runs (including StrictMode double-invoke) so one tab never spawns two ptys. */
   const establishedRef = useRef<TerminalSessionInfo | null>(null)
   /** Shares the asynchronous resolution itself; the result ref alone is too late for StrictMode. */
-  const resolvingRef = useRef<Promise<TerminalSessionInfo> | null>(null)
+  const resolvingRef = useRef<{ generation: number; promise: Promise<TerminalSessionInfo> } | null>(null)
+  const sessionGenerationRef = useRef(0)
   const releasedSessionIdsRef = useRef(new Set<string>())
   const [status, setStatus] = useState<AgentChatTerminalStatus>('connecting')
   const [statusDetail, setStatusDetail] = useState('')
@@ -173,37 +174,47 @@ export function TerminalTabView({ tab, active, onSessionEstablished, onTitleChan
     setStatusDetail('')
     fitTerminal()
 
+    const generation = sessionGenerationRef.current
+    const releaseAbandonedSession = async (sessionId: string) => {
+      if (releasedSessionIdsRef.current.has(sessionId)) return
+      releasedSessionIdsRef.current.add(sessionId)
+      try {
+        await closeTerminalSession(sessionId)
+      } catch (error) {
+        releasedSessionIdsRef.current.delete(sessionId)
+        console.warn('[features/agent-chat/terminal/TerminalTabView.tsx] releasing abandoned session failed', {
+          tabId: tab.id,
+          sessionId,
+          error,
+        })
+      }
+    }
+
     const attach = async () => {
-      const pending = resolvingRef.current ?? resolveSession(tab, establishedRef.current, terminal.cols, terminal.rows)
-      resolvingRef.current = pending
+      const existingPending = resolvingRef.current?.generation === generation ? resolvingRef.current.promise : null
+      const pending = existingPending ?? resolveSession(tab, establishedRef.current, terminal.cols, terminal.rows)
+      resolvingRef.current = { generation, promise: pending }
       let session: TerminalSessionInfo
       try {
         session = await pending
       } finally {
-        if (resolvingRef.current === pending) resolvingRef.current = null
+        if (resolvingRef.current?.promise === pending) resolvingRef.current = null
+      }
+      if (sessionGenerationRef.current !== generation) {
+        await releaseAbandonedSession(session.id)
+        return
       }
       establishedRef.current = session
       if (!onSessionEstablished(tab.id, session)) {
         establishedRef.current = null
-        if (!releasedSessionIdsRef.current.has(session.id)) {
-          releasedSessionIdsRef.current.add(session.id)
-          try {
-            await closeTerminalSession(session.id)
-          } catch (error) {
-            releasedSessionIdsRef.current.delete(session.id)
-            console.warn('[features/agent-chat/terminal/TerminalTabView.tsx] releasing abandoned session failed', {
-              tabId: tab.id,
-              sessionId: session.id,
-              error,
-            })
-          }
-        }
+        await releaseAbandonedSession(session.id)
         return
       }
-      if (cancelled) return
+      if (cancelled || sessionGenerationRef.current !== generation) return
       const connection = new TerminalConnection(terminalAttachURL(session.id, session.token), {
         onOutput: (chunk) => terminalRef.current?.write(chunk),
         onControl: (frame) => {
+          if (cancelled || sessionGenerationRef.current !== generation) return
           switch (frame.type) {
             case 'ready':
               setStatus('ready')
@@ -222,7 +233,7 @@ export function TerminalTabView({ tab, active, onSessionEstablished, onTitleChan
           }
         },
         onClosed: (origin) => {
-          if (origin === 'local' || cancelled) return
+          if (origin === 'local' || cancelled || sessionGenerationRef.current !== generation) return
           // The pty outlives the socket, so a dropped transport is recoverable: keep the
           // screen and let the user re-attach instead of silently freezing the tab.
           setStatus((current) => (current === 'exited' ? current : 'error'))
@@ -233,7 +244,7 @@ export function TerminalTabView({ tab, active, onSessionEstablished, onTitleChan
     }
 
     attach().catch((error) => {
-      if (cancelled) return
+      if (cancelled || sessionGenerationRef.current !== generation) return
       console.error('[features/agent-chat/terminal/TerminalTabView.tsx] terminal attach failed', { tabId: tab.id, error })
       setStatus('error')
       setStatusDetail(error instanceof Error ? error.message : String(error))
@@ -249,16 +260,29 @@ export function TerminalTabView({ tab, active, onSessionEstablished, onTitleChan
   }, [attempt, tab.id])
 
   const restart = () => {
+    const generation = ++sessionGenerationRef.current
     const previousSessionId = establishedRef.current?.id || tab.terminalSessionId
+    connectionRef.current?.close()
+    connectionRef.current = null
+    establishedRef.current = null
+    resolvingRef.current = null
     setStatus('connecting')
     setStatusDetail('')
     void (async () => {
-      if (previousSessionId) await closeTerminalSession(previousSessionId)
-      establishedRef.current = null
-      resolvingRef.current = null
-      terminalRef.current?.reset()
+      if (previousSessionId && !releasedSessionIdsRef.current.has(previousSessionId)) {
+        releasedSessionIdsRef.current.add(previousSessionId)
+        try {
+          await closeTerminalSession(previousSessionId)
+        } catch (error) {
+          releasedSessionIdsRef.current.delete(previousSessionId)
+          throw error
+        }
+      }
+      if (sessionGenerationRef.current !== generation || !terminalRef.current) return
+      terminalRef.current.reset()
       setAttempt((value) => value + 1)
     })().catch((error) => {
+      if (sessionGenerationRef.current !== generation || !terminalRef.current) return
       console.error('[features/agent-chat/terminal/TerminalTabView.tsx] restarting terminal failed', {
         tabId: tab.id,
         sessionId: previousSessionId,

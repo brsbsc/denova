@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { TFunction } from 'i18next'
 import { createAgentCommandID, type AgentRuntimeQueuedCommand } from '@/lib/api'
 import { localizeAgentRuntimeReason } from '@/lib/agent-runtime-error'
@@ -19,6 +19,7 @@ import type { StoryStageRunState } from '../../stores/interactive-store'
 import { useInteractiveStore } from '../../stores/interactive-store'
 import type { StoryStageRuntimeUpdater } from '../../use-interactive-agent-commands'
 import {
+  abortStoryRunStream,
   clearStoryRunAbortController,
   registerStoryRunAbortController,
   useActiveStoryRunRecovery,
@@ -39,6 +40,7 @@ import {
 type InteractiveAgentCommands = ReturnType<typeof useInteractiveAgentCommands>
 
 interface UseStoryStageRuntimeOptions {
+  projectId?: string
   storyId: string
   branchId: string
   stageKey: string
@@ -70,6 +72,7 @@ interface UseStoryStageRuntimeOptions {
 // Follow Up that can be steered from the projected queue. This hook also owns
 // transport recovery, abort, event projection and terminal settlement.
 export function useStoryStageRuntime({
+  projectId,
   storyId,
   branchId,
   stageKey,
@@ -100,17 +103,52 @@ export function useStoryStageRuntime({
   const commandSubmittingRef = useRef(false)
   const initialStartCommandIDsRef = useRef(new Map<string, string>())
   const commandIDsRef = useRef(new Map<string, string>())
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+  const stageBindingRef = useRef({ projectId, storyId, branchId, stageKey })
+  stageBindingRef.current = { projectId, storyId, branchId, stageKey }
+  const isCurrentStage = (expected = { projectId, storyId, branchId, stageKey }) => {
+    if (!mountedRef.current) return false
+    const active = stageBindingRef.current
+    const currentStore = useInteractiveStore.getState()
+    return active.stageKey === expected.stageKey
+      && active.projectId === expected.projectId
+      && active.storyId === expected.storyId
+      && active.branchId === expected.branchId
+      && (!currentStore.currentStoryId || currentStore.currentStoryId === expected.storyId)
+  }
   const streamConsumer = createStoryStageStreamConsumer({
     liveAccumulator,
     liveTurnNavigationAnchorId,
     onRuntimeRecoveryRequired: recoverAttachedRuntime,
-    onTurnPersisted,
+    onTurnPersisted: (event, options) => {
+      if (!isCurrentStage()) return undefined
+      return onTurnPersisted(event, options)
+    },
     setActivity,
     setMessages,
     setStageRuntime,
     t,
     updateStageRun,
   })
+
+  useEffect(() => () => {
+    abortStoryRunStream(stageKey)
+    const existing = useInteractiveStore.getState().storyStageRuns[stageKey]
+    if (existing && (existing.streaming || existing.runtime.connection !== 'disconnected')) {
+      useInteractiveStore.getState().setStoryStageRun(stageKey, (current) => ({
+        ...current,
+        streaming: false,
+        activityContent: '',
+        runtime: { ...current.runtime, connection: 'disconnected' },
+      }))
+    }
+  }, [stageKey])
 
   useActiveStoryRunRecovery({
     stageKey,
@@ -211,9 +249,14 @@ export function useStoryStageRuntime({
       accept()
       commandSubmittingRef.current = false
       setCommandSubmitting(false)
+      const expectedStage = { projectId, storyId, branchId, stageKey }
       const outcome = await observeStream(stream, abortController)
+      if (abortController.signal.aborted || !isCurrentStage(expectedStage)) {
+        finishRun(abortController)
+        return true
+      }
       if (outcome.terminalEventReceived) {
-        await completeStream(outcome)
+        await completeStream(outcome, expectedStage)
         finishRun(abortController)
       }
       return true
@@ -357,25 +400,32 @@ export function useStoryStageRuntime({
       if (isDisposed()) return
       interactiveAgentCommands.project(recovered, 'connected')
       setActivity(t('storyStage.activity.thinking'))
+      const expectedStage = { projectId, storyId, branchId, stageKey }
       const outcome = await observeStream(stream, abortController, isDisposed)
+      if (abortController.signal.aborted || isDisposed() || !isCurrentStage(expectedStage)) {
+        finishRun(abortController)
+        return
+      }
       if (outcome.terminalEventReceived) {
-        await completeStream(outcome)
+        await completeStream(outcome, expectedStage)
         finishRun(abortController)
       }
     } catch (error) {
-      if (!isDisposed() && !isAbortError(error)) {
-        if (isRetryableStoryStageObservationError(error)) {
-          updateStageRun((current) => ({
-            ...current,
-            streaming: true,
-            runtime: { ...current.runtime, connection: 'disconnected' },
-          }))
-          setActivity(t('storyStage.activity.recovering'))
-          throw error
-        }
-        handleStreamError(error)
+      if (isDisposed() || isAbortError(error)) {
         finishRun(abortController)
+        return
       }
+      if (isRetryableStoryStageObservationError(error)) {
+        updateStageRun((current) => ({
+          ...current,
+          streaming: true,
+          runtime: { ...current.runtime, connection: 'disconnected' },
+        }))
+        setActivity(t('storyStage.activity.recovering'))
+        throw error
+      }
+      handleStreamError(error)
+      finishRun(abortController)
     }
   }
 
@@ -589,7 +639,11 @@ export function useStoryStageRuntime({
     }))
   }
 
-  async function completeStream({ finishedNormally, receivedPersistedTurn, persistedSnapshot }: StoryStageStreamOutcome) {
+  async function completeStream(
+    { finishedNormally, receivedPersistedTurn, persistedSnapshot }: StoryStageStreamOutcome,
+    expectedStage = { projectId, storyId, branchId, stageKey },
+  ) {
+    if (!isCurrentStage(expectedStage)) return
     let nextSnapshot: Snapshot | void = persistedSnapshot
     try {
       if (persistedSnapshot) {
@@ -598,14 +652,20 @@ export function useStoryStageRuntime({
         nextSnapshot = await onDone(receivedPersistedTurn ? { silent: true } : undefined)
       }
     } finally {
-      try {
-        const projected = await getActiveInteractiveChat(storyId, branchId)
-        interactiveAgentCommands.project(projected, 'disconnected')
-      } catch (error) {
-        console.warn('[interactive-stage] Failed to refresh the settled game Agent projection', error)
+      if (isCurrentStage(expectedStage)) {
+        try {
+          const projected = await getActiveInteractiveChat(expectedStage.storyId, expectedStage.branchId)
+          if (isCurrentStage(expectedStage)) {
+            interactiveAgentCommands.project(projected, 'disconnected')
+          }
+        } catch (error) {
+          console.warn('[interactive-stage] Failed to refresh the settled game Agent projection', error)
+        }
       }
     }
-    if (finishedNormally) await storyImages.maybeGenerateAutomatically(nextSnapshot)
+    if (finishedNormally && isCurrentStage(expectedStage)) {
+      await storyImages.maybeGenerateAutomatically(nextSnapshot)
+    }
   }
 
   async function suspend() {

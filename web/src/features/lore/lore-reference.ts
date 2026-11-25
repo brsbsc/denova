@@ -57,9 +57,19 @@ export const LoreReference = Node.create({
 })
 
 const parser = new MarkdownManager({ marked: createMarkdownParser(), extensions: [StarterKit, TableKit, LoreReference] })
+const EMPTY_LORE_REFERENCE_NAMES: string[] = []
+const MAX_LORE_REFERENCE_CACHE_SIZE = 256
+const loreReferenceNamesCache = new Map<string, string[]>()
 
 /** Uses the editor's parser so backlinks and visible links agree, including escapes and tables. */
 export function loreReferenceNames(content: string): string[] {
+  if (!content || !content.includes('[[')) return EMPTY_LORE_REFERENCE_NAMES
+  const cached = loreReferenceNamesCache.get(content)
+  if (cached) {
+    loreReferenceNamesCache.delete(content)
+    loreReferenceNamesCache.set(content, cached)
+    return cached
+  }
   const names = new Map<string, string>()
   const visit = (node: JSONContent) => {
     if (node.type === LoreReference.name) {
@@ -69,7 +79,13 @@ export function loreReferenceNames(content: string): string[] {
     node.content?.forEach(visit)
   }
   visit(parser.parse(content))
-  return [...names.values()]
+  const resolved = [...names.values()]
+  loreReferenceNamesCache.set(content, resolved)
+  if (loreReferenceNamesCache.size > MAX_LORE_REFERENCE_CACHE_SIZE) {
+    const oldest = loreReferenceNamesCache.keys().next().value
+    if (oldest !== undefined) loreReferenceNamesCache.delete(oldest)
+  }
+  return resolved
 }
 
 export const loreSuggestionKey = new PluginKey('loreSuggestion')

@@ -55,11 +55,6 @@ export function hasNativeIndent(text: string): boolean {
   return false
 }
 
-/** 判断文件是否为纯文本（.txt）格式。 */
-export function isTxtFile(name: string | null): boolean {
-  return !!name && name.toLowerCase().endsWith('.txt')
-}
-
 export function isMarkdownFile(name: string | null): boolean {
   return !!name && /\.(md|markdown)$/i.test(name)
 }
@@ -140,10 +135,8 @@ function resolveWorkspaceImageSrc(src: unknown, resolveAsset: (path: string) => 
   return value
 }
 
-export function readEditorText(editor: Editor, fileName: string | null): string {
-  return isTxtFile(fileName)
-    ? normalizeEditorText(editor.getText({ blockSeparator: '\n' }))
-    : normalizeEditorText(editor.getMarkdown())
+export function readEditorText(editor: Editor, _fileName?: string | null): string {
+  return normalizeEditorText(editor.getMarkdown())
 }
 
 /** 文件切换后重建编辑器状态，避免上一个文件的 Ctrl-Z 历史跨文件生效。 */

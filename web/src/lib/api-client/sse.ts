@@ -78,6 +78,7 @@ function enqueueSSEBlock<T extends SSEEvent>(controller: ReadableStreamDefaultCo
     else if (field === 'event') event = value
     else if (field === 'data') data.push(value)
   }
+  if (!event && data.length > 0) event = 'message'
   if (!event) return false
   controller.enqueue({ ...(id === undefined ? {} : { id }), event, data: data.join('\n') } as T)
   return true

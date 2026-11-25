@@ -10,7 +10,6 @@ import type { AgentChatProject } from './api'
  */
 
 const WORKBENCH_STORAGE_KEY = 'nova.agentchat.workbenches.v1'
-const TAB_BAR_EXPANDED_STORAGE_KEY = 'nova.agentchat.tabBarExpanded.v1'
 
 /** Upper bound on open tabs so a long session cannot pile up unbounded panes. */
 export const MAX_AGENT_CHAT_TABS = 12
@@ -267,16 +266,6 @@ export function readSidebarVisible(): boolean {
 
 export function persistSidebarVisible(visible: boolean) {
   writeStorage(SIDEBAR_VISIBLE_STORAGE_KEY, visible ? 'true' : 'false')
-}
-
-export function readTabBarExpanded(): boolean {
-  // Collapsed by default: with a single tab the bar is pure noise, so the user opts in
-  // once they actually work with several tabs.
-  return readStorage(TAB_BAR_EXPANDED_STORAGE_KEY) === 'true'
-}
-
-export function persistTabBarExpanded(expanded: boolean) {
-  writeStorage(TAB_BAR_EXPANDED_STORAGE_KEY, expanded ? 'true' : 'false')
 }
 
 /**

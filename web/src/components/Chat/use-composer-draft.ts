@@ -25,6 +25,7 @@ function createDraft(key: string, persistent: boolean) {
 
   return {
     getSnapshot: () => snapshot,
+    hasSubscribers: () => subscribers.size > 0,
     subscribe(notify: () => void) {
       subscribers.add(notify)
       return () => { subscribers.delete(notify) }
@@ -51,16 +52,30 @@ function createDraft(key: string, persistent: boolean) {
   }
 }
 
+const MAX_CACHED_DRAFTS = 64
 const drafts = new Map<string, ReturnType<typeof createDraft>>()
+
+function evictUnsubscribedDrafts() {
+  if (drafts.size <= MAX_CACHED_DRAFTS) return
+  for (const [candidateKey, candidate] of drafts) {
+    if (drafts.size <= MAX_CACHED_DRAFTS) break
+    if (!candidate.hasSubscribers()) drafts.delete(candidateKey)
+  }
+}
 
 /** One text buffer per composer destination. A receipt can only consume the snapshot it submitted. */
 export function useComposerDraft(key: string | undefined, persistent: boolean) {
   const draft = useMemo(() => {
     if (!key) return createDraft('', false)
     const existing = drafts.get(key)
-    if (existing) return existing
+    if (existing) {
+      drafts.delete(key)
+      drafts.set(key, existing)
+      return existing
+    }
     const next = createDraft(key, persistent)
     drafts.set(key, next)
+    evictUnsubscribedDrafts()
     return next
   }, [key, persistent])
   const snapshot = useSyncExternalStore(draft.subscribe, draft.getSnapshot)

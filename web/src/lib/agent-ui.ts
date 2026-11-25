@@ -119,7 +119,7 @@ export class AgentChatTransport implements ChatTransport<AgentUIMessage> {
           return response
         } catch (error) {
           if (commandID && !this.initialSubmissionOutcomes.has(commandID)) {
-            this.initialSubmissionOutcomes.set(commandID, 'uncertain')
+            this.initialSubmissionOutcomes.set(commandID, init?.signal?.aborted ? 'aborted' : 'uncertain')
           }
           throw error
         }
@@ -232,7 +232,7 @@ export function buildAgentChatRequestBody(body: AgentChatRequestBody): AgentChat
   }
 }
 
-export type InitialSubmissionOutcome = 'accepted' | 'rejected' | 'uncertain'
+export type InitialSubmissionOutcome = 'accepted' | 'rejected' | 'aborted' | 'uncertain'
 
 /** 2xx proves durable acceptance; 4xx proves rejection; 5xx remains ambiguous. */
 export function initialSubmissionOutcomeForStatus(status: number): InitialSubmissionOutcome {

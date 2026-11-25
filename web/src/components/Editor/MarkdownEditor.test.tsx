@@ -113,6 +113,7 @@ const tiptapMock = vi.hoisted(() => {
     handlers,
     useEditorOptions: null as unknown,
     created: false,
+    destroyEditorOnUnmount: false,
     json: { type: 'doc', content: [{ type: 'paragraph' }] },
     markdown: '',
     text: '',
@@ -123,6 +124,8 @@ const tiptapMock = vi.hoisted(() => {
       handlers.clear()
       this.useEditorOptions = null
       this.created = false
+      this.destroyEditorOnUnmount = false
+      editor.isDestroyed = false
       this.json = { type: 'doc', content: [{ type: 'paragraph' }] }
       this.markdown = ''
       this.text = ''
@@ -136,17 +139,25 @@ const tiptapMock = vi.hoisted(() => {
   }
 })
 
-vi.mock('@tiptap/react', () => ({
-  EditorContent: ({ className }: { className?: string }) => <div data-testid="editor-content" className={className} />,
-  useEditor: (options: { onCreate?: (payload: { editor: typeof tiptapMock.editor }) => void }) => {
-    tiptapMock.useEditorOptions = options
-    if (!tiptapMock.created) {
-      tiptapMock.created = true
-      options.onCreate?.({ editor: tiptapMock.editor })
-    }
-    return tiptapMock.editor
-  },
-}))
+vi.mock('@tiptap/react', async () => {
+  const { useEffect } = await import('react')
+  return {
+    EditorContent: ({ className }: { className?: string }) => <div data-testid="editor-content" className={className} />,
+    useEditor: (options: { onCreate?: (payload: { editor: typeof tiptapMock.editor }) => void }) => {
+      tiptapMock.useEditorOptions = options
+      if (!tiptapMock.created) {
+        tiptapMock.created = true
+        options.onCreate?.({ editor: tiptapMock.editor })
+      }
+      useEffect(() => () => {
+        if (tiptapMock.destroyEditorOnUnmount) {
+          tiptapMock.editor.isDestroyed = true
+        }
+      }, [])
+      return tiptapMock.editor
+    },
+  }
+})
 
 vi.mock('@tiptap/pm/state', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tiptap/pm/state')>()
@@ -1776,6 +1787,35 @@ describe('MarkdownEditor', () => {
       content,
       revision: 'sha256:canonical',
     })
+  })
+
+  it('flushes dirty trailing edits on unmount even after TipTap destroys the editor', async () => {
+    tiptapMock.destroyEditorOnUnmount = true
+    const onSave = vi.fn().mockResolvedValue({ revision: 'rev-2' })
+
+    const view = render(
+      <MarkdownEditor
+        workspace="/books/demo"
+        fileName="chapters/ch01.md"
+        content="初始正文\n"
+        revision="rev-1"
+        autoSaveEnabled={true}
+        autoSaveDelayMs={10_000}
+        onSave={onSave}
+      />,
+    )
+
+    act(() => {
+      tiptapMock.markdown = '未等待防抖即卸载的最新正文'
+      tiptapMock.emit('update')
+    })
+    expect(onSave).not.toHaveBeenCalled()
+
+    view.unmount()
+
+    expect(tiptapMock.editor.isDestroyed).toBe(true)
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+    expect(onSave).toHaveBeenCalledWith('chapters/ch01.md', '未等待防抖即卸载的最新正文\n', 'rev-1')
   })
 })
 

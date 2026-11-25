@@ -74,20 +74,6 @@ export function upsertContextCompactionMessage(messages: AgentUIMessage[], next:
   return found ? updated : [...messages, next]
 }
 
-export function settleContextCompactionMessages(messages: AgentUIMessage[], status: 'success' | 'error') {
-  return messages.map((message) => {
-    const data = contextCompactionData(message)
-    if (!data) return message
-    return createAgentDataMessage({
-      id: message.id,
-      partId: contextCompactionPartID(message),
-      type: 'agent-context-compaction',
-      metadata: message.metadata,
-      data: { ...data, status },
-    })
-  })
-}
-
 function contextCompactionData(message: AgentUIMessage): Record<string, unknown> | undefined {
   const part = message.parts.find((candidate) => candidate.type === 'data-agent-context-compaction') as Record<string, unknown> | undefined
   return part?.data && typeof part.data === 'object' && !Array.isArray(part.data) ? part.data as Record<string, unknown> : undefined

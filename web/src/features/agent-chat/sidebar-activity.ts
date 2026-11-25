@@ -107,21 +107,3 @@ export function projectSidebarActivities({
   }
   return activities
 }
-
-export interface AgentChatActivitySummary {
-  total: number
-  running: number
-  attention: number
-}
-
-/** Compact project-row summary; exited terminals stay visible but are not treated as failures. */
-export function summarizeSidebarActivities(activities: readonly AgentChatSidebarActivity[]): AgentChatActivitySummary {
-  return activities.reduce<AgentChatActivitySummary>(
-    (summary, activity) => ({
-      total: summary.total + 1,
-      running: summary.running + Number(activity.status === 'running' || activity.status === 'connecting'),
-      attention: summary.attention + Number(activity.status === 'error'),
-    }),
-    { total: 0, running: 0, attention: 0 },
-  )
-}

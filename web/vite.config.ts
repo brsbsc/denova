@@ -82,8 +82,6 @@ export default defineConfig(({ mode }) => ({
             // Shared dependencies (especially React) must not be absorbed into
             // optional SDK chunks, or every page has to load those SDKs too.
             { name: 'pierre-diffs', test: /node_modules[\\/]@pierre[\\/]diffs[\\/]/, priority: 50 },
-            // Keep asynchronously loaded grammars and themes behind their own entries.
-            { name: 'shiki', test: /node_modules[\\/](?:shiki|@shikijs)[\\/]/, priority: 40, entriesAware: true },
             { name: 'monaco', test: /node_modules[\\/](?:monaco-editor|@monaco-editor)[\\/]/, priority: 30 },
             // Chart/scale factories share module-level initialization; splitting
             // this cluster can instantiate an uninitialized InternMap in production.

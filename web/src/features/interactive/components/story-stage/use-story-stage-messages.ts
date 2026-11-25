@@ -87,7 +87,7 @@ export function useStoryStageMessages({
       ...(snapshot?.pending_display_events || []).filter(event => !liveMessages.some(message => message.id === event.id)).map((event, index) => createAgentDataMessage({
         id: event.id || `pending-${event.role}-${index}`,
         type: event.role === 'todo_updated' ? 'agent-todo' : 'agent-context-compaction',
-        data: event.role === 'todo_updated' ? JSON.parse(event.content || '{}') : { ...event, status: event.status || 'success' },
+        data: event.role === 'todo_updated' ? parseTodoEventData(event.content) : { ...event, status: event.status || 'success' },
         metadata: displayEventMetadata(event),
       })),
       ...(hasPersistedLiveTurn ? [] : liveMessages.filter((message) => !agentMessageHasDataPart(message, 'agent-token-usage'))),
@@ -172,7 +172,7 @@ function projectPersistedTurn(turn: TurnEvent, options: {
         timeline.push(createAgentDataMessage({
           id: event.id || `${turn.id}-todo-${index}`,
           type: 'agent-todo',
-          data: JSON.parse(event.content || '{}'),
+          data: parseTodoEventData(event.content),
           metadata,
         }))
         break
@@ -308,6 +308,16 @@ function latestImageError(events: TurnDisplayEvent[]) {
     if (error) return error
   }
   return undefined
+}
+
+function parseTodoEventData(content: string | undefined): Record<string, unknown> {
+  if (!content) return {}
+  try {
+    const parsed = JSON.parse(content)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
 }
 
 function latestImageStatus(events: TurnDisplayEvent[]): 'running' | 'success' | 'error' | undefined {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 interface MultiFileDiffNavigationOptions {
   identity: string
@@ -61,7 +61,7 @@ export function useMultiFileDiffNavigation({ identity, paths, preferredPath }: M
     })
   }, [])
 
-  return {
+  return useMemo(() => ({
     activePath,
     collapsedPaths,
     allDiffsCollapsed,
@@ -71,7 +71,7 @@ export function useMultiFileDiffNavigation({ identity, paths, preferredPath }: M
     toggleFile,
     toggleAllDiffs,
     selectFile,
-  }
+  }), [activePath, allDiffsCollapsed, collapsedPaths, navigatorVisible, selectFile, toggleAllDiffs, toggleFile])
 }
 
 export type MultiFileDiffNavigation = ReturnType<typeof useMultiFileDiffNavigation>

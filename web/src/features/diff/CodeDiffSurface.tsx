@@ -178,6 +178,10 @@ export function CodeDiffSurface<Annotation>({ files, navigatorFiles, navigation,
     previousSingleFileMode.current = singleFileMode
   }, [navigation.activePath, navigation.collapsedPaths, singleFileMode])
 
+  const { activePath, collapsedPaths, setActivePath, toggleFile } = navigation
+  const activePathRef = useRef(activePath)
+  activePathRef.current = activePath
+
   const syncActiveFile = useCallback((scrollTop: number, viewer: NonNullable<ReturnType<CodeViewHandle<Annotation>['getInstance']>>) => {
     if (singleFileMode || files.length === 0) return
     const activationLine = scrollTop + 48
@@ -187,8 +191,8 @@ export function CodeDiffSurface<Annotation>({ files, navigatorFiles, navigation,
       if (top === undefined || top > activationLine) break
       nextPath = file.path
     }
-    if (nextPath !== navigation.activePath) navigation.setActivePath(nextPath)
-  }, [files, navigation, singleFileMode])
+    if (nextPath !== activePathRef.current) setActivePath(nextPath)
+  }, [files, setActivePath, singleFileMode])
 
   const copyPath = useCallback(async (path: string) => {
     try {
@@ -204,17 +208,17 @@ export function CodeDiffSurface<Annotation>({ files, navigatorFiles, navigation,
     const file = fileByPath.get(item.id)
     if (!file) return null
     const parsed = parsedByPath.get(item.id)
-    const collapsed = navigation.collapsedPaths.has(file.path)
+    const collapsed = collapsedPaths.has(file.path)
     const directory = file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/') + 1) : ''
     const basename = file.path.slice(directory.length)
     const kind = navigationByPath.get(file.path)?.kind ?? 'modified'
     return (
-      <div data-code-diff-header={file.path} className={`nova-code-diff-header group/file-header flex min-h-8 min-w-0 items-center border-l-2 pr-1.5 transition-colors hover:bg-[var(--nova-hover)] focus-within:bg-[var(--nova-hover)] ${navigation.activePath === file.path ? 'border-l-[var(--nova-accent-blue)]' : 'border-l-transparent'}`}>
+      <div data-code-diff-header={file.path} className={`nova-code-diff-header group/file-header flex min-h-8 min-w-0 items-center border-l-2 pr-1.5 transition-colors hover:bg-[var(--nova-hover)] focus-within:bg-[var(--nova-hover)] ${activePath === file.path ? 'border-l-[var(--nova-accent-blue)]' : 'border-l-transparent'}`}>
         <button
           type="button"
           aria-expanded={!collapsed}
           aria-label={t(collapsed ? 'changes.expandFile' : 'changes.collapseFile', { path: file.path })}
-          onClick={() => navigation.toggleFile(file.path)}
+          onClick={() => toggleFile(file.path)}
           className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch px-2 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--nova-accent-blue)]"
         >
           <ChevronDown className={`size-3 shrink-0 text-[var(--nova-text-faint)] transition-transform ${collapsed ? '-rotate-90' : ''}`} />
@@ -236,7 +240,7 @@ export function CodeDiffSurface<Annotation>({ files, navigatorFiles, navigation,
         </span>
       </div>
     )
-  }, [copyPath, fileByPath, navigation, navigationByPath, parsedByPath, renderHeaderAction, renderHeaderMeta, t])
+  }, [activePath, collapsedPaths, copyPath, fileByPath, navigationByPath, parsedByPath, renderHeaderAction, renderHeaderMeta, t, toggleFile])
 
   const options = useMemo(() => ({
     theme: DEFAULT_THEMES,

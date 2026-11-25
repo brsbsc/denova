@@ -1,7 +1,6 @@
 import type { AgentPageContext } from './types'
-import type { UIMessageChunk } from 'ai'
-import { fetchAPI, jsonHeaders, parseUIMessageStream, readErrorMessage, requestJSON } from './client'
-import type { AgentAskAnswer, AgentAskInteraction, AgentAskResolution, AgentRunTrace, AgentRunTraceSummary, ContextAnalysis, GlobalAgentRunTraceCatalog, IDEContext, SessionSummary, TextSelection } from './types'
+import { fetchAPI, jsonHeaders, readErrorMessage, requestJSON } from './client'
+import type { AgentAskAnswer, AgentAskInteraction, AgentAskResolution, AgentRunTrace, ContextAnalysis, GlobalAgentRunTraceCatalog, IDEContext, SessionSummary, TextSelection } from './types'
 import type { AgentUIMessage } from '@/lib/agent-ui'
 import { isKnownAgentCommandOutcome } from '@/lib/agent-command'
 import { projectAPIPath } from './project-scope'
@@ -11,52 +10,6 @@ const chatStructuralCommandIDs = new Map<string, string>()
 export interface AgentRunTraceExportFile {
   filename: string
   blob: Blob
-}
-
-export async function sendMessage(
-  sessionId: string,
-  message: string,
-  references: string[] = [],
-  loreReferences: string[] = [],
-  styleScenes: string[] = [],
-  textSelections: TextSelection[] = [],
-  signal?: AbortSignal,
-  planMode?: boolean,
-  writingSkill?: string,
-  ideContext?: IDEContext,
-  imagePresetId?: string,
-  tellerId?: string,
-  commandId: string = createAgentCommandID(),
-): Promise<ReadableStream<UIMessageChunk>> {
-  const res = await fetchAPI('/api/chat', {
-    method: 'POST',
-    headers: jsonHeaders,
-    body: JSON.stringify({
-      session_id: sessionId,
-      command_id: commandId,
-      message,
-      references,
-      lore_references: loreReferences,
-      style_scenes: styleScenes,
-      selections: textSelections.map((s) => ({
-        file_name: s.fileName,
-        start_line: s.startLine,
-        end_line: s.endLine,
-        content: s.content,
-      })),
-      ide_context: normalizeIDEContext(ideContext),
-      plan_mode: planMode || false,
-      writing_skill: writingSkill || undefined,
-      image_preset_id: imagePresetId || undefined,
-      teller_id: tellerId || undefined,
-    }),
-    signal,
-  })
-
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  if (!res.body) throw new Error('No response body')
-
-  return parseUIMessageStream(res.body)
 }
 
 export async function analyzeChatContext(
@@ -302,11 +255,6 @@ export async function executeCommand(command: string): Promise<string> {
   return data.result || ''
 }
 
-export async function getMessages(sessionId?: string): Promise<AgentUIMessage[]> {
-  const query = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''
-  return requestJSON(`/api/session/messages${query}`)
-}
-
 export const DEFAULT_SESSION_MESSAGE_PAGE_SIZE = 100
 
 export interface SessionMessagesPage {
@@ -347,11 +295,6 @@ export async function getMessagesPage(sessionId?: string, options: { limit?: num
 export async function getSessions(): Promise<SessionSummary[]> {
   const data = await requestJSON<{ sessions: SessionSummary[] }>('/api/sessions')
   return data.sessions || []
-}
-
-export async function getAgentRunTraces(projectId: string, limit = 20): Promise<AgentRunTraceSummary[]> {
-  const data = await requestJSON<{ runs: AgentRunTraceSummary[] }>(`${projectAPIPath(projectId, 'agent-runs')}?limit=${encodeURIComponent(String(limit))}`)
-  return data.runs || []
 }
 
 export function getGlobalAgentRunTraces(limit = 100, target?: { projectId: string; runId: string }): Promise<GlobalAgentRunTraceCatalog> {

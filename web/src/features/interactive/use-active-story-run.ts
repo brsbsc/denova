@@ -20,7 +20,6 @@ interface ActiveStoryRunRecoveryOptions {
 
 const stageAbortControllers = new Map<string, AbortController>()
 const stageResumeClaims = new Map<string, symbol>()
-const STORY_RECOVERY_READY_EVENT = 'nova:interactive-agent-recovery-ready'
 
 // useActiveStoryRunRecovery owns only the view subscription. The backend task
 // remains alive when this component unmounts, so a later mount can reconnect
@@ -121,14 +120,13 @@ function isRecoveryProjectionRefreshError(error: unknown) {
     code === 'agent_runtime.stream_attached'
 }
 
-function waitForStoryRecoveryOpportunity(stageKey: string, signal: AbortSignal) {
+function waitForStoryRecoveryOpportunity(_stageKey: string, signal: AbortSignal) {
   if (signal.aborted) return Promise.reject(signal.reason || new DOMException('Aborted', 'AbortError'))
   return new Promise<void>((resolve, reject) => {
     const cleanup = () => {
       window.removeEventListener('online', resume)
       window.removeEventListener('focus', resume)
       document.removeEventListener('visibilitychange', resumeWhenVisible)
-      window.removeEventListener(STORY_RECOVERY_READY_EVENT, resumeWhenRuntimeReady)
       signal.removeEventListener('abort', abort)
     }
     const resume = () => {
@@ -138,9 +136,6 @@ function waitForStoryRecoveryOpportunity(stageKey: string, signal: AbortSignal) 
     const resumeWhenVisible = () => {
       if (document.visibilityState === 'visible') resume()
     }
-    const resumeWhenRuntimeReady = (event: Event) => {
-      if ((event as CustomEvent<{ stageKey?: string }>).detail?.stageKey === stageKey) resume()
-    }
     const abort = () => {
       cleanup()
       reject(signal.reason || new DOMException('Aborted', 'AbortError'))
@@ -148,17 +143,15 @@ function waitForStoryRecoveryOpportunity(stageKey: string, signal: AbortSignal) 
     window.addEventListener('online', resume, { once: true })
     window.addEventListener('focus', resume, { once: true })
     document.addEventListener('visibilitychange', resumeWhenVisible)
-    window.addEventListener(STORY_RECOVERY_READY_EVENT, resumeWhenRuntimeReady)
     signal.addEventListener('abort', abort, { once: true })
   })
 }
 
-/** Wake the current projection loop after an explicit recovery action creates a task. */
-export function wakeStoryRunRecovery(stageKey: string) {
-  window.dispatchEvent(new CustomEvent(STORY_RECOVERY_READY_EVENT, { detail: { stageKey } }))
-}
-
 export function registerStoryRunAbortController(stageKey: string, controller: AbortController) {
+  const existing = stageAbortControllers.get(stageKey)
+  if (existing && existing !== controller) {
+    existing.abort()
+  }
   stageAbortControllers.set(stageKey, controller)
 }
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from 'react'
 import type { AgentChatTab } from '../types'
-import { readStoredWorkbenchState, type AgentChatWorkbenchState } from '../tab-state'
+import { persistWorkbenchState, readStoredWorkbenchState, type AgentChatWorkbenchState } from '../tab-state'
 import { closeTerminalSession, getTerminalRuntimeStatus, type TerminalSessionInfo } from './api'
 
 /** Map every persisted terminal owner to the backend session it has already established. */
@@ -120,35 +120,49 @@ export function useTerminalSessionLifecycle(
       const state = workbenchRef.current.projects[projectID]
       const owned = !closedTabIdsRef.current.has(tabId) && state?.tabs.some((tab) => tab.kind === 'terminal' && tab.id === tabId)
       if (!owned) return false
-      // Mode switches may unmount AgentChat while a creation request is resolving. The persisted
-      // tab still owns the pty, but there is no mounted component whose state needs updating.
-      if (!viewMountedRef.current) return true
-      setWorkbench((current) => {
-        const currentState = current.projects[projectID]
-        if (!currentState) return current
-        return {
-          ...current,
-          projects: {
-            ...current.projects,
-            [projectID]: {
-              ...currentState,
-              tabs: currentState.tabs.map((tab) =>
-                tab.id === tabId && tab.kind === 'terminal'
-                  ? {
-                      ...tab,
-                      terminalSessionId: session.id,
-                      title: tab.title || session.title,
-                    }
-                  : tab,
-              ),
-            },
-          },
-        }
-      })
+      const nextInMemory = applyTerminalSessionToWorkbench(workbenchRef.current, projectID, tabId, session)
+      workbenchRef.current = nextInMemory
+      if (!viewMountedRef.current) {
+        // Mode switches may unmount AgentChat while a creation request is resolving. Persist the
+        // session binding directly so remounting re-attaches instead of spawning a second pty.
+        const stored = readStoredWorkbenchState()
+        const base = stored.projects[projectID] ? stored : nextInMemory
+        persistWorkbenchState(applyTerminalSessionToWorkbench(base, projectID, tabId, session))
+        return true
+      }
+      setWorkbench((current) => applyTerminalSessionToWorkbench(current, projectID, tabId, session))
       return true
     },
     [setWorkbench],
   )
 
   return { bindTerminalSession, markTerminalTabsClosing }
+}
+
+function applyTerminalSessionToWorkbench(
+  current: AgentChatWorkbenchState,
+  projectID: string,
+  tabId: string,
+  session: TerminalSessionInfo,
+): AgentChatWorkbenchState {
+  const currentState = current.projects[projectID]
+  if (!currentState) return current
+  return {
+    ...current,
+    projects: {
+      ...current.projects,
+      [projectID]: {
+        ...currentState,
+        tabs: currentState.tabs.map((tab) =>
+          tab.id === tabId && tab.kind === 'terminal'
+            ? {
+                ...tab,
+                terminalSessionId: session.id,
+                title: tab.title || session.title,
+              }
+            : tab,
+        ),
+      },
+    },
+  }
 }

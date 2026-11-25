@@ -54,7 +54,7 @@ export function AgentChatActivitySidebar({
   onArchiveProject,
 }: AgentChatActivitySidebarProps) {
   const { t } = useTranslation()
-  const preferences = useAgentChatSidebarPreferences(projects)
+  const preferences = useAgentChatSidebarPreferences(projects, !loading && !error)
   const sensors = useSensors(
     useSensor(MouseSensor, {
       activationConstraint: { delay: 180, tolerance: 5 },

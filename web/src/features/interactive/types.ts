@@ -752,27 +752,6 @@ export interface TerminalOutcome {
   restart_suggestions?: string[]
 }
 
-export interface ActorTraitRollRequest {
-  actor_state_id?: string
-  actor_id: string
-  template_id: string
-  selections?: ActorTraitSelection[]
-  seed?: number
-}
-
-export interface ActorTraitRollResult {
-  actor_state_id?: string
-  actor_id: string
-  template_id: string
-  seed: number
-  traits: ActorTraitInstance[]
-}
-
-export interface RuleResolutionRerollInput {
-  branch_id?: string
-  turn_id?: string
-}
-
 export interface Snapshot {
   pending_display_events?: TurnDisplayEvent[]
   story_id: string

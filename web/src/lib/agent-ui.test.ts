@@ -556,6 +556,32 @@ describe('agent-ui', () => {
     }
   })
 
+  it('classifies local abortSignal cancellation as aborted instead of uncertain', async () => {
+    const controller = new AbortController()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((_input, init) => new Promise((_resolve, reject) => {
+      const rejectAbort = () => reject(new DOMException('Aborted', 'AbortError'))
+      if (init?.signal?.aborted) {
+        rejectAbort()
+        return
+      }
+      init?.signal?.addEventListener('abort', rejectAbort, { once: true })
+      queueMicrotask(() => controller.abort())
+    }))
+
+    try {
+      const transport = new AgentChatTransport()
+      const pending = transport.sendMessages({
+        ...agentSendOptions(),
+        abortSignal: controller.signal,
+        body: { command_id: 'command-aborted', message: 'stop before headers' },
+      })
+      await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+      expect(transport.takeInitialSubmissionOutcome('command-aborted')).toBe('aborted')
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
   it('project scope overrides caller body and follows the exact task reconnect', async () => {
     const requests: Array<{ url: string; body?: Record<string, unknown> }> = []
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {

@@ -81,11 +81,6 @@ export function createAgentDataMessage({ id, partId, type, data, metadata }: Age
   } as AgentUIMessage
 }
 
-export function agentMessageText(message: AgentUIMessage) {
-  const part = message.parts.find((candidate) => candidate.type === 'text') as Record<string, unknown> | undefined
-  return typeof part?.text === 'string' ? part.text : ''
-}
-
 export function agentMessageDisplayText(message: AgentUIMessage) {
   if (message.metadata?.streaming_target_content !== undefined) return message.metadata.streaming_target_content
   const part = message.parts.find((candidate) => candidate.type === 'text' || candidate.type === 'reasoning') as Record<string, unknown> | undefined

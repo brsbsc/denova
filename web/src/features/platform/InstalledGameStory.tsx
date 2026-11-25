@@ -43,7 +43,16 @@ export function InstalledGameStory({ instance, item, active, picker, onRefresh }
     let cancelled = false
     setBusy(true)
     void management<RuntimeSnapshot>(`/instances/${instance.instanceId}/open`, 'POST', { locale: i18n.language, theme: resolvedTheme })
-      .then(value => { if (!cancelled) { setRuntime(value); setError('') } })
+      .then(value => {
+        if (cancelled) {
+          void management(`/runtimes/${value.id}/stop`, 'POST', {}).catch(stopError => {
+            console.warn('[extensions] stopping cancelled game runtime failed', { runtimeId: value.id, error: stopError })
+          })
+          return
+        }
+        setRuntime(value)
+        setError('')
+      })
       .catch(error => { if (!cancelled) setError(platformError(error)) })
       .finally(() => { if (!cancelled) setBusy(false) })
     return () => { cancelled = true }

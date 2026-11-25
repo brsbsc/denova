@@ -94,6 +94,8 @@ export function InteractiveLayout({ projectId = '', workspace, active = true, im
   const snapshotRequestSeqRef = useRef(0)
   const storySelectionQueueRef = useRef<Promise<void>>(Promise.resolve())
   const lastStableSnapshotRef = useRef<Snapshot | null>(null)
+  const activeProjectIdRef = useRef(projectId)
+  activeProjectIdRef.current = projectId
   const [snapshotLoading, setSnapshotLoading] = useState(false)
   const [snapshotLoadFailed, setSnapshotLoadFailed] = useState(false)
   const [storyIndexLoading, setStoryIndexLoading] = useState(true)
@@ -427,8 +429,17 @@ export function InteractiveLayout({ projectId = '', workspace, active = true, im
     setSubmode('timeline')
   }, [setSubmode])
 
-  const handleTurnPersisted = useCallback((event: InteractiveTurnPersistedEvent) => {
-    const nextSnapshot = applyTurnPersisted(event) || undefined
+  const handleTurnPersisted = useCallback((
+    event: InteractiveTurnPersistedEvent,
+    options?: { replayed: boolean; expectedStoryId?: string; expectedProjectId?: string },
+  ) => {
+    if (options?.expectedProjectId !== undefined && options.expectedProjectId !== activeProjectIdRef.current) {
+      return undefined
+    }
+    const expectedStoryId = options?.expectedStoryId ?? useInteractiveStore.getState().currentStoryId
+    if (!expectedStoryId) return undefined
+    const nextSnapshot = applyTurnPersisted(event, { expectedStoryId }) || undefined
+    if (!nextSnapshot) return undefined
     const persistedStory = useInteractiveStore.getState().stories.find((story) => story.id === event.story_id)
     if (persistedStory?.title_source === 'pending') {
       void reloadStories().catch((error) => {
@@ -438,9 +449,35 @@ export function InteractiveLayout({ projectId = '', workspace, active = true, im
     return nextSnapshot
   }, [applyTurnPersisted, reloadStories])
 
-  const handleStoryStageDone = useCallback((options?: { silent?: boolean }) => {
-    return reloadSnapshot(undefined, undefined, options)
+  const handleStoryStageDone = useCallback((options?: { silent?: boolean; expectedStoryId?: string; expectedBranchId?: string; expectedProjectId?: string }) => {
+    if (options?.expectedProjectId !== undefined && options.expectedProjectId !== activeProjectIdRef.current) {
+      return
+    }
+    const current = useInteractiveStore.getState()
+    if (options?.expectedStoryId !== undefined && current.currentStoryId !== options.expectedStoryId) {
+      return
+    }
+    if (options?.expectedBranchId && current.currentBranchId !== options.expectedBranchId) {
+      return
+    }
+    return reloadSnapshot(options?.expectedBranchId, options?.expectedStoryId, options)
   }, [reloadSnapshot])
+
+  const boundStoryStageTurnPersisted = useCallback((
+    event: InteractiveTurnPersistedEvent,
+    options?: { replayed: boolean },
+  ) => handleTurnPersisted(event, {
+    replayed: options?.replayed === true,
+    expectedProjectId: projectId,
+    expectedStoryId: currentStoryId,
+  }), [currentStoryId, handleTurnPersisted, projectId])
+
+  const boundStoryStageDone = useCallback((options?: { silent?: boolean }) => handleStoryStageDone({
+    ...options,
+    expectedProjectId: projectId,
+    expectedStoryId: currentStoryId,
+    expectedBranchId: currentBranchId,
+  }), [currentBranchId, currentStoryId, handleStoryStageDone, projectId])
 
   const handleSwitchBranch = async (branchId: string) => {
     const storyId = currentStoryId || useInteractiveStore.getState().currentStoryId || snapshot?.story_id
@@ -519,8 +556,8 @@ export function InteractiveLayout({ projectId = '', workspace, active = true, im
       onToggleDirectorPanel={isMobile ? () => setMobileSnapshotOpen((open) => !open) : onToggleRightPanel}
       onRequestCreateBranch={setBranchCreationSource}
       onStateDisplayPreferenceChange={handleStoryStateDisplayPreferenceChange}
-      onTurnPersisted={handleTurnPersisted}
-      onDone={handleStoryStageDone}
+      onTurnPersisted={boundStoryStageTurnPersisted}
+      onDone={boundStoryStageDone}
     />
   )
   return (

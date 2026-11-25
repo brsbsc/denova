@@ -93,10 +93,6 @@ export function ExternalLink({ href, children }: { href: string; children: React
   )
 }
 
-export function ValuePreview({ value }: { value: unknown }) {
-  return <DetailPre>{formatValue(value)}</DetailPre>
-}
-
 export function EmptyValue({ t }: { t: TFunction }) {
   return <span className="text-[var(--nova-text-faint)]">{t('chat.tool.noReturn')}</span>
 }
@@ -131,10 +127,6 @@ export function stringArray(value: unknown) {
 
 export function numberValue(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
-}
-
-export function booleanValue(value: unknown) {
-  return typeof value === 'boolean' ? value : undefined
 }
 
 export function numericMeta(name: string, value: unknown, suffix = '') {

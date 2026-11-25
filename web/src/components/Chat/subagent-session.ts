@@ -45,11 +45,6 @@ export function taskSubAgentSessionKey(result: string) {
   }
 }
 
-export function isSubAgentTimelineMessage(message: ChatMessage) {
-  if (!message.subagent) return false
-  return message.role === 'assistant' || message.role === 'thinking' || message.role === 'tool_call' || message.role === 'tool_result'
-}
-
 /** Status cards never need the child prose or serialized tool arguments/results. */
 export function buildSubAgentSummaryMessage(views: AgentMessageView[]): ChatMessage | null {
   const first = views.find((view) => view.metadata.subagent)

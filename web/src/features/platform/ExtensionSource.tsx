@@ -21,7 +21,9 @@ export function ExtensionSource({ owner, blockedReason, onUpdate }: {
       <Button variant="link" className="h-auto max-w-full whitespace-normal p-0 text-left [overflow-wrap:anywhere]" onClick={() => openResourceDestination({ section: 'acquired', installationID: owner.installation_id })}>{owner.package.name}</Button>
     </div>
     <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{owner.source.url
-      ? <a href={owner.source.url} target="_blank" rel="noreferrer" className="underline underline-offset-4">{owner.source.url}</a>
+      ? (/^https?:\/\//i.test(owner.source.url)
+        ? <a href={owner.source.url} target="_blank" rel="noreferrer" className="underline underline-offset-4">{owner.source.url}</a>
+        : owner.source.url)
       : owner.source.filename}{owner.source.ref && ` · ${owner.source.ref}`}{owner.source.path && ` · ${owner.source.path}`}</p>
     {owner.source.commit && <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{t('market.import.commit', { commit: owner.source.commit.slice(0, 12) })}</p>}
     {owner.bindings.length > 1 && <p className="text-xs text-muted-foreground">{t('market.bundleUpdateHelp')}</p>}

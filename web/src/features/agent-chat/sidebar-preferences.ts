@@ -76,6 +76,25 @@ function appendMissing(order: string[], ids: string[]): string[] {
   return next
 }
 
+function stringArraysEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function numberRecordsEqual(left: Record<string, number>, right: Record<string, number>): boolean {
+  const leftKeys = Object.keys(left)
+  const rightKeys = Object.keys(right)
+  return leftKeys.length === rightKeys.length && leftKeys.every((key) => left[key] === right[key])
+}
+
+function preferencesEqual(left: AgentChatSidebarPreferences, right: AgentChatSidebarPreferences): boolean {
+  return (
+    left.sortMode === right.sortMode &&
+    stringArraysEqual(left.pinnedProjects, right.pinnedProjects) &&
+    stringArraysEqual(left.manualProjectOrder, right.manualProjectOrder) &&
+    numberRecordsEqual(left.projectOpenedAt, right.projectOpenedAt)
+  )
+}
+
 function normalizePreferences(preferences: AgentChatSidebarPreferences, projects: AgentChatProject[]): AgentChatSidebarPreferences {
   const projectIDs = projects.map((project) => project.id)
   const projectSet = new Set(projectIDs)
@@ -88,12 +107,13 @@ function normalizePreferences(preferences: AgentChatSidebarPreferences, projects
       return id ? [[id, value]] : []
     }),
   )
-  return {
+  const normalized: AgentChatSidebarPreferences = {
     ...preferences,
     pinnedProjects: [...new Set(pinnedProjects)].filter((id) => projectSet.has(id)),
     manualProjectOrder: manualProjectOrder.length ? appendMissing([...new Set(manualProjectOrder)], projectIDs) : [],
     projectOpenedAt,
   }
+  return preferencesEqual(preferences, normalized) ? preferences : normalized
 }
 
 function timestamp(value: string): number {
@@ -166,18 +186,20 @@ function toggleID(values: string[], id: string): string[] {
 }
 
 /** Owns project navigation preferences; activity ordering remains a pure workbench projection. */
-export function useAgentChatSidebarPreferences(projects: AgentChatProject[]) {
+export function useAgentChatSidebarPreferences(projects: AgentChatProject[], projectsLoaded = true) {
   const [preferences, setPreferences] = useState<AgentChatSidebarPreferences>(readPreferences)
 
   useEffect(() => {
+    if (!projectsLoaded) return
     setPreferences((current) => normalizePreferences(current, projects))
-  }, [projects])
+  }, [projects, projectsLoaded])
   useEffect(() => persistPreferences(preferences), [preferences])
 
   const orderedProjects = useMemo(() => orderAgentChatProjects(projects, preferences), [preferences, projects])
   const setSortMode = useCallback(
     (sortMode: AgentChatSidebarSortMode) => {
       setPreferences((current) => {
+        if (!projectsLoaded) return { ...current, sortMode }
         if (sortMode !== 'manual' || current.manualProjectOrder.length) {
           return normalizePreferences({ ...current, sortMode }, projects)
         }
@@ -191,7 +213,7 @@ export function useAgentChatSidebarPreferences(projects: AgentChatProject[]) {
         )
       })
     },
-    [projects],
+    [projects, projectsLoaded],
   )
   const recordProjectOpened = useCallback((id: string) => {
     setPreferences((current) => ({

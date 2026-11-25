@@ -7,6 +7,7 @@ import type { AgentStreamCompletion } from './use-agent-stream'
 
 export interface WritingDisplayRehydrateRequest {
   signal: number
+  sessionID: string
   taskID: string
   cursor: number
   settled: boolean
@@ -86,16 +87,34 @@ export function useWritingAgentRuntimeRecovery({
   const onSettledRef = useRef(onSettled)
   const activeSessionIdRef = useRef(activeSessionId)
   const explicitlyResumedSessionIdRef = useRef('')
+  const normalizedActiveSessionId = activeSessionId.trim()
   if (activeSessionIdRef.current !== activeSessionId) {
     generationRef.current += 1
     for (const request of requestsRef.current) request.abort()
+    if (displayRehydrateRef.current) {
+      displayRehydrateCompletedSignalRef.current = Math.max(
+        displayRehydrateCompletedSignalRef.current,
+        displayRehydrateRef.current.signal,
+      )
+      displayRehydrateRef.current = null
+    }
+    if (displayRehydrateRequest && displayRehydrateRequest.sessionID.trim() !== normalizedActiveSessionId) {
+      displayRehydrateCompletedSignalRef.current = Math.max(
+        displayRehydrateCompletedSignalRef.current,
+        displayRehydrateRequest.signal,
+      )
+    }
   }
   activeSessionIdRef.current = activeSessionId
   transportStatusRef.current = transportStatus
   transportErrorRef.current = transportError
   runtimeProjectionRef.current = runtimeProjection
   onSettledRef.current = onSettled
-  if (displayRehydrateRequest && displayRehydrateRequest.signal > displayRehydrateCompletedSignalRef.current) {
+  if (
+    displayRehydrateRequest &&
+    displayRehydrateRequest.sessionID.trim() === normalizedActiveSessionId &&
+    displayRehydrateRequest.signal > displayRehydrateCompletedSignalRef.current
+  ) {
     displayRehydrateRef.current = displayRehydrateRequest
   }
 
@@ -317,6 +336,11 @@ export function useWritingAgentRuntimeRecovery({
   useEffect(() => {
     const request = displayRehydrateRef.current
     if (!request || transportStreaming || displayRehydrateInFlightRef.current) return
+    if (request.sessionID.trim() !== activeSessionIdRef.current.trim()) {
+      displayRehydrateCompletedSignalRef.current = Math.max(displayRehydrateCompletedSignalRef.current, request.signal)
+      displayRehydrateRef.current = null
+      return
+    }
     displayRehydrateInFlightRef.current = true
     wasStreamingRef.current = true
     retryNeededRef.current = false
@@ -392,9 +416,25 @@ export function useWritingAgentRuntimeRecovery({
     // Omission belongs to one Writing session. A manual session switch must
     // never carry the previous run's warning into another conversation.
     displayOmissionActiveRef.current = false
+    const currentSessionID = activeSessionId.trim()
+    if (displayRehydrateRef.current && displayRehydrateRef.current.sessionID.trim() !== currentSessionID) {
+      displayRehydrateCompletedSignalRef.current = Math.max(
+        displayRehydrateCompletedSignalRef.current,
+        displayRehydrateRef.current.signal,
+      )
+      displayRehydrateRef.current = null
+      displayRehydrateInFlightRef.current = false
+    }
     if (explicitlyResumedSessionIdRef.current === activeSessionId) {
       explicitlyResumedSessionIdRef.current = ''
       return
+    }
+    if (displayRehydrateRef.current) {
+      displayRehydrateCompletedSignalRef.current = Math.max(
+        displayRehydrateCompletedSignalRef.current,
+        displayRehydrateRef.current.signal,
+      )
+      displayRehydrateRef.current = null
     }
     displayRehydrateInFlightRef.current = false
     failuresRef.current = 0
@@ -549,6 +589,19 @@ export function useWritingAgentRuntimeRecovery({
       generationRef.current += 1
       for (const request of requestsRef.current) request.abort()
       displayOmissionActiveRef.current = false
+      if (displayRehydrateRef.current) {
+        displayRehydrateCompletedSignalRef.current = Math.max(
+          displayRehydrateCompletedSignalRef.current,
+          displayRehydrateRef.current.signal,
+        )
+        displayRehydrateRef.current = null
+      }
+      if (displayRehydrateRequest && displayRehydrateRequest.sessionID.trim() !== targetSessionID) {
+        displayRehydrateCompletedSignalRef.current = Math.max(
+          displayRehydrateCompletedSignalRef.current,
+          displayRehydrateRequest.signal,
+        )
+      }
       displayRehydrateInFlightRef.current = false
       retryNeededRef.current = false
       attachedRecoveryRetryNeededRef.current = false

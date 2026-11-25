@@ -1,5 +1,5 @@
 import { jsonHeaders, requestJSON } from './client'
-import { GLOBAL_RESOURCE_TARGET, projectAPIPath, projectResourceTarget, resourceTargetKey } from './project-scope'
+import { projectAPIPath, projectResourceTarget, resourceTargetKey } from './project-scope'
 import type { ResourceTarget } from './project-scope'
 import type { SkillCreateMetadata, SkillDocument, SkillFileDocument, SkillScope, SkillSnapshot, SkillPreferenceChange } from './types'
 
@@ -10,8 +10,6 @@ export interface SkillSaveTarget {
 
 /** Selects the global Skill catalog or the catalog merged with one Project layer. */
 export type SkillCatalogTarget = ResourceTarget
-
-export const GLOBAL_SKILL_TARGET: SkillCatalogTarget = GLOBAL_RESOURCE_TARGET
 
 export function projectSkillTarget(projectId: string): SkillCatalogTarget {
   return projectResourceTarget(projectId)

@@ -196,10 +196,28 @@ function parseStructuredValue(value: unknown): Record<string, unknown> | null {
   }
 }
 
+const tokenUsageRecordsCache = new WeakMap<AgentUIMessage, AgentTokenUsageRecord[]>()
+
 export function selectAgentTokenUsageRecords(messages: AgentUIMessage[]): AgentTokenUsageRecord[] {
-  return buildAgentMessageViews(messages)
-    .filter((view) => view.kind === 'token-usage')
-    .map(agentTokenUsageRecordFromView)
+  const records: AgentTokenUsageRecord[] = []
+  for (const message of messages) {
+    if (message.role === 'user' && message.metadata?.display_hidden) continue
+    let cached = tokenUsageRecordsCache.get(message)
+    if (!cached) {
+      cached = []
+      for (let partIndex = 0; partIndex < message.parts.length; partIndex += 1) {
+        const part = message.parts[partIndex]
+        if (part.type !== 'data-agent-token-usage') continue
+        const view = buildAgentMessageView(message, part, partIndex)
+        if (view && view.kind === 'token-usage') {
+          cached.push(agentTokenUsageRecordFromView(view))
+        }
+      }
+      tokenUsageRecordsCache.set(message, cached)
+    }
+    if (cached.length > 0) records.push(...cached)
+  }
+  return records
 }
 
 /**
@@ -245,14 +263,6 @@ export function hasCompletedAgentTurn(messages: AgentUIMessage[], isStreaming: b
 
 export function agentViewContent(view: AgentMessageView) {
   return view.content || readString(view.data.content) || readString(view.data.message) || readString(view.data.error)
-}
-
-/** Content whose full height must be reserved for the next visible streaming frame. */
-export function agentViewLayoutContent(view: AgentMessageView) {
-  if (view.streaming && view.metadata.streaming_target_content !== undefined) {
-    return view.metadata.streaming_target_content
-  }
-  return agentViewContent(view)
 }
 
 export function agentViewNavigationAnchor(view: AgentMessageView) {
@@ -369,8 +379,20 @@ export function isAgentSubAgentTimelineBridgeView(candidate: AgentMessageView, g
 
 /** SDK snapshots clone completed parts too. Share each part without retaining its whole message. */
 export function shareAgentMessageViews(previous: AgentMessageView[], next: AgentMessageView[]) {
-  const byKey = new Map(previous.map(view => [agentViewStableKey(view), view]))
-  return next.map(view => replaceEqualDeep(byKey.get(agentViewStableKey(view)), view))
+  if (previous.length === 0 || next.length === 0) return next
+  let byKey: Map<string, AgentMessageView> | null = null
+  let changed = previous.length !== next.length
+  const shared = next.map((view, index) => {
+    if (previous[index] === view) return view
+    if (!byKey) {
+      byKey = new Map(previous.map(candidate => [agentViewStableKey(candidate), candidate]))
+    }
+    const existing = byKey.get(agentViewStableKey(view))
+    const merged = existing === view ? view : replaceEqualDeep(existing, view)
+    if (merged !== previous[index]) changed = true
+    return merged
+  })
+  return changed ? shared : previous
 }
 
 export function agentViewStableKey(view: AgentMessageView) {

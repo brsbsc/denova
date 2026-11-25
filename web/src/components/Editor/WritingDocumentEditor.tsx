@@ -24,7 +24,6 @@ import {
   getLineNumber,
   hasNativeIndent,
   isMarkdownFile,
-  isTxtFile,
   insertPastedWorkspaceMarkdownImage,
   placeEditorCaretAtClick,
   replaceEditorDocument,
@@ -272,12 +271,6 @@ export function WritingDocumentEditor({
         parsedMarkdownDocumentsRef.current?.set(cacheKey, nextContent, parsedDocument)
       }
       replaceEditorDocumentWithFreshState(editor, editor.schema.nodeFromJSON(parsedDocument))
-    } else if (isTxtFile(nextFile)) {
-      const html = nextContent.split('\n').map((line) => `<p>${line || '<br>'}</p>`).join('')
-      replaceEditorDocument(editor, html, {
-        contentType: 'html',
-        preserveSelection: options.preserveSelection,
-      })
     } else {
       replaceEditorDocument(editor, nextContent, {
         contentType: 'markdown',
@@ -472,7 +465,7 @@ export function WritingDocumentEditor({
       return
     }
     lastIllustrationInsertNonceRef.current = illustrationInsertSignal.nonce
-    if (!fileName || isTxtFile(fileName) || !isMarkdownFile(fileName)) {
+    if (!fileName || !isMarkdownFile(fileName)) {
       toast.error(t('editor.illustrationMarkdownOnly'))
       return
     }

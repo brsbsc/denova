@@ -63,7 +63,13 @@ export class TerminalConnection {
     this.stopHeartbeat()
     const socket = this.socket
     this.socket = null
-    socket?.close()
+    if (socket) {
+      socket.onopen = null
+      socket.onmessage = null
+      socket.onerror = null
+      socket.onclose = null
+      socket.close()
+    }
     this.reportClosed()
   }
 

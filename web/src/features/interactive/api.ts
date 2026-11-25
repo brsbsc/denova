@@ -3,7 +3,7 @@ import type { AgentCommandReceipt, AgentRuntimeActiveOutput, AgentRuntimeOpenToo
 import { isKnownAgentCommandOutcome } from '@/lib/agent-command'
 import type { ChatAttachmentDescriptor, ChatAttachmentUpload } from '@/lib/chat-attachments'
 import type { ThinkingLevel } from '@/features/settings/thinking-levels'
-import type { ActorStateModule, ActorTraitRollRequest, ActorTraitRollResult, BranchSummary, EventPackageModule, GamePlanningTemplate, ImagePreset, InitialActorTraitRoll, InteractiveSnapshotResponse, InteractiveSSEEvent, InteractiveStoryUpdateInput, RuleResolution, RuleResolutionRerollInput, RuleSystemModule, TurnPresentationPatch, StoryPresentationSettings, StoryCheckSettings, StoryDirectorModuleRefs, StoryHistoryPage, StoryPlanningMode, StoryProtagonist, StoryStateSchemaPolicy, StyleReference, StyleReferenceFileDocument, StoryImageSettings, StoryIndex, StoryOpeningConfig, StorySummary, Teller, UpdateBranchPlanResult, UpdateTurnNarrativeResult } from './types'
+import type { ActorStateModule, BranchSummary, EventPackageModule, GamePlanningTemplate, ImagePreset, InitialActorTraitRoll, InteractiveSnapshotResponse, InteractiveSSEEvent, InteractiveStoryUpdateInput, RuleSystemModule, TurnPresentationPatch, StoryPresentationSettings, StoryCheckSettings, StoryDirectorModuleRefs, StoryHistoryPage, StoryPlanningMode, StoryProtagonist, StoryStateSchemaPolicy, StyleReference, StyleReferenceFileDocument, StoryImageSettings, StoryIndex, StoryOpeningConfig, StorySummary, Teller, UpdateBranchPlanResult, UpdateTurnNarrativeResult } from './types'
 
 function presetMutationBody<T extends object>(input: T, baseRevision?: string) {
   return {
@@ -18,14 +18,6 @@ export function getInteractiveStories(): Promise<StoryIndex> {
 
 export function createInteractiveStory(input: { title: string; custom_agent_id?: string; profile_id?: string; thinking_level?: ThinkingLevel; origin?: string; protagonist?: StoryProtagonist; story_teller_id: string; planning_template_id?: string; planning_mode?: StoryPlanningMode; module_refs?: StoryDirectorModuleRefs; reply_target_chars?: number; choice_count?: number; presentation_settings?: StoryPresentationSettings; image_settings?: StoryImageSettings; check_settings?: StoryCheckSettings; opening?: StoryOpeningConfig; initial_trait_rolls?: InitialActorTraitRoll[]; state_schema_policy?: StoryStateSchemaPolicy }): Promise<StorySummary> {
   return requestJSON('/api/interactive/stories', {
-    method: 'POST',
-    headers: jsonHeaders,
-    body: JSON.stringify(input),
-  })
-}
-
-export function rollInteractiveActorTraits(input: ActorTraitRollRequest): Promise<ActorTraitRollResult> {
-  return requestJSON('/api/interactive/actor-traits/roll', {
     method: 'POST',
     headers: jsonHeaders,
     body: JSON.stringify(input),
@@ -74,14 +66,6 @@ export interface StoryExecutionDetails {
 export function getInteractiveExecutionDetails(storyId: string, branchId: string, cursor: string): Promise<StoryExecutionDetails> {
   const query = new URLSearchParams({ branch: branchId, cursor })
   return requestJSON(`/api/interactive/stories/${encodeURIComponent(storyId)}/history/execution?${query}`)
-}
-
-export function rerollInteractiveRuleResolution(storyId: string, resolutionId: string, input: RuleResolutionRerollInput = {}): Promise<RuleResolution> {
-  return requestJSON(`/api/interactive/stories/${encodeURIComponent(storyId)}/rules/resolutions/${encodeURIComponent(resolutionId)}/reroll`, {
-    method: 'POST',
-    headers: jsonHeaders,
-    body: JSON.stringify(input),
-  })
 }
 
 export async function getInteractiveTellers(): Promise<Teller[]> {

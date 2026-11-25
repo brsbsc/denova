@@ -1,7 +1,7 @@
 import { ChapterStructureSelector } from './ChapterStructureSelector'
 import type { ChapterStructure } from '@/lib/api'
 import { FileText, RefreshCw, Sparkles, Upload } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -25,6 +25,8 @@ const maxSampleChars = 100000
 export function NovelImportDialog({ open, novaDir, onOpenChange, onImported }: NovelImportDialogProps) {
   const { t } = useTranslation()
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const previewAbortRef = useRef<AbortController | null>(null)
+  const previewGenerationRef = useRef(0)
   const [file, setFile] = useState<File | null>(null)
   const [structure, setStructure] = useState<ChapterStructure | undefined>()
   const [preview, setPreview] = useState<NovelImportPreview | null>(null)
@@ -39,7 +41,20 @@ export function NovelImportDialog({ open, novaDir, onOpenChange, onImported }: N
   const [error, setError] = useState('')
   const confirmedPreview = Boolean(preview && preview.sample_chars === sampleChars && preview.split_regex === splitRegex && preview.structure === structure)
 
+  const cancelActivePreview = () => {
+    previewGenerationRef.current += 1
+    previewAbortRef.current?.abort()
+    previewAbortRef.current = null
+  }
+
+  useEffect(() => () => {
+    previewGenerationRef.current += 1
+    previewAbortRef.current?.abort()
+    previewAbortRef.current = null
+  }, [])
+
   const reset = () => {
+    cancelActivePreview()
     setFile(null)
     setStructure(undefined)
     setPreview(null)
@@ -62,6 +77,11 @@ export function NovelImportDialog({ open, novaDir, onOpenChange, onImported }: N
   }
 
   const runPreview = async (targetFile: File, regex: string, chars: number, splitStrategy?: string, requestedStructure?: ChapterStructure) => {
+    cancelActivePreview()
+    const generation = previewGenerationRef.current
+    const controller = new AbortController()
+    previewAbortRef.current = controller
+    const isCurrent = () => previewGenerationRef.current === generation && !controller.signal.aborted
     setPreview(null)
     setError('')
     setPreviewProgress(t('novelImport.progress.uploading'))
@@ -72,8 +92,20 @@ export function NovelImportDialog({ open, novaDir, onOpenChange, onImported }: N
         sampleChars: chars,
         splitRegex: regex.trim() || undefined,
         splitStrategy,
+        signal: controller.signal,
       })
-      const data = await consumePreviewStream(stream, (step) => setPreviewProgress(t(`novelImport.progress.${step}`)))
+      if (!isCurrent()) {
+        void stream.cancel().catch(() => {})
+        return
+      }
+      const data = await consumePreviewStream(
+        stream,
+        (step) => {
+          if (isCurrent()) setPreviewProgress(t(`novelImport.progress.${step}`))
+        },
+        controller.signal,
+      )
+      if (!isCurrent()) return
       if (data) {
         setPreview(data)
         setStructure(data.structure)
@@ -82,10 +114,14 @@ export function NovelImportDialog({ open, novaDir, onOpenChange, onImported }: N
         setBookTitle((current) => current || data.title)
       }
     } catch (e: unknown) {
+      if (!isCurrent()) return
       setError(e instanceof Error ? e.message : t('novelImport.previewFailed'))
     } finally {
-      setPreviewing(false)
-      setPreviewProgress('')
+      if (previewAbortRef.current === controller) previewAbortRef.current = null
+      if (previewGenerationRef.current === generation) {
+        setPreviewing(false)
+        setPreviewProgress('')
+      }
     }
   }
 
@@ -327,23 +363,36 @@ export function NovelImportDialog({ open, novaDir, onOpenChange, onImported }: N
   )
 }
 
-async function consumePreviewStream(stream: ReadableStream<SSEEvent>, onProgress: (step: string) => void): Promise<NovelImportPreview | null> {
+async function consumePreviewStream(
+  stream: ReadableStream<SSEEvent>,
+  onProgress: (step: string) => void,
+  signal?: AbortSignal,
+): Promise<NovelImportPreview | null> {
   const reader = stream.getReader()
+  const onAbort = () => { void reader.cancel().catch(() => {}) }
+  signal?.addEventListener('abort', onAbort, { once: true })
   let preview: NovelImportPreview | null = null
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) return preview
-    if (!value) continue
-    if (value.event === 'progress') {
-      const payload = JSON.parse(value.data) as NovelImportProgress
-      if (payload.step) onProgress(payload.step)
-    } else if (value.event === 'preview') {
-      preview = JSON.parse(value.data) as NovelImportPreview
-    } else if (value.event === 'error') {
-      const payload = JSON.parse(value.data) as { error?: string }
-      throw new Error(payload.error || 'preview failed')
-    } else if (value.event === 'done') {
-      return preview
+  try {
+    while (!signal?.aborted) {
+      const { value, done } = await reader.read()
+      if (done || signal?.aborted) return preview
+      if (!value) continue
+      if (value.event === 'progress') {
+        const payload = JSON.parse(value.data) as NovelImportProgress
+        if (payload.step) onProgress(payload.step)
+      } else if (value.event === 'preview') {
+        preview = JSON.parse(value.data) as NovelImportPreview
+      } else if (value.event === 'error') {
+        const payload = JSON.parse(value.data) as { error?: string }
+        throw new Error(payload.error || 'preview failed')
+      } else if (value.event === 'done') {
+        return preview
+      }
     }
+    return preview
+  } finally {
+    signal?.removeEventListener('abort', onAbort)
+    if (signal?.aborted) await reader.cancel().catch(() => {})
+    else reader.releaseLock()
   }
 }

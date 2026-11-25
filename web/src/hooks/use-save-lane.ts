@@ -12,6 +12,8 @@ interface UseSaveLaneOptions<T, TResult> {
   save: (request: SaveLaneRequest<T>) => Promise<TResult>
   onSaved?: (request: SaveLaneRequest<T>, result: TResult) => void
   onError?: (request: SaveLaneRequest<T>, error: unknown) => void
+  /** Preserve and flush queued work across unmount instead of resetting the lane immediately. */
+  flushOnUnmount?: boolean
 }
 
 export interface SaveLaneBinding<T, TResult> extends SaveLaneSnapshot {
@@ -33,14 +35,17 @@ export function useSaveLane<T, TResult = void>({
   save,
   onSaved,
   onError,
+  flushOnUnmount = false,
 }: UseSaveLaneOptions<T, TResult>): SaveLaneBinding<T, TResult> {
   const saveRef = useRef(save)
   const onSavedRef = useRef(onSaved)
   const onErrorRef = useRef(onError)
+  const flushOnUnmountRef = useRef(flushOnUnmount)
   const activeRef = useRef(true)
   saveRef.current = save
   onSavedRef.current = onSaved
   onErrorRef.current = onError
+  flushOnUnmountRef.current = flushOnUnmount
 
   const laneRef = useRef<SaveLane<T, TResult> | null>(null)
   if (laneRef.current === null) {
@@ -51,7 +56,7 @@ export function useSaveLane<T, TResult = void>({
         if (activeRef.current) onSavedRef.current?.(request, result)
       },
       onError: (request, error) => {
-        if (activeRef.current) onErrorRef.current?.(request, error)
+        if (activeRef.current || flushOnUnmountRef.current) onErrorRef.current?.(request, error)
       },
     })
   }
@@ -69,6 +74,10 @@ export function useSaveLane<T, TResult = void>({
     activeRef.current = true
     return () => {
       activeRef.current = false
+      if (flushOnUnmountRef.current && lane.hasWork()) {
+        void lane.flush()
+        return
+      }
       // Keep the object reusable for React StrictMode's effect replay while
       // invalidating any request that belongs to the disappearing binding.
       lane.reset('__inactive__')

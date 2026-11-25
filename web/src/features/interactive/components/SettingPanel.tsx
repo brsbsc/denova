@@ -165,6 +165,9 @@ function LoreSettingPanel({
   const openingPresetBaselineContentRef = useRef('')
   const openingPresetBaselineRevisionRef = useRef('')
   const loreRebaseSequenceRef = useRef(0)
+  const loreItemsRequestSeqRef = useRef(0)
+  const activeProjectIdRef = useRef(projectId)
+  activeProjectIdRef.current = projectId
   const refreshSignalRef = useRef(refreshSignal)
   const isCreatorActive = activeMode === 'creator' || (activeMode === 'lore' && activeId === CREATOR_ENTRY_ID)
   const documentReviewLoreID = useMemo(() => {
@@ -328,7 +331,9 @@ function LoreSettingPanel({
   }, [openingPresetAutosave.resetBaseline, projectId])
 
   const loadLoreItems = useCallback(async () => {
-    if (!projectId) {
+    const requestSeq = ++loreItemsRequestSeqRef.current
+    const targetProjectId = projectId
+    if (!targetProjectId) {
       setItems([])
       setActiveId('')
       setLoadError(null)
@@ -338,15 +343,19 @@ function LoreSettingPanel({
     setLoading(true)
     setLoadError(null)
     try {
-      const data = await getProjectLoreItems(projectId)
+      const data = await getProjectLoreItems(targetProjectId)
+      if (activeProjectIdRef.current !== targetProjectId || loreItemsRequestSeqRef.current !== requestSeq) return
       setItems(data)
       setActiveId((current) => current === LORE_OVERVIEW_ID || current === LORE_INDEX_ID || current === CREATOR_ENTRY_ID || current === INTERACTIVE_OPENING_PRESET_ENTRY_ID || data.some((item) => item.id === current) ? current : LORE_OVERVIEW_ID)
     } catch (error) {
+      if (activeProjectIdRef.current !== targetProjectId || loreItemsRequestSeqRef.current !== requestSeq) return
       setItems([])
       setActiveId('')
       setLoadError(error instanceof Error ? error.message : String(error))
     } finally {
-      setLoading(false)
+      if (activeProjectIdRef.current === targetProjectId && loreItemsRequestSeqRef.current === requestSeq) {
+        setLoading(false)
+      }
     }
   }, [projectId])
 
@@ -361,6 +370,9 @@ function LoreSettingPanel({
     setQuery('')
     setFilters(EMPTY_LORE_FILTERS)
     void loadLoreItems()
+    return () => {
+      loreItemsRequestSeqRef.current += 1
+    }
   }, [loadLoreItems])
 
   useEffect(() => {
@@ -585,8 +597,13 @@ function LoreSettingPanel({
   }, [activeId, activeMode, isCreatorActive, projectId, reconcileCreatorFile, reconcileOpeningPresetFile])
 
   const refreshItems = useCallback(async () => {
-    const data = await getProjectLoreItems(projectId)
+    const targetProjectId = projectId
+    if (!targetProjectId) return
+    const requestSeq = ++loreItemsRequestSeqRef.current
+    const data = await getProjectLoreItems(targetProjectId)
+    if (activeProjectIdRef.current !== targetProjectId || loreItemsRequestSeqRef.current !== requestSeq) return
     setItems(data)
+    setLoading(false)
     // Preserve an existing selection, including the overview, after background updates.
     setActiveId((current) => {
       if (current === LORE_OVERVIEW_ID || current === LORE_INDEX_ID || current === CREATOR_ENTRY_ID || current === INTERACTIVE_OPENING_PRESET_ENTRY_ID) return current

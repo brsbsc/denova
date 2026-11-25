@@ -98,4 +98,39 @@ describe('story message timestamps', () => {
     })
     expect(result.current.messages.map((message) => message.metadata?.created_at)).toEqual(timestamps)
   })
+
+  it('guards malformed todo_updated JSON payloads instead of crashing StoryStage', () => {
+    const { result } = renderHook(() => useStoryStageMessages({
+      snapshot: {
+        story_id: 'story-1',
+        branch_id: 'main',
+        state: {},
+        pending_display_events: [
+          { id: 'pending-todo-bad', role: 'todo_updated', content: '{truncated' },
+        ],
+        turns: [{
+          id: 'turn-1',
+          parent_id: null,
+          branch_id: 'main',
+          ts: '2026-09-20T02:00:00Z',
+          user: 'Plan',
+          narrative: 'Done.',
+          display_events: [
+            { id: 'persisted-todo-bad', role: 'todo_updated', content: 'not-json' },
+            { role: 'narrative' },
+          ],
+        }],
+      },
+      liveMessages: [],
+      streaming: false,
+      stageKey: 'story-1:main',
+      liveTurnNavigationAnchorId: 'live',
+      optimisticInteractiveImages: {},
+      belongsToStage: () => true,
+      renderKeyFor: () => undefined,
+    }))
+
+    expect(result.current.agentMessages.some((msg) => msg.id === 'pending-todo-bad')).toBe(true)
+    expect(result.current.agentMessages.some((msg) => msg.id === 'persisted-todo-bad')).toBe(true)
+  })
 })

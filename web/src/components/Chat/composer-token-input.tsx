@@ -503,23 +503,6 @@ export function textToComposerJSON(text: string, options: ComposerParseOptions =
   }
 }
 
-export function serializeComposerJSON(doc: { content?: Array<{ content?: Array<{ type?: string; text?: string; attrs?: Record<string, unknown> }> }> }): string {
-  return (doc.content || [])
-    .map((block) => (block.content || []).map((node) => {
-      if (node.type === 'text') return node.text || ''
-      if (node.type === 'hardBreak') return '\n'
-      if (node.type === 'composerToken') {
-        return tokenPlainText({
-          kind: normalizeTokenKind(node.attrs?.kind),
-          value: String(node.attrs?.value || ''),
-          label: String(node.attrs?.label || node.attrs?.value || ''),
-        })
-      }
-      return ''
-    }).join(''))
-    .join('\n')
-}
-
 function tokenizeLine(line: string, options: ComposerParseOptions) {
   const content: Array<Record<string, unknown>> = []
   let index = 0

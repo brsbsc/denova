@@ -87,6 +87,7 @@ export function ProjectWritingSurface({
   const summaryRequestRef = useRef(0)
   const documentRequestRef = useRef(0)
   const refreshSignalRef = useRef(0)
+  const previousProjectIdRef = useRef(projectId)
   const editorFlushRef = useRef<EditorFlushHandler | null>(null)
 
   const chapters = useMemo(
@@ -178,6 +179,10 @@ export function ProjectWritingSurface({
   }, [projectId])
 
   useEffect(() => {
+    if (previousProjectIdRef.current !== projectId) {
+      previousProjectIdRef.current = projectId
+      void editorFlushRef.current?.()
+    }
     setTree([])
     setSummary(null)
     selectedPathRef.current = initialPath || ''
@@ -367,7 +372,7 @@ export function ProjectWritingSurface({
               <div className="p-3">
                 <InlineErrorNotice message={error} title={t('agentChat.reader.loadFailed')} />
               </div>
-            ) : document?.path ? (
+            ) : document?.path && document.project_id === projectId ? (
               <div className="relative flex min-h-0 flex-1 flex-col">
                 {document.kind === 'text' && isPreviewableMarkdown(document.path) ? (
                   <WritingDocumentEditor

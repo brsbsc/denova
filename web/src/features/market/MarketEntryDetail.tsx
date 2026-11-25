@@ -25,7 +25,11 @@ export function MarketEntryDetail({ detail, acquired, onBack, onImport, onManage
             <h1 className="text-2xl font-semibold tracking-tight [overflow-wrap:anywhere]">{localized(detail.name, i18n.language)}</h1>
             <p className="text-sm text-muted-foreground [overflow-wrap:anywhere]">{detail.author} · {new Date(`${detail.updated_at}T00:00:00`).toLocaleDateString(i18n.language)}</p>
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
-              <a className="inline-flex min-w-0 items-center gap-1 underline-offset-4 hover:underline" href={detail.source.url} target="_blank" rel="noreferrer"><span className="min-w-0 [overflow-wrap:anywhere]">{detail.source.url?.replace(/^https:\/\//, '')}</span><ExternalLink className="size-3 shrink-0" /></a>
+              {detail.source.url && (/^https?:\/\//i.test(detail.source.url) ? (
+                <a className="inline-flex min-w-0 items-center gap-1 underline-offset-4 hover:underline" href={detail.source.url} target="_blank" rel="noreferrer"><span className="min-w-0 [overflow-wrap:anywhere]">{detail.source.url.replace(/^https?:\/\//i, '')}</span><ExternalLink className="size-3 shrink-0" /></a>
+              ) : (
+                <span className="min-w-0 [overflow-wrap:anywhere]">{detail.source.url}</span>
+              ))}
               {detail.source.ref && <span>· {detail.source.ref}</span>}
               {detail.source.path && <span className="min-w-0 font-mono">· {detail.source.path}</span>}
             </div>
