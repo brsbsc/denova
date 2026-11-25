@@ -75,10 +75,6 @@ func StandaloneMessage(title, content, note string) string {
 	return builder.String()
 }
 
-func PrependFinalUserSource(agentMessage, title, content string) string {
-	return PrependFinalUserSources(agentMessage, []Source{{Title: title, Content: content, Included: true}})
-}
-
 func PrependFinalUserSources(agentMessage string, sources []Source) string {
 	included := make([]Source, 0, len(sources))
 	for _, source := range sources {

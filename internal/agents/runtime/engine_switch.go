@@ -9,6 +9,7 @@ import (
 	"denova/internal/agents/conversationconfig"
 	"denova/internal/agents/execution"
 	agentrun "denova/internal/agents/run"
+	"denova/internal/agents/runtime/external"
 	"denova/internal/agents/session"
 
 	agentschema "github.com/alfredxw/denova/agent/schema"
@@ -51,9 +52,6 @@ func (engines *Engines) validateEngineSwitch(ctx context.Context, native *execut
 	if err := engines.Operations.Recover(ctx, options.ProjectID, sess); err != nil {
 		return err
 	}
-	if err := sess.ReadExternal(ctx, func(state session.ExternalState) error { return state.Projection.RequireIdle() }); err != nil {
-		return err
-	}
 	modes := []string{options.Mode}
 	if options.AgentKind == config.AgentKindIDE {
 		modes = []string{"ide", "agent_chat"}
@@ -83,6 +81,16 @@ func (engines *Engines) validateEngineSwitch(ctx context.Context, native *execut
 		if err != nil && !errors.Is(err, execution.ErrRuntimeProjectionUnavailable) {
 			return err
 		}
+	}
+	workspace := cfg.Workspace
+	if workspace == "" {
+		workspace = options.Workspace
+	}
+	if err := external.Reconcile(ctx, sess, workspace, cfg.ProjectStoreDir); err != nil {
+		return err
+	}
+	if err := sess.ReadExternal(ctx, func(state session.ExternalState) error { return state.Projection.RequireIdle() }); err != nil {
+		return err
 	}
 	if target.Kind == config.RuntimeNative {
 		return nil

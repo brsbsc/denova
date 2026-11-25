@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -10,9 +9,7 @@ import (
 	agentcompaction "denova/internal/agents/context/compaction"
 	"denova/internal/agents/modelio"
 	"denova/internal/agents/prompts"
-	agentrun "denova/internal/agents/run"
 	"denova/internal/book"
-	"denova/internal/interactive"
 
 	agentmodel "github.com/alfredxw/denova/agent/model"
 	agentschema "github.com/alfredxw/denova/agent/schema"
@@ -201,95 +198,6 @@ func contextAnalysisWorkspace(cfg *config.Config, bookService *book.Service) str
 	return ""
 }
 
-func BuildInteractiveStoryContextAnalysis(cfg *config.Config, state *book.State, teller prompts.InteractiveStorySystemInstructionInput, bookService *book.Service, req ChatRequest, compaction *interactive.ContextCompactionProjection, conversation Conversation) (ContextAnalysis, error) {
-	if len(teller.StyleRules) == 0 && len(req.StyleRules) > 0 {
-		teller.StyleRules = req.StyleRules
-	}
-	systemPrompt, systemParts, err := buildInteractiveStorySystemPromptAnalysis(cfg, state, teller)
-	if err != nil {
-		return ContextAnalysis{}, err
-	}
-	policy := agentrun.DefaultLoopPolicy().Normalize()
-	turn, err := prepareTurnContext(context.Background(), turnContextPreparationInput{
-		Conversation: conversation,
-		Request:      req,
-		BookService:  bookService,
-		Environment:  newTurnRuntimeEnvironment(contextAnalysisWorkspace(cfg, bookService)),
-	})
-	if err != nil {
-		return ContextAnalysis{}, err
-	}
-	messages := turn.ModelContext.Messages
-	contextMessages := make([]ContextAnalysisPart, 0, len(messages))
-	compactionRevision := uint64(0)
-	for i, msg := range messages {
-		if msg == nil {
-			continue
-		}
-		source := "互动历史回合"
-		title := fmt.Sprintf("历史回合消息 %d", i+1)
-		switch {
-		case agentcontext.IsCompactionSummaryMessage(msg):
-			source = "上下文压缩"
-			title = "模型可见历史检查点"
-			compactionRevision = parseCompactionRevision(msg.Content)
-		case i == len(messages)-1:
-			source = "本轮互动指令"
-			title = "本轮互动指令与动态上下文"
-		}
-		part := contextAnalysisPartFromMessage(fmt.Sprintf("message_%d", i+1), source, title, msg)
-		if i == len(messages)-1 {
-			part.Parts = buildInteractiveStoryInstructionContextParts(part.Content)
-		}
-		contextMessages = append(contextMessages, part)
-	}
-	usage, err := analyzeContextUsage(cfg, config.AgentKindInteractiveStory, systemPrompt, messages, teller.ReplyTargetChars)
-	if err != nil {
-		return ContextAnalysis{}, err
-	}
-	return ContextAnalysis{
-		AgentKind:                config.AgentKindInteractiveStory,
-		Mode:                     "interactive",
-		SystemPrompt:             systemPrompt,
-		SystemPromptParts:        systemParts,
-		ContextParts:             contextBuildLogFromAssembly(policy.ContextLedger, turn.OriginalMessage, turn.ModelContext.Context).FullParts(),
-		ContextMessages:          contextMessages,
-		MessageCount:             len(contextMessages),
-		TokenEstimate:            usage.tokens,
-		ProjectedTokenEstimate:   usage.projectedTokens,
-		ReservedCompletionTokens: usage.completionReserve,
-		ReservedToolResultTokens: usage.toolResultReserve,
-		ContextWindowTokens:      usage.window,
-		ContextUsageRatio:        usage.ratio,
-		CompactionRevision:       interactiveCompactionRevision(compaction, compactionRevision),
-		CompactionActive:         compaction != nil && strings.TrimSpace(compaction.Summary) != "",
-		WouldCompact:             usage.wouldCompact,
-		Compaction:               contextAnalysisCompactionFromInteractive(compaction),
-	}, nil
-}
-
-func interactiveCompactionRevision(compaction *interactive.ContextCompactionProjection, fallback uint64) uint64 {
-	if compaction == nil {
-		return fallback
-	}
-	return compaction.Revision
-}
-
-func contextAnalysisCompactionFromInteractive(compaction *interactive.ContextCompactionProjection) *ContextAnalysisCompaction {
-	if compaction == nil || strings.TrimSpace(compaction.Summary) == "" {
-		return nil
-	}
-	return &ContextAnalysisCompaction{
-		ID:                 compaction.ID,
-		Revision:           compaction.Revision,
-		Summary:            compaction.Summary,
-		TokensBefore:       compaction.TokensBefore,
-		TokensAfter:        compaction.TokensAfter,
-		SourceMessageCount: compaction.SourceMessageCount,
-		Removable:          true,
-	}
-}
-
 type contextUsageAnalysis struct {
 	tokens            int
 	projectedTokens   int
@@ -359,14 +267,6 @@ func buildIDESystemPromptAnalysis(cfg *config.Config, state *book.State, teller 
 	return composition.Instruction(), systemPromptAnalysisParts(composition), nil
 }
 
-func buildInteractiveStorySystemPromptAnalysis(cfg *config.Config, state *book.State, teller prompts.InteractiveStorySystemInstructionInput) (string, []ContextAnalysisPart, error) {
-	composition, err := prompts.ComposeInteractiveStoryInstruction(cfg, state, teller)
-	if err != nil {
-		return "", nil, err
-	}
-	return composition.Instruction(), systemPromptAnalysisParts(composition), nil
-}
-
 func systemPromptAnalysisParts(composition prompts.SystemPromptComposition) []ContextAnalysisPart {
 	resolvedFragments := composition.Fragments()
 	fragments := make(map[string]prompts.SystemPromptFragment, len(resolvedFragments))
@@ -397,36 +297,4 @@ func systemPromptAnalysisParts(composition prompts.SystemPromptComposition) []Co
 		}))
 	}
 	return parts
-}
-
-func styleRuleContextAnalysisParts(rules []prompts.StyleRule) []ContextAnalysisPart {
-	parts := make([]ContextAnalysisPart, 0, len(rules))
-	for i, rule := range rules {
-		scene := strings.TrimSpace(rule.Scene)
-		if !rule.Global && scene == "" {
-			continue
-		}
-		if len(rule.StyleReferences) == 0 && len(rule.StyleContents) == 0 {
-			continue
-		}
-		content := prompts.StyleRulesInstruction([]prompts.StyleRule{rule})
-		if strings.TrimSpace(content) == "" {
-			continue
-		}
-		parts = append(parts, NewContextAnalysisPart(ContextAnalysisPartInput{
-			ID:      fmt.Sprintf("style_rule_%d", i+1),
-			Source:  "当前叙事风格",
-			Title:   "文风参考：" + styleRuleAnalysisTitle(rule),
-			Content: content,
-			Note:    "system prompt",
-		}))
-	}
-	return parts
-}
-
-func styleRuleAnalysisTitle(rule prompts.StyleRule) string {
-	if rule.Global {
-		return "全局"
-	}
-	return strings.TrimSpace(rule.Scene)
 }

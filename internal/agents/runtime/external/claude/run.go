@@ -171,6 +171,7 @@ func (c *Client) Run(ctx context.Context, input external.Input, host external.Ho
 	if err != nil {
 		return result, fmt.Errorf("start Claude attempt: %w", err)
 	}
+	killProcess := external.OwnProcessTree(cmd.Process)
 	defer func() { c.mu.Lock(); delete(c.active, cmd); c.mu.Unlock() }()
 	firstInput := body
 	if input.Mode == external.OperationTurn {
@@ -178,6 +179,7 @@ func (c *Client) Run(ctx context.Context, input external.Input, host external.Ho
 	}
 	if err := write(firstInput); err != nil {
 		cancel()
+		killProcess()
 		_ = cmd.Wait()
 		return result, err
 	}
@@ -185,7 +187,10 @@ func (c *Client) Run(ctx context.Context, input external.Input, host external.Ho
 	defer func() {
 		cancel()
 		if !waited {
+			killProcess()
 			_ = cmd.Wait()
+		} else {
+			killProcess()
 		}
 	}()
 	slog.InfoContext(ctx, "[external-runtime] Claude attempt started", "version", c.version, "model", model)

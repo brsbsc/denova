@@ -6,6 +6,7 @@ import (
 	agentexecution "denova/internal/agents/execution"
 	agentrun "denova/internal/agents/run"
 	agentruntime "denova/internal/agents/runtime"
+	"denova/internal/agents/runtime/external"
 	appagentruntime "denova/internal/app/agentruntime"
 	conversationapp "denova/internal/app/conversation"
 	apptask "denova/internal/app/task"
@@ -42,7 +43,13 @@ func (service *Service) recoverExternal(ctx context.Context, binding Binding, co
 		return appagentruntime.RecoveryResult{}, err
 	}
 	if action.Kind == agentexecution.RuntimeRecoveryAbort {
-		err = service.host.AgentEngines().Operations.AbortQuestions(ctx, binding.ProjectID, sess)
+		err = service.host.AgentEngines().Operations.Recover(ctx, binding.ProjectID, sess)
+		if err == nil {
+			err = service.host.AgentEngines().Operations.AbortQuestions(ctx, binding.ProjectID, sess)
+		}
+		if err == nil {
+			err = external.Reconcile(ctx, sess, runtime.Workspace, runtime.ProjectStore)
+		}
 	}
 	var resumed *agentruntime.ExternalRun
 	if err == nil {

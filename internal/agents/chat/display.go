@@ -21,26 +21,6 @@ import (
 const displaySegmentIDEventKey = "display_segment_id"
 const displayPhaseEventKey = "display_phase"
 
-// PersistAgentAssistant publishes one public Agent output through the existing
-// product conversation boundary. It deliberately does not own the surrounding
-// Agent canonical intent/receipt; callers invoke it only from CanonicalAdapter.
-func PersistAgentAssistant(conversation Conversation, content, thinking string, metadata session.MessageMetadata) error {
-	if conversation == nil {
-		return fmt.Errorf("persist Agent assistant: conversation is required")
-	}
-	if appender, ok := conversation.(interface {
-		AppendAssistantWithMetadata(content, thinking string, metadata session.MessageMetadata) error
-	}); ok {
-		return appender.AppendAssistantWithMetadata(content, thinking, metadata)
-	}
-	if appender, ok := conversation.(interface {
-		AppendAssistantWithThinking(content, thinking string) error
-	}); ok {
-		return appender.AppendAssistantWithThinking(content, thinking)
-	}
-	return conversation.AppendAssistant(content)
-}
-
 type displayEventAppender interface {
 	AppendDisplayEvent(event session.DisplayEvent) error
 	UpdateDisplayToolStatus(id, name, status string) error

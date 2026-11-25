@@ -405,3 +405,141 @@ func TestExternalOperationAnswerAndStopSettleCanonicalQuestion(t *testing.T) {
 		})
 	}
 }
+
+type cancelBeforeRunTool struct {
+	agenttool.Tool
+	cancel context.CancelFunc
+}
+
+func (tool cancelBeforeRunTool) Run(_ context.Context, _ string, _ ...agenttool.ToolOption) (agentschema.ToolResult, error) {
+	tool.cancel()
+	return agentschema.ToolResult{}, context.Canceled
+}
+
+type nonReplayableStubTool struct {
+	name   string
+	cancel context.CancelFunc
+}
+
+func (tool nonReplayableStubTool) Info(context.Context) (*agentschema.ToolInfo, error) {
+	return &agentschema.ToolInfo{
+		Name: tool.name,
+		Desc: "Non-replayable host mutation stub",
+		ParamsOneOf: agentschema.NewParamsOneOfByParams(map[string]*agentschema.ParameterInfo{
+			"target": {Type: agentschema.String, Desc: "target"},
+		}),
+	}, nil
+}
+
+func (tool nonReplayableStubTool) Run(_ context.Context, _ string, _ ...agenttool.ToolOption) (agentschema.ToolResult, error) {
+	tool.cancel()
+	return agentschema.ToolResult{}, context.Canceled
+}
+
+func TestExternalReconcileSettlesUnverifiedMutatingHostTools(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		toolName string
+		args     string
+	}{
+		{name: "unapplied_write", toolName: "write", args: `{"path":"never-written.md","content":"draft"}`},
+		{name: "non_replayable_host_tool", toolName: "custom_mutator", args: `{"target":"state"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service, request, workspace := operationFixture(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			if tc.toolName == "write" {
+				for index, definition := range request.Definitions {
+					info, err := definition.Tool.Info(ctx)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if info.Name == "write" {
+						request.Definitions[index].Tool = cancelBeforeRunTool{Tool: definition.Tool, cancel: cancel}
+					}
+				}
+			} else {
+				var baseDesc agenttool.ToolDescriptor
+				for _, definition := range request.Definitions {
+					info, err := definition.Tool.Info(ctx)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if info.Name == "write" {
+						baseDesc = definition.Descriptor
+						break
+					}
+				}
+				baseDesc.Recovery = agenttool.ToolRecoveryNonIdempotent
+				request.Definitions = append(request.Definitions, agenttool.ToolDefinition{
+					Tool:       nonReplayableStubTool{name: tc.toolName, cancel: cancel},
+					Descriptor: baseDesc,
+				})
+			}
+			request.Adapter = adapterFunc(func(ctx context.Context, _ Input, host Host) (Result, error) {
+				_, err := host.CallTool(ctx, ToolCall{ID: "interrupted-" + tc.name, Name: tc.toolName, Arguments: json.RawMessage(tc.args)})
+				return Result{}, err
+			})
+
+			operation, err := service.Start(ctx, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if outcome := operation.Wait(ctx); outcome.Status != agentrun.OutcomeSuspended {
+				t.Fatalf("outcome = %#v, want suspended", outcome)
+			}
+
+			restarted := &Service{}
+			if err := restarted.Recover(context.Background(), request.ProjectID, request.Session); err != nil {
+				t.Fatal(err)
+			}
+			if err := Reconcile(t.Context(), request.Session, workspace, request.AttachmentRoot); err != nil {
+				t.Fatal(err)
+			}
+			if err := request.Session.ReadExternal(t.Context(), func(state session.ExternalState) error {
+				if err := state.Projection.RequireIdle(); err != nil {
+					return err
+				}
+				for _, tool := range state.Projection.Operations[operation.id].Tools {
+					if tool.Finished == nil {
+						return fmt.Errorf("tool remained unfinished: %#v", tool)
+					}
+					record, err := state.Read(*tool.Finished)
+					if err != nil {
+						return err
+					}
+					var finished externaljournal.FinishedTool
+					if err := json.Unmarshal(record.Data, &finished); err != nil {
+						return err
+					}
+					if finished.Success || finished.Receipt != nil || finished.Result != agenttool.UnknownToolEffectResult {
+						return fmt.Errorf("unexpected unknown-effect settlement: %+v", finished)
+					}
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			request.CommandID, request.Metadata.MessageID = "next-"+tc.name, "msg-next-"+tc.name
+			request.Adapter = adapterFunc(func(context.Context, Input, Host) (Result, error) {
+				return Result{Text: "resumed cleanly"}, nil
+			})
+			if err := request.Session.ReadExternal(context.Background(), func(state session.ExternalState) error {
+				request.PreparedCursor = state.Cursor
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			nextOp, err := restarted.Start(context.Background(), request)
+			if err != nil {
+				t.Fatalf("session remained wedged after Reconcile: %v", err)
+			}
+			if outcome := nextOp.Wait(context.Background()); outcome.Status != agentrun.OutcomeCompleted {
+				t.Fatalf("next operation outcome = %#v", outcome)
+			}
+		})
+	}
+}

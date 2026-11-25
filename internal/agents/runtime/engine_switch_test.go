@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"denova/internal/agents/execution"
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/runtime/external"
+	externaljournal "denova/internal/agents/runtime/external/journal"
 	"denova/internal/agents/session"
 
 	agentschema "github.com/alfredxw/denova/agent/schema"
@@ -63,4 +65,76 @@ func TestEngineSwitchChecksWritingOwnerAndRejectsPreviouslyPreparedNativeExecuti
 		t.Fatal(err)
 	}
 	release()
+}
+
+func TestEngineSwitchReconcilesInterruptedExternalMutatingTool(t *testing.T) {
+	storeDir := t.TempDir()
+	workspace := t.TempDir()
+	store, err := session.NewStore(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	selection := conversationconfig.Config{
+		AgentKind:     config.AgentKindIDE,
+		ProfileID:     "default",
+		ThinkingLevel: "medium",
+		ApprovalMode:  config.AgentApprovalWrite,
+		Runtime:       &config.RuntimeSelection{Kind: config.RuntimeCodex, Codex: &config.CodexRuntimeSettings{Model: "runtime-model"}},
+	}
+	sess, err := store.GetOrCreateWithRuntimeConfig("external-switch", selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.UpdateExternal(t.Context(), 1, func(session.ExternalState) (session.ExternalTransaction, error) {
+		opRec, err := externaljournal.NewRecord(externaljournal.OperationAccepted, "op-interrupted", 1, externaljournal.Accepted{
+			CommandID: "cmd-1", Fingerprint: "fp-1", Runtime: *selection.Runtime, InputMessageID: "msg-1",
+		})
+		if err != nil {
+			return session.ExternalTransaction{}, err
+		}
+		return session.ExternalTransaction{
+			Records:  []externaljournal.Record{opRec},
+			Message:  agentschema.UserMessage("run shell"),
+			Metadata: session.MessageMetadata{MessageID: "msg-1"},
+		}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.UpdateExternal(t.Context(), 1, func(session.ExternalState) (session.ExternalTransaction, error) {
+		toolRec, err := externaljournal.NewRecord(externaljournal.ToolStarted, "op-interrupted", 1, externaljournal.StartedTool{
+			ExecutionID: "exec-bash", Tool: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`), Recovery: externaljournal.NonReplayable,
+		})
+		if err != nil {
+			return session.ExternalTransaction{}, err
+		}
+		closedRec, err := externaljournal.NewRecord(externaljournal.OperationClosed, "op-interrupted", 1, externaljournal.Closed{
+			Status: externaljournal.Interrupted,
+		})
+		if err != nil {
+			return session.ExternalTransaction{}, err
+		}
+		return session.ExternalTransaction{Records: []externaljournal.Record{toolRec, closedRec}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	native := execution.NewEphemeralRuntime()
+	defer native.Close(context.Background())
+	engines := NewEngines()
+	defer engines.Close()
+
+	nativeSelection := selection
+	nativeSelection.Runtime = nil
+	options := agentrun.Options{AgentKind: config.AgentKindIDE, ProjectID: "book", Workspace: workspace, SessionID: sess.ID, Mode: "ide"}
+	cfg := config.Config{
+		Workspace:       workspace,
+		ProjectStoreDir: storeDir,
+		ModelEndpoints:  []config.ModelEndpointSettings{{ID: "ep", Provider: "openai-compatible", Protocol: "openai-chat-completions", BaseURL: "https://example.invalid/v1", APIKey: "k"}},
+		ModelProfiles:   []config.ModelProfileSettings{{ID: "default", EndpointID: "ep", Model: "gpt-test"}},
+	}
+	if _, err := engines.ApplyEngineSelection(t.Context(), native, sess, options, nativeSelection, 1, cfg); err != nil {
+		t.Fatalf("ApplyEngineSelection failed after interrupted external tool: %v", err)
+	}
 }

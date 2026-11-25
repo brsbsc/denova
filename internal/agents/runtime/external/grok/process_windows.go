@@ -6,6 +6,8 @@ import (
 	"strings"
 	"syscall"
 	"unicode/utf16"
+
+	"denova/internal/agents/runtime/external"
 )
 
 // windowsMaxCommandLine is CreateProcessW's upper bound on the whole command
@@ -16,7 +18,7 @@ import (
 const windowsMaxCommandLine = 32_767
 
 func configureProcess(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	external.ConfigureProcess(cmd)
 }
 
 // verifyCommandLine rejects a command line before the OS does. Go builds the

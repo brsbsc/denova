@@ -295,10 +295,19 @@ func cloneStringMap(input map[string]string) map[string]string {
 func (projection *Projection) CurrentCheckpoint() (json.RawMessage, error) {
 	current := Projection{Streams: make(map[string]*streamProjection, len(projection.Streams))}
 	for key, stream := range projection.Streams {
-		current.Streams[key] = &streamProjection{Start: stream.Start, Key: stream.Key, Recovery: *stream.Recovery.Current(), Locations: make(map[agentsession.Revision]recordLocator)}
+		recovery := *stream.Recovery.Current()
+		locations := make(map[agentsession.Revision]recordLocator)
 		for _, run := range stream.Recovery.Recent {
-			current.Streams[key].Locations[run.Settlement] = stream.Locations[run.Settlement]
+			if run.Settlement == 0 || run.Settlement > recovery.Revision {
+				continue
+			}
+			location, ok := stream.Locations[run.Settlement]
+			if !ok || location.Cursor == 0 || location.RecordIndex < 0 {
+				continue
+			}
+			locations[run.Settlement] = location
 		}
+		current.Streams[key] = &streamProjection{Start: stream.Start, Key: stream.Key, Recovery: recovery, Locations: locations}
 	}
 	return json.Marshal(currentCheckpoint{Version: currentProjectionVersion, Projection: current})
 }
@@ -307,7 +316,12 @@ func (projection *Projection) CurrentReadCursors() []conversationjournal.Cursor 
 	var result []conversationjournal.Cursor
 	for _, stream := range projection.Streams {
 		for _, run := range stream.Recovery.Recent {
-			result = append(result, stream.Locations[run.Settlement].Cursor)
+			if run.Settlement == 0 || run.Settlement > stream.Recovery.Revision {
+				continue
+			}
+			if location, ok := stream.Locations[run.Settlement]; ok && location.Cursor > 0 && location.RecordIndex >= 0 {
+				result = append(result, location.Cursor)
+			}
 		}
 	}
 	return result

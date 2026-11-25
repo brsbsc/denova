@@ -359,3 +359,19 @@ func readSessionToolWindow(t *testing.T, definition agenttool.ToolDefinition, in
 	}
 	return envelope, content.String()
 }
+
+func TestReplaceAllFoldHandlesUnicodeExpansionAndMarkerSubstringRoot(t *testing.T) {
+	prefix := strings.Repeat("İ", 24) + " "
+	got := replaceAllFold(prefix+"/Secret/Root/file.md", "/secret/root", "[private-root]")
+	if !utf8.ValidString(got) || got != prefix+"[private-root]/file.md" {
+		t.Fatalf("replaceAllFold unicode expansion = %q", got)
+	}
+
+	// Ensure roots matching or contained in the replacement marker never loop.
+	if same := replaceAllFold("path/[private-root]/a.md", "[private-root]", "[private-root]"); same != "path/[private-root]/a.md" {
+		t.Fatalf("replaceAllFold exact marker root = %q", same)
+	}
+	if sub := replaceAllFold("path/PRIVATE/a.md", "private", "[private-root]"); sub != "path/[private-root]/a.md" {
+		t.Fatalf("replaceAllFold substring marker root = %q", sub)
+	}
+}

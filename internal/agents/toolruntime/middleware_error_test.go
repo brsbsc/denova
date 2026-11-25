@@ -463,3 +463,28 @@ func lossyShellArtifactFailureResult() agentschema.ToolResult {
 		},
 	}
 }
+
+func TestToolOrchestratorErrorPreservesReturnedEffects(t *testing.T) {
+	observer := agentrun.NewObserver(nil, "")
+	ctx := agentrun.ContextWithObserver(context.Background(), observer)
+	middleware := &OrchestratorMiddleware{agentKind: agentrun.AgentKindIDE, toolResultMaxBytes: 4096}
+	customEffect := agentschema.Effect{Kind: "custom.effect.v1", Data: []byte(`{"committed":true}`)}
+	endpoint, err := middleware.WrapToolCall(context.Background(),
+		func(context.Context, string, ...sdktool.ToolOption) (agentschema.ToolResult, error) {
+			return agentschema.ToolResult{
+				Effects: []agentschema.Effect{customEffect},
+			}, errors.New("transport interrupted after commit")
+		},
+		testToolContext("write", "call-error-effects"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := endpoint(ctx, `{"path":"chapters/one.md"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != agentschema.ToolResultError || len(result.Effects) != 1 || result.Effects[0].Kind != customEffect.Kind || string(result.Effects[0].Data) != string(customEffect.Data) {
+		t.Fatalf("error projection lost returned Effects: %#v", result)
+	}
+}

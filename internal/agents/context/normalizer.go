@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"denova/internal/agents/toolresult"
+
 	agentschema "github.com/alfredxw/denova/agent/schema"
 	agenttool "github.com/alfredxw/denova/agent/tool"
 )
@@ -187,7 +189,7 @@ func completeUnknownContextToolBatches(messages []*agentschema.Message) []*agent
 		for end < len(messages) && messages[end] != nil && messages[end].Role == agentschema.ToolRole {
 			end++
 		}
-		completed = append(completed, completeUnknownToolResults(messages[index:end])...)
+		completed = append(completed, toolresult.CompleteUnknownToolResults(messages[index:end])...)
 		index = end
 	}
 	return completed
@@ -298,67 +300,4 @@ func modelContextProtocolError(format string, args ...any) error {
 // context repair and live tool execution share this exact structural rule.
 func ValidateToolArgumentsJSON(arguments string) error {
 	return agenttool.ValidateToolArgumentsJSON(arguments)
-}
-
-func completeUnknownToolResults(messages []*agentschema.Message) []*agentschema.Message {
-	if len(messages) == 0 {
-		return messages
-	}
-	completed := make([]*agentschema.Message, 0, len(messages))
-	for index := 0; index < len(messages); {
-		message := messages[index]
-		if message == nil {
-			index++
-			continue
-		}
-		completed = append(completed, message)
-		if message.Role != agentschema.Assistant || len(message.ToolCalls) == 0 {
-			index++
-			continue
-		}
-
-		batchEnd := index + 1
-		for batchEnd < len(messages) && messages[batchEnd] != nil && messages[batchEnd].Role == agentschema.ToolRole {
-			batchEnd++
-		}
-		callCounts := make(map[string]int, len(message.ToolCalls))
-		resultCounts := make(map[string]int, batchEnd-index-1)
-		for _, call := range message.ToolCalls {
-			if callID := strings.TrimSpace(call.ID); callID != "" {
-				callCounts[callID]++
-			}
-		}
-		for resultIndex := index + 1; resultIndex < batchEnd; resultIndex++ {
-			result := messages[resultIndex]
-			if result != nil {
-				if callID := strings.TrimSpace(result.ToolCallID); callID != "" {
-					resultCounts[callID]++
-				}
-			}
-		}
-		for _, call := range message.ToolCalls {
-			callID := strings.TrimSpace(call.ID)
-			if !ValidToolCall(call) || callCounts[callID] != 1 || resultCounts[callID] != 0 {
-				continue
-			}
-			completed = append(completed, agentschema.ToolMessage(
-				agenttool.SyntheticToolResult(agentschema.ToolResultError, agentschema.ToolSyntheticEffectUnknown, agenttool.UnknownToolEffectResult),
-				callID,
-				agentschema.WithToolName(call.Function.Name),
-			))
-		}
-		for resultIndex := index + 1; resultIndex < batchEnd; resultIndex++ {
-			if messages[resultIndex] != nil {
-				completed = append(completed, messages[resultIndex])
-			}
-		}
-		index = batchEnd
-	}
-	return completed
-}
-
-// IsUnknownToolEffectResult identifies the deterministic recovery projection
-// used when a durable tool start has no matching completion.
-func IsUnknownToolEffectResult(content string) bool {
-	return strings.TrimSpace(content) == agenttool.UnknownToolEffectResult
 }

@@ -384,11 +384,7 @@ func (backend *publicBackend) wait(
 			}
 			result, err = current.run.Wait(context.Background())
 		}
-		select {
-		case <-current.done:
-		case <-ctx.Done():
-			return agentrun.NewOutcome(agentrun.OutcomeAborted, ctx.Err(), ctx.Err().Error(), "", "")
-		}
+		<-current.done
 		registrations := current.completedRegistrations
 		content, thinking := latestProjectedOutput(registrations)
 		outcome := publicResultOutcome(result, err, content, thinking)

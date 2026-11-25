@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"testing"
 
+	"denova/internal/agents/toolresult"
+
 	agentschema "github.com/alfredxw/denova/agent/schema"
 	agenttool "github.com/alfredxw/denova/agent/tool"
 )
@@ -71,7 +73,7 @@ func TestNormalizeModelContextMessagesRepairsUniqueMissingResultDeterministicall
 	result := first[1]
 	if result.Role != agentschema.ToolRole || result.ToolCallID != call.ID || result.ToolName != call.Function.Name ||
 		result.ToolResult == nil || result.ToolResult.Status != agentschema.ToolResultError ||
-		result.ToolResult.SyntheticReason != agentschema.ToolSyntheticEffectUnknown || !IsUnknownToolEffectResult(result.Content) {
+		result.ToolResult.SyntheticReason != agentschema.ToolSyntheticEffectUnknown || !toolresult.IsUnknownEffectResult(result.Content) {
 		t.Fatalf("unexpected effect_unknown completion: %#v", result)
 	}
 	if result.ToolResult.ResultRetention != "" {
@@ -109,7 +111,7 @@ func TestNormalizeModelContextMessagesDropsAmbiguousHalvesAtomically(t *testing.
 	if got := normalized[0].ToolCalls; len(got) != 2 || got[0].ID != valid.ID || got[1].ID != missing.ID {
 		t.Fatalf("ambiguous calls were not removed atomically: %#v", got)
 	}
-	if normalized[1].ToolCallID != missing.ID || !IsUnknownToolEffectResult(normalized[1].Content) {
+	if normalized[1].ToolCallID != missing.ID || !toolresult.IsUnknownEffectResult(normalized[1].Content) {
 		t.Fatalf("unique missing result was not repaired: %#v", normalized[1])
 	}
 	if normalized[2].ToolCallID != valid.ID || normalized[2].Content != validResult.Content ||
@@ -156,7 +158,7 @@ func TestNormalizeModelContextMessagesRepairsMissingCallAndDropsLateOrphan(t *te
 		t.Fatal(err)
 	}
 	if len(normalized) != 3 || normalized[0].Role != agentschema.Assistant || normalized[1].ToolCallID != call.ID ||
-		!IsUnknownToolEffectResult(normalized[1].Content) || normalized[2].Role != agentschema.User || normalized[2].Content != "new turn" {
+		!toolresult.IsUnknownEffectResult(normalized[1].Content) || normalized[2].Role != agentschema.User || normalized[2].Content != "new turn" {
 		t.Fatalf("missing call and late orphan were not normalized independently: %#v", normalized)
 	}
 }
@@ -176,7 +178,7 @@ func TestNormalizeModelContextMessagesScopesCallIdentityToOneAssistantBatch(t *t
 		t.Fatal(err)
 	}
 	if len(normalized) != 5 || !reflect.DeepEqual(normalized[:4], input) ||
-		normalized[4].ToolCallID != secondCall.ID || !IsUnknownToolEffectResult(normalized[4].Content) {
+		normalized[4].ToolCallID != secondCall.ID || !toolresult.IsUnknownEffectResult(normalized[4].Content) {
 		t.Fatalf("provider-local call id reuse suppressed the later recovery result: %#v", normalized)
 	}
 }

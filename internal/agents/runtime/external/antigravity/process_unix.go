@@ -2,6 +2,12 @@
 
 package antigravity
 
-import "os/exec"
+import (
+	"os/exec"
 
-func configureProcess(cmd *exec.Cmd) {}
+	"denova/internal/agents/runtime/external"
+)
+
+func configureProcess(cmd *exec.Cmd) {
+	external.ConfigureProcess(cmd)
+}

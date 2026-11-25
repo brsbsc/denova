@@ -244,13 +244,10 @@ func criticalBashCommand(command string) *Decision {
 				}
 			}
 		}
-		if oneOf(name, "sh", "bash", "zsh", "ksh", "fish", "pwsh", "powershell") {
-			for index, arg := range words[1:] {
-				if shellCommandStringFlag(name, arg) && index+2 < len(words) {
-					if nested := matchCriticalCommand(words[index+2], name, ""); nested != nil {
-						blocked = nested
-					}
-					break
+		if oneOf(name, "sh", "bash", "zsh", "ksh", "fish", "pwsh", "powershell", "pwsh.exe", "powershell.exe") {
+			if nestedCommand := nestedShellCommand(name, words[1:]); nestedCommand != "" {
+				if nested := matchCriticalCommand(nestedCommand, name, ""); nested != nil {
+					blocked = nested
 				}
 			}
 		}
@@ -259,13 +256,87 @@ func criticalBashCommand(command string) *Decision {
 	return blocked
 }
 
-func shellCommandStringFlag(shell, argument string) bool {
-	if oneOf(shell, "pwsh", "powershell") {
-		argument = strings.ToLower(argument)
-		return argument == "-c" || strings.HasPrefix("-command", argument)
+func nestedShellCommand(shell string, args []string) string {
+	if oneOf(shell, "pwsh", "powershell", "pwsh.exe", "powershell.exe") {
+		for index, arg := range args {
+			flag, inlineValue, hasInline := splitPowerShellParameter(arg)
+			if flag != "-c" && !matchesPowerShellFlagPrefix(flag, 2, "-command") {
+				continue
+			}
+			if hasInline && strings.TrimSpace(inlineValue) != "" {
+				return inlineValue
+			}
+			rest := args[index+1:]
+			if len(rest) > 0 && rest[0] == "--" {
+				rest = rest[1:]
+			}
+			if len(rest) == 1 {
+				return rest[0]
+			}
+			if len(rest) > 1 {
+				return strings.Join(rest, " ")
+			}
+			return ""
+		}
+		return ""
 	}
-	return len(argument) > 1 && argument[0] == '-' && argument[1] != '-' &&
-		strings.ContainsRune(argument[1:], 'c')
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if arg == "--" {
+			return ""
+		}
+		if (arg == "-o" || arg == "+o" || arg == "-O" || arg == "+O") && index+1 < len(args) {
+			index++
+			continue
+		}
+		lower := strings.ToLower(arg)
+		if strings.HasPrefix(lower, "--command=") {
+			return arg[len("--command="):]
+		}
+		isCommandFlag := lower == "--command"
+		if !isCommandFlag && len(arg) > 1 && arg[0] == '-' && arg[1] != '-' {
+			if cIndex := strings.IndexByte(arg[1:], 'c'); cIndex >= 0 {
+				isCommandFlag = true
+				attached := arg[1+cIndex+1:]
+				if attached != "" && !isAllASCIILetters(attached) {
+					return attached
+				}
+			}
+		}
+		if !isCommandFlag {
+			continue
+		}
+		rest := args[index+1:]
+		for len(rest) > 0 {
+			if rest[0] == "--" {
+				rest = rest[1:]
+				break
+			}
+			if (rest[0] == "-o" || rest[0] == "+o" || rest[0] == "-O" || rest[0] == "+O") && len(rest) >= 3 {
+				rest = rest[2:]
+				continue
+			}
+			if strings.HasPrefix(rest[0], "-") && rest[0] != "-" && len(rest) >= 2 {
+				rest = rest[1:]
+				continue
+			}
+			break
+		}
+		if len(rest) > 0 {
+			return rest[0]
+		}
+		return ""
+	}
+	return ""
+}
+
+func isAllASCIILetters(value string) bool {
+	for index := 0; index < len(value); index++ {
+		if !isASCIILetter(value[index]) {
+			return false
+		}
+	}
+	return len(value) > 0
 }
 
 func unwrapCommandPrefix(words []string) []string {
@@ -405,28 +476,82 @@ func xargsCommand(args []string) []string {
 }
 
 func criticalPowerShellCommand(command string) *Decision {
-	for _, segment := range strings.FieldsFunc(command, func(char rune) bool { return char == '|' || char == ';' }) {
+	return criticalPowerShellCommandDepth(command, 0)
+}
+
+func criticalPowerShellCommandDepth(command string, depth int) *Decision {
+	if depth > 4 {
+		return nil
+	}
+	for _, segment := range strings.FieldsFunc(command, func(char rune) bool {
+		return char == '|' || char == ';' || char == '\r' || char == '\n'
+	}) {
 		words, ok := splitSimplePowerShellWords(segment)
-		if !ok || len(words) == 0 ||
-			!oneOf(commandBase(words[0]), "remove-item", "rm", "ri", "del", "erase", "rmdir", "rd") {
+		if !ok || len(words) == 0 {
+			continue
+		}
+		base := commandBase(words[0])
+		if oneOf(base, "pwsh", "powershell", "pwsh.exe", "powershell.exe") {
+			if nestedCommand := nestedShellCommand(base, words[1:]); nestedCommand != "" {
+				for _, rule := range criticalCommandRules {
+					if rule.pattern.MatchString(strings.TrimSpace(nestedCommand)) {
+						result := deny(rule.id, RiskCritical, rule.reason)
+						return &result
+					}
+				}
+				if nested := criticalPowerShellCommandDepth(nestedCommand, depth+1); nested != nil {
+					return nested
+				}
+			}
+			continue
+		}
+		if !oneOf(base, "remove-item", "rm", "ri", "del", "erase", "rmdir", "rd") {
 			continue
 		}
 		recursive := false
 		for _, word := range words[1:] {
-			switch strings.ToLower(word) {
-			case "-recurse", "-r":
+			if strings.EqualFold(word, "/s") {
 				recursive = true
+				continue
+			}
+			flag, inlineValue, hasInline := splitPowerShellParameter(word)
+			if matchesPowerShellFlagPrefix(flag, 2, "-recurse") {
+				trimmed := strings.TrimPrefix(strings.TrimSpace(inlineValue), "$")
+				if !hasInline || (!strings.EqualFold(trimmed, "false") && trimmed != "0") {
+					recursive = true
+				}
 			}
 		}
 		if !recursive {
 			continue
 		}
-		for _, word := range words[1:] {
-			value := strings.TrimSpace(strings.ReplaceAll(word, "/", "\\"))
+		flagsEnded := false
+		for index := 1; index < len(words); index++ {
+			word := words[index]
+			if !flagsEnded && word == "--" {
+				flagsEnded = true
+				continue
+			}
+			candidate := word
+			if !flagsEnded && strings.HasPrefix(word, "-") && word != "-" {
+				flag, inlineValue, hasInline := splitPowerShellParameter(word)
+				if !powerShellDeletePathParameter(flag) {
+					continue
+				}
+				if hasInline {
+					candidate = inlineValue
+				} else if index+1 < len(words) {
+					index++
+					candidate = words[index]
+				} else {
+					continue
+				}
+			}
+			value := strings.Trim(strings.TrimSpace(strings.ReplaceAll(candidate, "/", "\\")), `"'`)
 			if value == "~" || value == "~\\*" ||
 				strings.EqualFold(value, "$HOME") || strings.EqualFold(value, "$HOME\\*") ||
 				strings.EqualFold(value, "$env:USERPROFILE") || strings.EqualFold(value, "$env:USERPROFILE\\*") ||
-				powerShellDriveRootPattern.MatchString(value) || criticalDeleteTarget(value) {
+				powerShellDriveRootPattern.MatchString(value) || criticalDeleteTarget(candidate) {
 				result := deny("critical_powershell_root_delete", RiskCritical,
 					"禁止递归删除磁盘根目录或用户目录。 / Recursive deletion of a drive root or home directory is blocked.")
 				return &result

@@ -68,18 +68,6 @@ func (s *Session) refreshCanonicalTailLocked() error {
 	return nil
 }
 
-func (s *Session) reloadCanonicalLocked() error {
-	recovered, err := loadSession(s.filePath)
-	if err != nil {
-		return err
-	}
-	if recovered.journalIncarnation != s.journalIncarnation {
-		return fmt.Errorf("session journal incarnation changed during reload: expected=%q actual=%q path=%s", s.journalIncarnation, recovered.journalIncarnation, s.filePath)
-	}
-	s.replaceCanonicalStateLocked(recovered)
-	return nil
-}
-
 func cloneSessionForTailReplay(source *Session) *Session {
 	result := &Session{
 		ID: source.ID, CreatedAt: source.CreatedAt, UpdatedAt: source.UpdatedAt,

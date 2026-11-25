@@ -60,7 +60,6 @@ type Operation struct {
 	accepted     acceptedOperation
 	conversation *agentconversation.SessionConversation
 	external     bool
-	release      func()
 	once         sync.Once
 	outcome      agentrun.Outcome
 }
@@ -69,9 +68,6 @@ func (operation *Operation) Receipt() agentrun.CommandReceipt { return operation
 func (operation *Operation) IsExternal() bool                 { return operation.external }
 func (operation *Operation) Wait(ctx context.Context) agentrun.Outcome {
 	operation.once.Do(func() {
-		if operation.release != nil {
-			defer operation.release()
-		}
 		operation.outcome = operation.accepted.Wait(ctx)
 	})
 	return operation.outcome

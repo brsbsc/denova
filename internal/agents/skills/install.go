@@ -176,78 +176,100 @@ func installFromDirectory(ctx context.Context, dirs []Directory, scope Scope, ro
 		if candidate.Conflict {
 			return InstallResult{}, fmt.Errorf("selected Skill conflicts with another Skill or target scope: %s", candidate.Name)
 		}
-		if names[candidate.Name] {
+		if err := ValidateName(candidate.Name); err != nil {
+			return InstallResult{}, err
+		}
+		foldedName := portablepath.FoldKey(candidate.Name)
+		if names[foldedName] {
 			return InstallResult{}, fmt.Errorf("selected Skill name is duplicated: %s", candidate.Name)
 		}
-		names[candidate.Name] = true
+		names[foldedName] = true
 		candidates = append(candidates, candidate)
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		return candidates[i].Name < candidates[j].Name
 	})
 
-	stageRoot, err := os.MkdirTemp(dir.Path, ".install-*")
-	if err != nil {
-		return InstallResult{}, err
-	}
-	defer os.RemoveAll(stageRoot)
-
-	for _, candidate := range candidates {
-		staged := filepath.Join(stageRoot, candidate.Name)
-		if err := copySkillDir(candidate.sourceDir, staged); err != nil {
-			return InstallResult{}, err
-		}
-		// Consent and provenance can only originate here, never in an archive.
-		if err := os.RemoveAll(filepath.Join(staged, remoteStateFile)); err != nil {
-			return InstallResult{}, err
-		}
-		if err := portablepath.PreflightTree(staged); err != nil {
-			return InstallResult{}, err
-		}
-		if source.URL != "" {
-			digest, err := skillContentDigest(ctx, staged)
-			if err != nil {
-				return InstallResult{}, err
-			}
-			state := RemoteState{Source: source, SourcePath: candidate.SourcePath, Digest: digest}
-			if err := writeRemoteState(staged, &state); err != nil {
-				return InstallResult{}, err
-			}
-		}
+	leaseTargets := make([]skillLeaseTarget, len(candidates))
+	for index, candidate := range candidates {
+		leaseTargets[index] = skillLeaseTarget{dir: dir, name: candidate.Name}
 	}
 
-	installedNames := make([]string, 0, len(candidates))
-	for _, candidate := range candidates {
-		target := filepath.Join(dir.Path, candidate.Name)
-		if _, err := os.Stat(target); err == nil {
-			for _, installed := range installedNames {
-				_ = os.RemoveAll(filepath.Join(dir.Path, installed))
-			}
-			return InstallResult{}, fmt.Errorf("skill already exists in %s scope: %s", scope, candidate.Name)
-		} else if err != nil && !os.IsNotExist(err) {
-			for _, installed := range installedNames {
-				_ = os.RemoveAll(filepath.Join(dir.Path, installed))
-			}
-			return InstallResult{}, err
-		}
-		if err := os.Rename(filepath.Join(stageRoot, candidate.Name), target); err != nil {
-			for _, installed := range installedNames {
-				_ = os.RemoveAll(filepath.Join(dir.Path, installed))
-			}
-			return InstallResult{}, err
-		}
-		installedNames = append(installedNames, candidate.Name)
-	}
-
-	installed := make([]SkillSummary, 0, len(installedNames))
-	for _, name := range installedNames {
-		doc, err := ReadDocument(ctx, dirs, scope, name)
+	return withSkillLeases(ctx, leaseTargets, func() (InstallResult, error) {
+		stageRoot, err := os.MkdirTemp(dir.Path, ".install-*")
 		if err != nil {
 			return InstallResult{}, err
 		}
-		installed = append(installed, doc.SkillSummary)
-	}
-	return InstallResult{Installed: installed}, nil
+		defer os.RemoveAll(stageRoot)
+
+		for _, candidate := range candidates {
+			staged := filepath.Join(stageRoot, candidate.Name)
+			if err := copySkillDir(candidate.sourceDir, staged); err != nil {
+				return InstallResult{}, err
+			}
+			// Consent and provenance can only originate here, never in an archive.
+			if err := os.RemoveAll(filepath.Join(staged, remoteStateFile)); err != nil {
+				return InstallResult{}, err
+			}
+			if err := portablepath.PreflightTree(staged); err != nil {
+				return InstallResult{}, err
+			}
+			if source.URL != "" {
+				digest, err := skillContentDigest(ctx, staged)
+				if err != nil {
+					return InstallResult{}, err
+				}
+				state := RemoteState{Source: source, SourcePath: candidate.SourcePath, Digest: digest}
+				if err := writeRemoteState(staged, &state); err != nil {
+					return InstallResult{}, err
+				}
+			}
+		}
+
+		existingFolded, err := foldedDirectoryEntries(dir.Path)
+		if err != nil {
+			return InstallResult{}, err
+		}
+		installedNames := make([]string, 0, len(candidates))
+		for _, candidate := range candidates {
+			target := filepath.Join(dir.Path, candidate.Name)
+			if existingFolded[portablepath.FoldKey(candidate.Name)] {
+				for _, installed := range installedNames {
+					_ = os.RemoveAll(filepath.Join(dir.Path, installed))
+				}
+				return InstallResult{}, fmt.Errorf("skill already exists in %s scope: %s", scope, candidate.Name)
+			}
+			if _, err := os.Lstat(target); err == nil {
+				for _, installed := range installedNames {
+					_ = os.RemoveAll(filepath.Join(dir.Path, installed))
+				}
+				return InstallResult{}, fmt.Errorf("skill already exists in %s scope: %s", scope, candidate.Name)
+			} else if err != nil && !os.IsNotExist(err) {
+				for _, installed := range installedNames {
+					_ = os.RemoveAll(filepath.Join(dir.Path, installed))
+				}
+				return InstallResult{}, err
+			}
+			if err := os.Rename(filepath.Join(stageRoot, candidate.Name), target); err != nil {
+				for _, installed := range installedNames {
+					_ = os.RemoveAll(filepath.Join(dir.Path, installed))
+				}
+				return InstallResult{}, err
+			}
+			existingFolded[portablepath.FoldKey(candidate.Name)] = true
+			installedNames = append(installedNames, candidate.Name)
+		}
+
+		installed := make([]SkillSummary, 0, len(installedNames))
+		for _, name := range installedNames {
+			doc, err := readDocumentLocked(ctx, dirs, dir, name)
+			if err != nil {
+				return InstallResult{}, err
+			}
+			installed = append(installed, doc.SkillSummary)
+		}
+		return InstallResult{Installed: installed}, nil
+	})
 }
 
 func extractZipData(data []byte) (string, func(), error) {
@@ -457,11 +479,11 @@ func markCandidateNameConflicts(candidates []InstallCandidate) {
 	counts := map[string]int{}
 	for _, candidate := range candidates {
 		if candidate.InvalidReason == "" && candidate.Name != "" {
-			counts[candidate.Name]++
+			counts[portablepath.FoldKey(candidate.Name)]++
 		}
 	}
 	for i := range candidates {
-		if candidates[i].Name != "" && counts[candidates[i].Name] > 1 {
+		if candidates[i].Name != "" && counts[portablepath.FoldKey(candidates[i].Name)] > 1 {
 			candidates[i].Conflict = true
 		}
 	}
@@ -475,14 +497,38 @@ func markTargetScopeConflicts(candidates []InstallCandidate, dirs []Directory, s
 	if err != nil {
 		return
 	}
+	existingFolded, _ := foldedDirectoryEntries(dir.Path)
 	for i := range candidates {
 		if candidates[i].InvalidReason != "" || candidates[i].Name == "" {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(dir.Path, candidates[i].Name)); err == nil {
+		if existingFolded[portablepath.FoldKey(candidates[i].Name)] {
+			candidates[i].Conflict = true
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(dir.Path, candidates[i].Name)); err == nil {
 			candidates[i].Conflict = true
 		}
 	}
+}
+
+func foldedDirectoryEntries(dirPath string) (map[string]bool, error) {
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]bool{}, nil
+		}
+		return nil, err
+	}
+	folded := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		folded[portablepath.FoldKey(name)] = true
+	}
+	return folded, nil
 }
 
 func normalizeCandidateIDSet(candidateIDs []string) map[string]bool {

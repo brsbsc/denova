@@ -75,16 +75,6 @@ func ComposeInstruction(cfg *config.Config, state *book.State, teller IDEStoryTe
 	return composeProtectedSystemInstruction(cfg, config.AgentKindIDE, "ide", workspace, applyAgentPromptDefinition(cfg, config.AgentKindIDE, builtIn))
 }
 
-// BuildInstructionComposition preserves the existing display API while
-// retaining any admission error on the returned artifact.
-func BuildInstructionComposition(cfg *config.Config, state *book.State, teller IDEStoryTeller) SystemPromptComposition {
-	composition, err := ComposeInstruction(cfg, state, teller)
-	if err != nil {
-		return failedSystemPromptComposition("ide", config.AgentKindIDE, workspaceForPrompt(cfg, state), err)
-	}
-	return composition
-}
-
 // ComposeInteractiveStoryInstruction assembles and admits the exact game
 // narrator instruction without silently pre-truncating style sources.
 func ComposeInteractiveStoryInstruction(cfg *config.Config, state *book.State, teller InteractiveStorySystemInstructionInput) (SystemPromptComposition, error) {
@@ -126,19 +116,6 @@ func ComposeInteractiveStoryInstruction(cfg *config.Config, state *book.State, t
 	return composeProtectedSystemInstruction(cfg, config.AgentKindInteractiveStory, "interactive", workspace, applyAgentPromptDefinition(cfg, config.AgentKindInteractiveStory, builtIn))
 }
 
-// BuildInteractiveStoryInstructionComposition preserves the display API.
-func BuildInteractiveStoryInstructionComposition(cfg *config.Config, state *book.State, teller InteractiveStorySystemInstructionInput) SystemPromptComposition {
-	composition, err := ComposeInteractiveStoryInstruction(cfg, state, teller)
-	if err != nil {
-		workspace := ""
-		if cfg != nil {
-			workspace = cfg.Workspace
-		}
-		return failedSystemPromptComposition("interactive", config.AgentKindInteractiveStory, workspace, err)
-	}
-	return composition
-}
-
 // ComposeImageInstruction assembles image runtime rules and the caller's image
 // prompt as independently admitted sources. Project instructions are context.
 func ComposeImageInstruction(cfg *config.Config, state *book.State, systemPrompt string) (SystemPromptComposition, error) {
@@ -153,22 +130,6 @@ func ComposeImageInstruction(cfg *config.Config, state *book.State, systemPrompt
 		Prefix: "\n\n## Call-site System Prompt\n\n", Overflow: SystemPromptOverflowTruncate,
 	}}
 	return composeProtectedSystemInstruction(cfg, config.AgentKindImage, "image", workspace, applyAgentPromptDefinition(cfg, config.AgentKindImage, builtIn))
-}
-
-func BuildImageInstructionComposition(cfg *config.Config, state *book.State, systemPrompt string) SystemPromptComposition {
-	composition, err := ComposeImageInstruction(cfg, state, systemPrompt)
-	if err != nil {
-		workspace := ""
-		if cfg != nil {
-			workspace = cfg.Workspace
-		}
-		return failedSystemPromptComposition("image", config.AgentKindImage, workspace, err)
-	}
-	return composition
-}
-
-func BuildImageInstruction(cfg *config.Config, state *book.State, systemPrompt string) string {
-	return BuildImageInstructionComposition(cfg, state, systemPrompt).Instruction()
 }
 
 func tellerSystemPromptFragment(id, title, tellerID, name, description, content string) SystemPromptFragment {

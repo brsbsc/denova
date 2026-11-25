@@ -62,43 +62,25 @@ func Reconcile(ctx context.Context, sess *session.Session, workspace, stateRoot 
 		case externaljournal.ReadOnly:
 			finished.Result = "The previous read was interrupted before its result was saved. Request a fresh read if this information is still needed."
 		case externaljournal.ReceiptVerifiable:
-			if call.started.Tool != "write" && call.started.Tool != "edit" {
-				continue
-			}
-			changes, err := workspacechange.ForWorkspaceAt(workspace, stateRoot)
+			recovered, ok, err := reconcileWorkspaceWrite(ctx, sess, workspace, stateRoot, call.operation, call.started)
 			if err != nil {
 				return err
 			}
-			group, err := changes.GetGroup(ctx, call.operation)
-			if err != nil {
-				var domainErr *workspacechange.Error
-				if errors.As(err, &domainErr) && domainErr.Code == workspacechange.ErrorCodeNotFound {
-					continue
-				}
-				return err
-			}
-			var matches []workspacechange.ChangeSet
-			for _, change := range group.ChangeSets {
-				if change.ToolCallID == call.started.ExecutionID && change.RunID == call.operation && change.SessionID == sess.ID {
-					matches = append(matches, change)
-				}
-			}
-			// write/edit commit one change set per invocation. An ambiguous or
-			// partial multi-action receipt cannot establish a completed tool.
-			if len(matches) != 1 || matches[0].ApplyState != workspacechange.ApplyStateApplied {
-				continue
-			}
-			finished, err = recoveredWrite(call.started, matches[0])
-			if err != nil {
-				return err
+			if ok {
+				finished = recovered
+			} else {
+				finished.Result = sdktool.UnknownToolEffectResult
 			}
 		case externaljournal.NonReplayable:
-			if !strings.HasPrefix(call.started.Tool, "native/") {
-				continue
+			if strings.HasPrefix(call.started.Tool, "native/") {
+				// The engine owns these external actions. Recovery records uncertainty
+				// for the next model turn; it never replays or fabricates a domain receipt.
+				finished.Result = nativeResultUnknown
+			} else {
+				finished.Result = sdktool.UnknownToolEffectResult
 			}
-			// The engine owns these external actions. Recovery records uncertainty
-			// for the next model turn; it never replays or fabricates a domain receipt.
-			finished.Result = nativeResultUnknown
+		default:
+			finished.Result = sdktool.UnknownToolEffectResult
 		}
 		record, err := externaljournal.NewRecord(externaljournal.ToolFinished, call.operation, call.revision, finished)
 		if err != nil {
@@ -125,6 +107,40 @@ func Reconcile(ctx context.Context, sess *session.Session, workspace, stateRoot 
 		}
 	}
 	return nil
+}
+
+func reconcileWorkspaceWrite(ctx context.Context, sess *session.Session, workspace, stateRoot, operationID string, started externaljournal.StartedTool) (externaljournal.FinishedTool, bool, error) {
+	if (started.Tool != "write" && started.Tool != "edit") || strings.TrimSpace(workspace) == "" {
+		return externaljournal.FinishedTool{}, false, nil
+	}
+	changes, err := workspacechange.ForWorkspaceAt(workspace, stateRoot)
+	if err != nil {
+		return externaljournal.FinishedTool{}, false, err
+	}
+	group, err := changes.GetGroup(ctx, operationID)
+	if err != nil {
+		var domainErr *workspacechange.Error
+		if errors.As(err, &domainErr) && domainErr.Code == workspacechange.ErrorCodeNotFound {
+			return externaljournal.FinishedTool{}, false, nil
+		}
+		return externaljournal.FinishedTool{}, false, err
+	}
+	var matches []workspacechange.ChangeSet
+	for _, change := range group.ChangeSets {
+		if change.ToolCallID == started.ExecutionID && change.RunID == operationID && change.SessionID == sess.ID {
+			matches = append(matches, change)
+		}
+	}
+	// write/edit commit one change set per invocation. An ambiguous or
+	// partial multi-action receipt cannot establish a completed tool.
+	if len(matches) != 1 || matches[0].ApplyState != workspacechange.ApplyStateApplied {
+		return externaljournal.FinishedTool{}, false, nil
+	}
+	finished, err := recoveredWrite(started, matches[0])
+	if err != nil {
+		return externaljournal.FinishedTool{}, false, err
+	}
+	return finished, true, nil
 }
 
 func recoveredWrite(started externaljournal.StartedTool, change workspacechange.ChangeSet) (externaljournal.FinishedTool, error) {

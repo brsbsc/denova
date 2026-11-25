@@ -123,7 +123,7 @@ func (run *ExternalRun) drain(ctx context.Context) agentrun.Outcome {
 			return agentrun.Outcome{Status: agentrun.OutcomeSuspended, Error: errors.Join(ctx.Err(), err)}
 		}
 		if state.Current == nil {
-			err = control.update(ctx, func(current *externalControlState) error {
+			err = control.update(context.WithoutCancel(ctx), func(current *externalControlState) error {
 				if len(current.Queue) == 0 {
 					current.Phase = agentrun.RunPhaseIdle
 					current.Last = &agentrun.OperationSummary{OperationID: current.OperationID, CommandID: current.CommandID, Status: agentrun.OperationSucceeded, ReceiptCursor: run.receipt.Cursor}
@@ -172,7 +172,7 @@ func (run *ExternalRun) drain(ctx context.Context) agentrun.Outcome {
 			return agentrun.Outcome{Status: agentrun.OutcomeSuspended, Error: err}
 		}
 		if input.GoalID != "" && (run.goal.ID != input.GoalID || run.goal.Revision != input.GoalRevision || !run.goal.Active()) {
-			err = control.update(ctx, func(current *externalControlState) error { current.Current = nil; return nil })
+			err = control.update(context.WithoutCancel(ctx), func(current *externalControlState) error { current.Current = nil; return nil })
 			control.mu.Unlock()
 			if err != nil {
 				return agentrun.Outcome{Status: agentrun.OutcomeSuspended, Error: err}

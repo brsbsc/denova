@@ -543,6 +543,70 @@ func TestArgumentsHashCanonicalizesJSONObjectOrder(t *testing.T) {
 	}
 }
 
+func TestEvaluatePowerShellAndBashBypassRegressions(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+
+	pwshCases := []struct {
+		name    string
+		goos    string
+		mode    config.AgentApprovalMode
+		command string
+		want    Action
+	}{
+		{name: "newline multi statement prompt", mode: config.AgentApprovalWrite, command: "pwd\nStart-Process calc", want: ActionPrompt},
+		{name: "crlf critical root delete", mode: config.AgentApprovalFullAccess, command: "pwd\r\nRemove-Item -Rec:$true -Path:C:\\", want: ActionDeny},
+		{name: "stop parsing token", mode: config.AgentApprovalAsk, command: "Get-Content --% README.md", want: ActionPrompt},
+		{name: "colon bound external path", goos: "windows", mode: config.AgentApprovalAsk, command: "Get-Content -Path:C:\\secret.txt", want: ActionPrompt},
+		{name: "abbreviated path parameter", goos: "windows", mode: config.AgentApprovalAsk, command: "Get-Content -Pa C:\\secret.txt", want: ActionPrompt},
+		{name: "colon bound web post", mode: config.AgentApprovalWrite, command: "Invoke-WebRequest https://example.com -Method:Post", want: ActionPrompt},
+		{name: "abbreviated web post", mode: config.AgentApprovalWrite, command: "Invoke-WebRequest https://example.com -Me Post", want: ActionPrompt},
+		{name: "abbreviated web infile", mode: config.AgentApprovalWrite, command: "Invoke-WebRequest https://example.com -InF README.md", want: ActionPrompt},
+		{name: "colon bound web infile", mode: config.AgentApprovalWrite, command: "Invoke-WebRequest https://example.com -InFile:README.md", want: ActionPrompt},
+		{name: "abbreviated recurse root delete", mode: config.AgentApprovalFullAccess, command: "Remove-Item -Rec -Path:C:\\", want: ActionDeny},
+	}
+	for _, tc := range pwshCases {
+		tc := tc
+		t.Run("pwsh/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := evaluateShellCommandForOS(t, workspace, "pwsh", tc.goos, tc.mode, tc.command)
+			if got.Action != tc.want {
+				t.Fatalf("pwsh %q: action = %q (%s: %s), want %q", tc.command, got.Action, got.RuleID, got.Reason, tc.want)
+			}
+		})
+	}
+
+	bashCases := []struct {
+		name    string
+		mode    config.AgentApprovalMode
+		command string
+		want    Action
+	}{
+		{name: "windows drive backslash path", mode: config.AgentApprovalAsk, command: `cat 'C:\Windows\win.ini'`, want: ActionPrompt},
+		{name: "windows drive slash path", mode: config.AgentApprovalAsk, command: "cat C:/Windows/win.ini", want: ActionPrompt},
+		{name: "unc path", mode: config.AgentApprovalAsk, command: `cat '\\server\share\secret.txt'`, want: ActionPrompt},
+		{name: "backslash parent traversal", mode: config.AgentApprovalAsk, command: `cat '..\secret.txt'`, want: ActionPrompt},
+		{name: "rg pattern file flag", mode: config.AgentApprovalAsk, command: "rg -f /etc/passwd .", want: ActionPrompt},
+		{name: "rg long pattern file flag", mode: config.AgentApprovalAsk, command: "rg --file=/etc/passwd .", want: ActionPrompt},
+		{name: "rg exclude from external", mode: config.AgentApprovalAsk, command: "rg --exclude-from=/etc/passwd needle .", want: ActionPrompt},
+		{name: "rg attached pattern file flag", mode: config.AgentApprovalAsk, command: "rg -f/etc/passwd .", want: ActionPrompt},
+		{name: "rg combined attached pattern file flag", mode: config.AgentApprovalAsk, command: "rg -if/etc/passwd .", want: ActionPrompt},
+		{name: "critical bash double dash", mode: config.AgentApprovalFullAccess, command: `bash -c -- "rm -rf /"`, want: ActionDeny},
+		{name: "critical bash combined flags double dash", mode: config.AgentApprovalFullAccess, command: `bash -lc -- "rm -rf /"`, want: ActionDeny},
+		{name: "critical sh combined flags", mode: config.AgentApprovalFullAccess, command: `sh -ce "rm -rf /"`, want: ActionDeny},
+	}
+	for _, tc := range bashCases {
+		tc := tc
+		t.Run("bash/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := evaluateShellCommand(t, workspace, "bash", tc.mode, tc.command)
+			if got.Action != tc.want {
+				t.Fatalf("bash %q: action = %q (%s: %s), want %q", tc.command, got.Action, got.RuleID, got.Reason, tc.want)
+			}
+		})
+	}
+}
+
 func evaluateShellCommand(t *testing.T, workspace, tool string, mode config.AgentApprovalMode, command string) Decision {
 	t.Helper()
 	return evaluateShellCommandForOS(t, workspace, tool, "", mode, command)

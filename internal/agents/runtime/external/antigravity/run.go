@@ -182,10 +182,12 @@ func (c *Client) Run(ctx context.Context, input external.Input, host external.Ho
 	if err != nil {
 		return result, classifyAttemptError(fmt.Errorf("start Antigravity attempt: %w", err))
 	}
+	killProcess := external.OwnProcessTree(cmd.Process)
 	defer func() { c.mu.Lock(); delete(c.active, cmd); c.mu.Unlock() }()
 	waited := false
 	defer func() {
 		cancel()
+		killProcess()
 		if !waited {
 			_ = cmd.Wait()
 		}
@@ -237,8 +239,16 @@ func (c *Client) Run(ctx context.Context, input external.Input, host external.Ho
 	}
 	exited := make(chan error, 1)
 	waited = true
-	go func() { exited <- cmd.Wait() }()
-	waitErr, forced := reap(exited, cancel)
+	go func() {
+		defer func() {
+			if value := recover(); value != nil {
+				slog.ErrorContext(ctx, "[external-runtime] Antigravity wait panicked", "panic", value)
+				exited <- fmt.Errorf("Antigravity wait panic: %v", value)
+			}
+		}()
+		exited <- cmd.Wait()
+	}()
+	waitErr, forced := reap(exited, cancel, killProcess)
 	result = output.complete(input.CumulativeUsage)
 	result.Settled = output.terminal && err == nil && scanner.Err() == nil
 	if ctx.Err() != nil {
@@ -294,13 +304,16 @@ func releaseTransientConversation(sessionID string) {
 // reap waits for the CLI to exit and terminates it when it does not. Tool effects
 // already settled through the host before the terminal frame, so stopping the
 // process here cannot drop product work.
-func reap(exited <-chan error, cancel context.CancelFunc) (err error, forced bool) {
+func reap(exited <-chan error, cancel context.CancelFunc, killProcess func()) (err error, forced bool) {
 	select {
 	case err = <-exited:
 		return err, false
 	case <-time.After(exitGrace):
 	}
 	cancel()
+	if killProcess != nil {
+		killProcess()
+	}
 	select {
 	case err = <-exited:
 	case <-time.After(exitGrace):

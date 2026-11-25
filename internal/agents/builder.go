@@ -649,14 +649,6 @@ func buildChildDefinition(cfg *config.Config, spec childDefinitionSpec) (agentde
 	}, nil
 }
 
-func buildSubAgentInstruction(parent agentBuildSpec, sub config.SubAgentConfig) string {
-	composition, err := composeSubAgentInstruction(&config.Config{}, parent, sub)
-	if err != nil {
-		return ""
-	}
-	return composition.Instruction()
-}
-
 func composeSubAgentInstruction(cfg *config.Config, parent agentBuildSpec, sub config.SubAgentConfig) (prompts.SystemPromptComposition, error) {
 	parentComposition, err := resolveAgentSystemPrompt(cfg, parent)
 	if err != nil {

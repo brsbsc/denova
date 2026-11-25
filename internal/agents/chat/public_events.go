@@ -36,6 +36,7 @@ type PublicEventProjector struct {
 	recorder                *displayEventRecorder
 	plan                    *agentplan.Parser
 	content                 strings.Builder
+	responseContent         strings.Builder
 	thinking                strings.Builder
 	usage                   *runTokenUsageCollector
 	generatedBytes          int
@@ -139,6 +140,7 @@ func (projector *PublicEventProjector) projectLocked(event agentevent.Event, inh
 		content := payload.Delta
 		if !meta.SubAgent && !payload.DisplayOnly {
 			projector.generatedBytes += len(payload.Delta)
+			projector.responseContent.WriteString(payload.Delta)
 		}
 		if projector.plan != nil && !meta.SubAgent && !payload.DisplayOnly {
 			content = projector.plan.Push(content)
@@ -186,11 +188,22 @@ func (projector *PublicEventProjector) projectLocked(event agentevent.Event, inh
 		projector.finishInteractiveResponseLocked(nil)
 		// Final output repairs any missed live delta without duplicating content
 		// already delivered to this in-process display stream.
-		content := missingPublicOutputSuffix(projector.content.String(), payload.Content)
-		if content != "" {
-			projector.content.WriteString(content)
-			projector.generatedBytes += len(content)
-			projector.emitEvent(agentrun.Event{Type: "chunk", Data: meta.appendTo(map[string]any{"content": content})})
+		streamed := projector.content.String()
+		if projector.plan != nil {
+			streamed = projector.responseContent.String()
+		}
+		rawSuffix := missingPublicOutputSuffix(streamed, payload.Content)
+		if rawSuffix != "" {
+			projector.responseContent.WriteString(rawSuffix)
+			projector.generatedBytes += len(rawSuffix)
+			content := rawSuffix
+			if projector.plan != nil {
+				content = projector.plan.Push(content)
+			}
+			if content != "" {
+				projector.content.WriteString(content)
+				projector.emitEvent(agentrun.Event{Type: "chunk", Data: meta.appendTo(map[string]any{"content": content})})
+			}
 		}
 		thinking := missingPublicOutputSuffix(projector.thinking.String(), payload.Thinking)
 		if thinking != "" {
@@ -199,6 +212,9 @@ func (projector *PublicEventProjector) projectLocked(event agentevent.Event, inh
 		}
 	case agentevent.ModelCompleted:
 		meta = projector.metadata(event.RunID, inheritedEventSource(payload.Source, inherited), parentCallID)
+		if !meta.SubAgent {
+			projector.responseContent.Reset()
+		}
 		projector.finishInteractiveResponseLocked(payload.RequestedTools)
 		projector.recorder.flushSource(meta)
 		delete(projector.previews, meta.SubAgentSessionID)

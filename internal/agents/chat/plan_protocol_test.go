@@ -7,6 +7,9 @@ import (
 
 	agentplan "denova/internal/agents/plan"
 	agentrun "denova/internal/agents/run"
+
+	agentevent "github.com/alfredxw/denova/agent/lifecycle/event"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestPlanProtocolParserExtractsProposalAcrossChunks(t *testing.T) {
@@ -110,5 +113,54 @@ func TestPlanQuestionProtocolIsRetiredFromExecution(t *testing.T) {
 	handled, successful := agentplan.EmitToolCall("plan_questions", `{"questions":[]}`, agentplan.Metadata{}, func(agentplan.Event) {})
 	if handled || successful {
 		t.Fatalf("legacy question tool handled=%t successful=%t", handled, successful)
+	}
+}
+
+func TestPublicEventProjectorPlanModeStripsProposedPlanFromAssistantFinal(t *testing.T) {
+	fullContent := "Intro prose.\n<proposed_plan>\n# Plan Step 1\n</proposed_plan>\nOutro prose."
+	for _, streamed := range []bool{false, true} {
+		name := "unstreamed_final"
+		if streamed {
+			name = "streamed_and_final"
+		}
+		t.Run(name, func(t *testing.T) {
+			var events []agentrun.Event
+			projector := NewPublicEventProjector(nil, ChatRequest{PlanMode: true}, agentrun.Options{
+				AgentKind: agentrun.AgentKindIDE,
+			}, func(ev agentrun.Event) {
+				events = append(events, ev)
+			})
+			if streamed {
+				projector.Project(agentevent.Event{RunID: "run-plan", Payload: agentevent.AssistantDelta{Delta: "Intro prose.\n<proposed_"}})
+				projector.Project(agentevent.Event{RunID: "run-plan", Payload: agentevent.AssistantDelta{Delta: "plan>\n# Plan Step 1\n</proposed_plan>\nOutro prose."}})
+			}
+			projector.Project(agentevent.Event{RunID: "run-plan", Payload: agentevent.AssistantFinal{Content: fullContent}})
+			projector.Project(agentevent.Event{RunID: "run-plan", Payload: agentevent.ModelCompleted{FinishReason: "stop"}})
+			projector.Finalize(agentschema.ResultCompleted, "")
+
+			output, _ := projector.Output()
+			if strings.Contains(output, "<proposed_plan>") || strings.Contains(output, "</proposed_plan>") {
+				t.Fatalf("projected output leaked proposed_plan tags: %q", output)
+			}
+			if output != "Intro prose.\n\nOutro prose." {
+				t.Fatalf("projected output = %q, want %q", output, "Intro prose.\n\nOutro prose.")
+			}
+
+			successPlans := 0
+			for _, ev := range events {
+				if ev.Type == "chunk" && strings.Contains(ev.DataString("content"), "proposed_plan") {
+					t.Fatalf("chunk event leaked proposed_plan tag: %#v", ev)
+				}
+				if ev.Type == "proposed_plan" && eventDataString(ev.Data, "status") == "success" {
+					successPlans++
+					if got := eventDataString(ev.Data, "content"); got != "# Plan Step 1" {
+						t.Fatalf("proposed_plan content = %q, want %q", got, "# Plan Step 1")
+					}
+				}
+			}
+			if successPlans != 1 {
+				t.Fatalf("proposed_plan success events = %d, want 1 (%#v)", successPlans, events)
+			}
+		})
 	}
 }

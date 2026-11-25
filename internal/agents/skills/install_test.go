@@ -373,6 +373,49 @@ func TestPreviewZipWithNoSkillsReturnsEmptyCandidates(t *testing.T) {
 	}
 }
 
+func TestSkillInstallDetectsCaseFoldedConflicts(t *testing.T) {
+	ctx := context.Background()
+	userDir := filepath.Join(t.TempDir(), "user")
+	dirs := []Directory{{Scope: ScopeUser, Path: userDir, Writable: true}}
+
+	dupArchive := makeSkillZip(t, map[string]string{
+		"repo/skills/a/SKILL.md": DefaultContent("My-Skill", "first"),
+		"repo/skills/b/SKILL.md": DefaultContent("my-skill", "second"),
+	})
+	dupPreview, err := PreviewZip(ctx, dirs, ScopeUser, dupArchive)
+	if err != nil {
+		t.Fatalf("PreviewZip() error = %v", err)
+	}
+	if len(dupPreview.Candidates) != 2 || !dupPreview.Candidates[0].Conflict || !dupPreview.Candidates[1].Conflict {
+		t.Fatalf("expected case-folded archive conflict on both candidates: %#v", dupPreview.Candidates)
+	}
+
+	initialZip := makeSkillZip(t, map[string]string{
+		"repo/skills/my-skill/SKILL.md": DefaultContent("my-skill", "installed"),
+	})
+	initialPreview, err := PreviewZip(ctx, dirs, ScopeUser, initialZip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallZip(ctx, dirs, ScopeUser, initialZip, []string{candidateIDByName(t, initialPreview.Candidates, "my-skill")}); err != nil {
+		t.Fatal(err)
+	}
+
+	upperZip := makeSkillZip(t, map[string]string{
+		"repo/skills/My-Skill/SKILL.md": DefaultContent("My-Skill", "case variant"),
+	})
+	upperPreview, err := PreviewZip(ctx, dirs, ScopeUser, upperZip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(upperPreview.Candidates) != 1 || !upperPreview.Candidates[0].Conflict {
+		t.Fatalf("expected case-folded scope conflict: %#v", upperPreview.Candidates)
+	}
+	if _, err := InstallZip(ctx, dirs, ScopeUser, upperZip, []string{upperPreview.Candidates[0].ID}); err == nil {
+		t.Fatal("InstallZip() should reject case-folded conflict with existing skill")
+	}
+}
+
 func makeSkillZip(t *testing.T, files map[string]string) []byte {
 	t.Helper()
 	var buf bytes.Buffer

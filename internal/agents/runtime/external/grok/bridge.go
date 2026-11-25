@@ -137,6 +137,13 @@ func startBridge(ctx context.Context, tools []external.Tool, host external.Host)
 		handler.ServeHTTP(w, r)
 	})}
 	go func() {
+		defer func() {
+			if value := recover(); value != nil {
+				slog.ErrorContext(ctx, "Grok tool server panicked", "panic", value)
+				_ = listener.Close()
+				_ = b.close()
+			}
+		}()
 		if err := b.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.ErrorContext(ctx, "Grok tool server failed", "error", err)
 		}

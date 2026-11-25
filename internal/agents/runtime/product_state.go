@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"denova/config"
+	"denova/internal/agents/conversationconfig"
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
 	"denova/internal/agents/sessionjournal"
@@ -18,6 +19,7 @@ import (
 // capability schemas as Native, without constructing a Native Agent Session.
 // Mutation callbacks are pure and run under the product's canonical CAS fence.
 type ProductState struct {
+	agentKind string
 	// engine is an admission snapshot; changing engines requires an idle controller.
 	engine config.RuntimeID
 	Read   func(context.Context, string) (json.RawMessage, bool, error)
@@ -34,7 +36,8 @@ func SessionState(options agentrun.Options, sess *session.Session) (ProductState
 	}
 	selection, _ := sess.RuntimeConfig()
 	return ProductState{
-		engine: selection.Engine().Kind,
+		agentKind: options.AgentKind,
+		engine:    selection.Engine().Kind,
 		Read: func(ctx context.Context, capability string) (json.RawMessage, bool, error) {
 			return sess.LoadCapability(ctx, key, capability)
 		},
@@ -50,6 +53,7 @@ func GameState(options agentrun.Options, store *interactive.Store) (ProductState
 		return ProductState{}, err
 	}
 	return ProductState{
+		agentKind: config.AgentKindInteractiveStory,
 		Read: func(ctx context.Context, capability string) (json.RawMessage, bool, error) {
 			return store.LoadCapability(ctx, options.StoryID, key, capability)
 		},
@@ -77,6 +81,9 @@ func (store ProductState) Update(ctx context.Context, capability string, update 
 // Goal uses the published Goal state schema, shared at the product boundary.
 // Its state machine is independent of which executor supplies the evaluator.
 func (store ProductState) Goal(ctx context.Context) (publicgoal.GoalState, bool, error) {
+	if store.agentKind != "" && !supportsGoal(store.agentKind) {
+		return publicgoal.GoalState{}, false, conversationconfig.ErrRuntimeCapabilityUnsupported
+	}
 	raw, present, err := store.Read(ctx, "agent.goal")
 	var state publicgoal.GoalState
 	if err == nil && present {
@@ -86,6 +93,9 @@ func (store ProductState) Goal(ctx context.Context) (publicgoal.GoalState, bool,
 }
 
 func (store ProductState) UpdateGoal(ctx context.Context, mutation agentschema.GoalMutation) (publicgoal.GoalState, error) {
+	if !store.supportsGoal() {
+		return publicgoal.GoalState{}, conversationconfig.ErrRuntimeCapabilityUnsupported
+	}
 	var result publicgoal.GoalState
 	err := store.Update(ctx, "agent.goal", func(raw json.RawMessage, present bool) (json.RawMessage, error) {
 		var current publicgoal.GoalState
@@ -124,5 +134,8 @@ func (store ProductState) GoalContext(ctx context.Context) (string, error) {
 }
 
 func (store ProductState) supportsGoal() bool {
+	if store.agentKind != "" && !supportsGoal(store.agentKind) {
+		return false
+	}
 	return store.engine != config.RuntimeGrok && store.engine != config.RuntimeAntigravity
 }

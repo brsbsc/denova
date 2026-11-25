@@ -2,9 +2,10 @@ package antigravity
 
 import (
 	"os/exec"
-	"syscall"
+
+	"denova/internal/agents/runtime/external"
 )
 
 func configureProcess(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	external.ConfigureProcess(cmd)
 }

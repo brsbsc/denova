@@ -12,6 +12,7 @@ import (
 	"time"
 
 	agentchat "denova/internal/agents/chat"
+	"denova/internal/agents/conversationconfig"
 	agentexecution "denova/internal/agents/execution"
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/runtime/external"
@@ -31,7 +32,7 @@ func (cycle externalCycleFunc) Wait(ctx context.Context) agentrun.Outcome { retu
 func TestGameCapabilitiesReopenFromOnlyTheStoryJournal(t *testing.T) {
 	store := interactive.NewStore(t.TempDir())
 	defer store.Close()
-	story, err := store.CreateStory(interactive.CreateStoryRequest{Title: "Runtime Goal", StoryTellerID: "classic"})
+	story, err := store.CreateStory(interactive.CreateStoryRequest{Title: "Runtime Capabilities", StoryTellerID: "classic"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,11 +41,15 @@ func TestGameCapabilitiesReopenFromOnlyTheStoryJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	goal, err := state.UpdateGoal(t.Context(), agentschema.GoalMutation{Kind: agentschema.GoalSet, Objective: "Complete and verify the scene"})
-	if err != nil {
-		t.Fatal(err)
+	if _, err := state.UpdateGoal(t.Context(), agentschema.GoalMutation{Kind: agentschema.GoalSet, Objective: "Complete and verify the scene"}); !errors.Is(err, conversationconfig.ErrRuntimeCapabilityUnsupported) {
+		t.Fatalf("GameState accepted Goal mutation: %v", err)
 	}
 	if err := observePlanFixture(t, state, []agentevent.TodoItem{{ID: "verify", Text: "Verify the scene", Status: agentevent.TodoPending}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Update(t.Context(), "denova.external.test.v1", func(json.RawMessage, bool) (json.RawMessage, error) {
+		return json.RawMessage(`{"step":"committed"}`), nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -68,9 +73,12 @@ func TestGameCapabilitiesReopenFromOnlyTheStoryJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, present, err := state.Goal(t.Context())
-	if err != nil || !present || !reflect.DeepEqual(got, goal) {
-		t.Fatalf("restored Goal: %+v, %v", got, err)
+	if _, _, err := state.Goal(t.Context()); !errors.Is(err, conversationconfig.ErrRuntimeCapabilityUnsupported) {
+		t.Fatalf("reopened GameState allowed Goal read: %v", err)
+	}
+	customRaw, present, err := state.Read(t.Context(), "denova.external.test.v1")
+	if err != nil || !present || string(customRaw) != `{"step":"committed"}` {
+		t.Fatalf("restored capability = %s, present=%v, err=%v", customRaw, present, err)
 	}
 	raw, present, err := state.Read(t.Context(), sdkexecution.TodoCapability)
 	if err != nil || !present {

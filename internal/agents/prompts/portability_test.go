@@ -44,7 +44,7 @@ func TestProjectSystemPromptsAreStableAcrossDataDirectoryRoots(t *testing.T) {
 
 func TestStandaloneInteractiveInstructionOmitsRuntimeRoot(t *testing.T) {
 	root := t.TempDir()
-	instruction := BuildInteractiveStorySystemInstruction(InteractiveStorySystemInstructionInput{Workspace: root})
+	instruction := BuildInteractiveStoryFlowInstruction(InteractiveStorySystemInstructionInput{Workspace: root})
 	if strings.Contains(instruction, root) {
 		t.Fatalf("interactive instruction exposed runtime root %q", root)
 	}

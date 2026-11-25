@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"denova/config"
+	"denova/internal/agents/runtime/external"
 	"denova/internal/hostruntime"
 
 	"github.com/Masterminds/semver/v3"
@@ -103,7 +104,8 @@ func Connect(ctx context.Context, options ProcessOptions) (*Client, error) {
 		_ = os.RemoveAll(cwd)
 		return nil, fmt.Errorf("start App Server: %w", err)
 	}
-	c := newClient(reader, writer, func() { _ = writer.Close(); _ = cmd.Process.Kill() })
+	killProcess := external.OwnProcessTree(cmd.Process)
+	c := newClient(reader, writer, func() { _ = writer.Close(); killProcess() })
 	c.cwd = cwd
 	if options.API != nil {
 		c.apiModel = options.API.Model
@@ -112,6 +114,7 @@ func Connect(ctx context.Context, options ProcessOptions) (*Client, error) {
 	c.workers.Add(1)
 	go c.worker("wait for process", func() {
 		err := cmd.Wait()
+		killProcess()
 		if err != nil {
 			c.fail(fmt.Errorf("App Server exited: %w", err))
 		} else {

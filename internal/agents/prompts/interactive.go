@@ -42,32 +42,6 @@ const interactiveLoreCharacterReuseInstruction = "Treat existing lore characters
 
 const interactiveLoreCharacterGroundingInstruction = "Before a named lore character first appears in prose, or before first establishing that character's identity, appearance, abilities, personality, or relationship facts, load the complete lore body unless ResidentLore or the current LoreContext already contains it. Catalog names, tags, summaries, Actor State, and branch-plan references do not count as complete lore. Call query_lore_items with names for a known unique name, or search filters when discovering candidates. Always request detail=full before treating an entry as read; the default index only returns briefs. Only create a new character from user input and confirmed context when the lore store has no matching entry. Never infer full canon from a summary. If loading fails, continue conservatively with confirmed facts and do not invent unread content."
 
-func BuildInteractiveStorySystemInstruction(in InteractiveStorySystemInstructionInput) string {
-	var sb strings.Builder
-	if tellerSystem := strings.TrimSpace(in.StoryTellerSystemPrompt); tellerSystem != "" {
-		sb.WriteString("# Storyteller System Rules\n\n")
-		writeField(&sb, "Storyteller ID", in.StoryTellerID)
-		writeField(&sb, "Storyteller name", in.StoryTellerName)
-		writeField(&sb, "Storyteller description", in.StoryTellerDescription)
-		sb.WriteString("\n")
-		sb.WriteString(tellerSystem)
-		sb.WriteString("\n\n---\n\n")
-	}
-	if styleRules := strings.TrimSpace(StyleRulesInstruction(in.StyleRules)); styleRules != "" {
-		sb.WriteString(styleRules)
-		sb.WriteString("\n\n---\n\n")
-	}
-	sb.WriteString(BuildInteractiveStoryFlowInstruction(in))
-	sb.WriteString("\n\n")
-	sb.WriteString("## Output Protocol\n")
-	sb.WriteString("Output only the story prose that can be displayed on the story stage for this turn.\n")
-	sb.WriteString("- Write only scenes, actions, dialogue, and consequences. Do not output plans, explanations, tool instructions, Markdown headings, XML wrappers, or state JSON.\n")
-	sb.WriteString("- Do not output hidden-state blocks, shortcut-choice blocks, structured state operations, or any JSON. Output all player-visible prose first, then call submit_interactive_turn. End immediately when the receipt is ready; do not repeat, rewrite, or append prose.\n")
-	// Runtime roots are intentionally omitted. File tools resolve all Project
-	// paths from the current Project, keeping this prefix stable after a move.
-	return sb.String()
-}
-
 func BuildInteractiveStoryFlowInstruction(in InteractiveStorySystemInstructionInput) string {
 	var sb strings.Builder
 	sb.WriteString("You are Denova's Game Mode Agent. Generate only the next story-stage turn in response to the user's action.\n\n")
@@ -212,23 +186,6 @@ func normalizeInteractiveChoiceCount(value int) int {
 		return 5
 	}
 	return value
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func writeField(sb *strings.Builder, name, value string) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		value = "(empty)"
-	}
-	fmt.Fprintf(sb, "- %s: %s\n", name, value)
 }
 
 func writeBlock(sb *strings.Builder, title, value string) {

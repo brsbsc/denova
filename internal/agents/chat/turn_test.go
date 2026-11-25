@@ -11,49 +11,7 @@ import (
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
 	"denova/internal/book"
-
-	agentschema "github.com/alfredxw/denova/agent/schema"
 )
-
-func TestMergeToolCalls(t *testing.T) {
-	idx := 0
-	calls := mergeToolCalls(nil, []agentschema.ToolCall{
-		{Index: &idx, Function: agentschema.FunctionCall{Name: "write", Arguments: `{"path":`}},
-	})
-	calls = mergeToolCalls(calls, []agentschema.ToolCall{
-		{Index: &idx, Function: agentschema.FunctionCall{Arguments: `"chapters/ch01.md"}`}},
-	})
-
-	if len(calls) != 1 {
-		t.Fatalf("期望 1 个 tool call，实际: %d", len(calls))
-	}
-	if calls[0].Function.Name != "write" {
-		t.Fatalf("工具名称未合并: %s", calls[0].Function.Name)
-	}
-	if calls[0].Function.Arguments != `{"path":"chapters/ch01.md"}` {
-		t.Fatalf("工具参数未合并: %s", calls[0].Function.Arguments)
-	}
-}
-
-func TestMergeToolCallsHandlesSparseIndexes(t *testing.T) {
-	idx := 2
-	calls := mergeToolCalls(nil, []agentschema.ToolCall{
-		{Index: &idx, ID: "call-2", Function: agentschema.FunctionCall{Name: "edit", Arguments: `{"path":`}},
-	})
-	calls = mergeToolCalls(calls, []agentschema.ToolCall{
-		{Index: &idx, Function: agentschema.FunctionCall{Arguments: `"chapters/ch02.md"}`}},
-	})
-
-	if len(calls) != 3 {
-		t.Fatalf("稀疏 index 应补齐切片长度，实际: %d", len(calls))
-	}
-	if calls[2].ID != "call-2" || calls[2].Function.Name != "edit" {
-		t.Fatalf("工具元信息未按 index 保留: %#v", calls[2])
-	}
-	if calls[2].Function.Arguments != `{"path":"chapters/ch02.md"}` {
-		t.Fatalf("工具参数未按 index 合并: %s", calls[2].Function.Arguments)
-	}
-}
 
 func TestParseWriteLoreItemsToolResultReturnsChangedIDs(t *testing.T) {
 	itemIDs, deletedIDs := parseWriteLoreItemsToolResult("write_lore_items", strings.Join([]string{

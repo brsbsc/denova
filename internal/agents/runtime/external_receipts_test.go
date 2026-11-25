@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	agentchat "denova/internal/agents/chat"
+	agentcompaction "denova/internal/agents/context/compaction"
+	"denova/internal/agents/conversationconfig"
 	agentexecution "denova/internal/agents/execution"
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/runtime/external"
@@ -114,6 +116,73 @@ func newReceiptJournal(t *testing.T, product string) receiptJournal {
 		return openStore(nextRoot)
 	}
 	return fixture
+}
+
+func TestExternalMaintenanceBoundsReceiptsAndMigratesV1Map(t *testing.T) {
+	fixture := newReceiptJournal(t, "writing")
+	legacy := make(map[string]agentcompaction.Result, 70)
+	for i := 0; i < 70; i++ {
+		legacy[fmt.Sprintf("legacy-%03d", i)] = agentcompaction.Result{Triggered: true, TokensBefore: 1000 + i, TokensAfter: 500}
+	}
+	if err := fixture.state.Update(t.Context(), "denova.external.maintenance.v1", func(json.RawMessage, bool) (json.RawMessage, error) {
+		return json.Marshal(legacy)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	engines := NewEngines()
+	defer engines.Close()
+	control, err := engines.ExternalControl(fixture.options, fixture.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	calls := 0
+	got, err := control.Maintain(t.Context(), "maint-fresh", func() (agentcompaction.Result, error) {
+		calls++
+		return agentcompaction.Result{Triggered: true, TokensBefore: 4000, TokensAfter: 1200}, nil
+	})
+	if err != nil || !got.Triggered || calls != 1 {
+		t.Fatalf("Maintain = %+v, calls=%d, err=%v", got, calls, err)
+	}
+	retry, err := control.Maintain(t.Context(), "maint-fresh", func() (agentcompaction.Result, error) {
+		calls++
+		return agentcompaction.Result{}, errors.New("unexpected duplicate maintain execution")
+	})
+	if err != nil || retry != got || calls != 1 {
+		t.Fatalf("idempotent Maintain retry = %+v, calls=%d, err=%v", retry, calls, err)
+	}
+
+	raw, found, err := fixture.state.Read(t.Context(), "denova.external.maintenance.v1")
+	if err != nil || !found {
+		t.Fatalf("read maintenance capability: found=%v err=%v", found, err)
+	}
+	decoded, err := decodeExternalMaintenanceState(raw, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Receipts) != maxExternalMaintenanceReceipts || len(decoded.Order) != maxExternalMaintenanceReceipts {
+		t.Fatalf("receipts=%d order=%d, want %d", len(decoded.Receipts), len(decoded.Order), maxExternalMaintenanceReceipts)
+	}
+	if _, ok := decoded.Receipts["maint-fresh"]; !ok {
+		t.Fatal("newest maintenance receipt was evicted")
+	}
+	if _, ok := decoded.Receipts["legacy-000"]; ok {
+		t.Fatal("oldest legacy maintenance receipt was not evicted")
+	}
+}
+
+func TestGameProductStateRejectsGoalOperations(t *testing.T) {
+	fixture := newReceiptJournal(t, "game")
+	if _, err := fixture.state.UpdateGoal(t.Context(), agentschema.GoalMutation{Kind: agentschema.GoalSet, Objective: "Win the game"}); !errors.Is(err, conversationconfig.ErrRuntimeCapabilityUnsupported) {
+		t.Fatalf("GameState.UpdateGoal err = %v, want ErrRuntimeCapabilityUnsupported", err)
+	}
+	if _, _, err := fixture.state.Goal(t.Context()); !errors.Is(err, conversationconfig.ErrRuntimeCapabilityUnsupported) {
+		t.Fatalf("GameState.Goal err = %v, want ErrRuntimeCapabilityUnsupported", err)
+	}
+	if ctxText, err := fixture.state.GoalContext(t.Context()); err != nil || ctxText != "" {
+		t.Fatalf("GameState.GoalContext = %q, %v", ctxText, err)
+	}
 }
 
 func TestExternalControlHistoryDoesNotGrowActiveSnapshot(t *testing.T) {

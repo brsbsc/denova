@@ -94,33 +94,6 @@ type SystemInstructionInput struct {
 	VolumeDirFormat string
 }
 
-// BuildSystemInstruction assembles the stable writing-agent system prompt.
-// Project instructions and workspace state are injected by ContextSource.
-func BuildSystemInstruction(in SystemInstructionInput) string {
-	var sb strings.Builder
-
-	if tellerPrompt := strings.TrimSpace(in.StoryTellerPrompt); tellerPrompt != "" {
-		sb.WriteString("# Default Writing Director Rules\n\n")
-		writeField(&sb, "Director ID", in.StoryTellerID)
-		writeField(&sb, "Director name", in.StoryTellerName)
-		writeField(&sb, "Director description", in.StoryTellerDescription)
-		sb.WriteString("\n")
-		sb.WriteString(tellerPrompt)
-		sb.WriteString("\n\n")
-		sb.WriteString("These Director rules apply only to chapter prose, continuation, rewriting, polishing, and scene generation. For lore organization, outline planning, file Q&A, or tool operations, prioritize the current user request and Creator Instructions; do not distort the task to apply Director style.\n")
-		sb.WriteString("\n---\n\n")
-	}
-
-	if styleRules := strings.TrimSpace(StyleRulesInstruction(in.StyleRules)); styleRules != "" {
-		sb.WriteString(styleRules)
-		sb.WriteString("\n\n---\n\n")
-	}
-
-	sb.WriteString(BuildIDEWritingFlowInstruction(in))
-
-	return sb.String()
-}
-
 func EmptyIDEStateHint() string {
 	return emptyStateHint
 }

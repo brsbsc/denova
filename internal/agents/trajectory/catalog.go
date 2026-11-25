@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
@@ -379,17 +380,65 @@ func containsFold(values []string, target string) bool {
 }
 
 func replaceAllFold(value, old, replacement string) string {
-	if old == "" {
+	if old == "" || value == "" {
 		return value
 	}
-	lowerOld := strings.ToLower(old)
-	for {
-		index := strings.Index(strings.ToLower(value), lowerOld)
-		if index < 0 {
-			return value
+	firstOld, _ := utf8.DecodeRuneInString(old)
+	oldRunes := utf8.RuneCountInString(old)
+	var out strings.Builder
+	lastCopied := 0
+	for index := 0; index < len(value); {
+		char, width := utf8.DecodeRuneInString(value[index:])
+		if !runesEqualFold(char, firstOld) {
+			index += width
+			continue
 		}
-		value = value[:index] + replacement + value[index+len(old):]
+		endByte, ok := advanceRunes(value, index, oldRunes)
+		if !ok {
+			break
+		}
+		if strings.EqualFold(value[index:endByte], old) {
+			out.WriteString(value[lastCopied:index])
+			out.WriteString(replacement)
+			index = endByte
+			lastCopied = endByte
+			continue
+		}
+		index += width
 	}
+	if lastCopied == 0 {
+		return value
+	}
+	out.WriteString(value[lastCopied:])
+	return out.String()
+}
+
+func advanceRunes(value string, start, count int) (int, bool) {
+	pos := start
+	for step := 0; step < count; step++ {
+		if pos >= len(value) {
+			return 0, false
+		}
+		_, width := utf8.DecodeRuneInString(value[pos:])
+		pos += width
+	}
+	return pos, true
+}
+
+func runesEqualFold(left, right rune) bool {
+	if left == right {
+		return true
+	}
+	if left < utf8.RuneSelf && right < utf8.RuneSelf {
+		if left >= 'A' && left <= 'Z' {
+			left += 'a' - 'A'
+		}
+		if right >= 'A' && right <= 'Z' {
+			right += 'a' - 'A'
+		}
+		return left == right
+	}
+	return strings.EqualFold(string(left), string(right))
 }
 
 func pathSegments(parsed *url.URL) []string {

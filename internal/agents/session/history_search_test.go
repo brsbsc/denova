@@ -65,3 +65,28 @@ func TestHistorySearchCacheTracksExternalMutationsWithoutOpeningSessions(t *test
 		t.Fatalf("deleted journal returned cached content: %v", err)
 	}
 }
+
+func TestHistorySearchHandlesCaseExpandingUnicodeRunes(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	sess, err := store.GetOrCreate("unicode-search")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Repeat("İ", 32) + " TargetAnchor " + strings.Repeat("İ", 32)
+	if err := sess.Append(agentschema.UserMessage(body)); err != nil {
+		t.Fatal(err)
+	}
+	excerpt, err := store.SearchHistoryContent(context.Background(), "unicode-search", "  TARGETANCHOR  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(excerpt, "TargetAnchor") {
+		t.Fatalf("excerpt = %q, want TargetAnchor", excerpt)
+	}
+}

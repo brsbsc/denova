@@ -146,7 +146,7 @@ func TestBuildAgentExposesGeneralAndConfiguredSubAgentsThroughTask(t *testing.T)
 
 func TestBuildSubAgentInstructionInheritsParentSystemPrompt(t *testing.T) {
 	parentInstruction := "# Denova 运行时契约（不可覆盖）\n\n作品根目录：/tmp/book\n父级工具权限边界。"
-	instruction := buildSubAgentInstruction(agentBuildSpec{
+	composition, err := composeSubAgentInstruction(&config.Config{}, agentBuildSpec{
 		Kind:        config.AgentKindIDE,
 		Composition: mustTestPromptComposition(t, config.AgentKindIDE, parentInstruction),
 	}, config.SubAgentConfig{
@@ -155,6 +155,10 @@ func TestBuildSubAgentInstructionInheritsParentSystemPrompt(t *testing.T) {
 		Description:  "Researches delegated context",
 		SystemPrompt: "Return concise findings.",
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instruction := composition.Instruction()
 
 	for _, required := range []string{
 		"Denova 运行时契约",
@@ -179,7 +183,7 @@ func TestBuildSubAgentInstructionInheritsParentSystemPrompt(t *testing.T) {
 
 func TestBuildSubAgentInstructionInheritsInteractiveStoryBoundary(t *testing.T) {
 	parentComposition := mustTestPromptComposition(t, config.AgentKindInteractiveStory, "互动故事父级内置规则")
-	instruction := buildSubAgentInstruction(agentBuildSpec{
+	composition, err := composeSubAgentInstruction(&config.Config{}, agentBuildSpec{
 		Kind:        config.AgentKindInteractiveStory,
 		Composition: parentComposition,
 	}, config.SubAgentConfig{
@@ -188,6 +192,10 @@ func TestBuildSubAgentInstructionInheritsInteractiveStoryBoundary(t *testing.T) 
 		Description:  "Reads story context for the parent.",
 		SystemPrompt: "Only return context findings.",
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instruction := composition.Instruction()
 
 	for _, required := range []string{
 		"Game Mode is read-only for workspace files",

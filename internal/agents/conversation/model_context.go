@@ -272,17 +272,6 @@ func (c *SessionConversation) modelHistory(snapshot session.ContextSnapshot) []*
 	return toolresult.ApplyContextPolicy(history, c.ToolResultContextPolicy())
 }
 
-func (c *SessionConversation) leadingRuntimeMessages() []*agentschema.Message {
-	if c == nil || strings.TrimSpace(c.stableContext) == "" {
-		return nil
-	}
-	content := agentcontext.StandaloneMessage(c.stableContextTitle, c.stableContext, "")
-	if strings.TrimSpace(content) == "" {
-		return nil
-	}
-	return []*agentschema.Message{agentschema.UserMessage(content)}
-}
-
 func (c *SessionConversation) runtimeContextFragments() []agentcontext.Fragment {
 	if c == nil {
 		return nil

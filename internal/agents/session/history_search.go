@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"unicode/utf8"
 
 	"denova/internal/agents/conversationjournal"
 )
@@ -141,14 +140,32 @@ func (s *Store) SearchHistoryContent(ctx context.Context, id, query string) (str
 }
 
 func transcriptExcerpt(text, query string) string {
+	lowerQuery := strings.ToLower(strings.TrimSpace(query))
+	if lowerQuery == "" || text == "" {
+		return ""
+	}
 	lower := strings.ToLower(text)
-	match := strings.Index(lower, query)
+	match := strings.Index(lower, lowerQuery)
 	if match < 0 {
 		return ""
 	}
 	runes := []rune(text)
-	position := utf8.RuneCountInString(lower[:match])
-	start, end := max(0, position-8), min(len(runes), position+utf8.RuneCountInString(query)+80)
+	matchStartRune, matchEndRune := 0, len(runes)
+	lowerOffset := 0
+	foundStart := false
+	for index, char := range runes {
+		if !foundStart && lowerOffset >= match {
+			matchStartRune = index
+			foundStart = true
+		}
+		lowerOffset += len(strings.ToLower(string(char)))
+		if lowerOffset >= match+len(lowerQuery) {
+			matchEndRune = index + 1
+			break
+		}
+	}
+	start := max(0, matchStartRune-8)
+	end := min(len(runes), max(start, matchEndRune+80))
 	excerpt := string(runes[start:end])
 	if start > 0 {
 		excerpt = "…" + excerpt

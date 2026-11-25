@@ -22,7 +22,11 @@ func SelectChoices(ctx context.Context, cfg *config.Config, agentKind, scene str
 	if len(questions) == 0 {
 		return selected, nil
 	}
-	answers, decisionErr := decision.Evaluate(ctx, cfg.Decision, scene, state, questions)
+	var decisionCfg *config.DecisionSettings
+	if cfg != nil {
+		decisionCfg = cfg.Decision
+	}
+	answers, decisionErr := decision.Evaluate(ctx, decisionCfg, scene, state, questions)
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}

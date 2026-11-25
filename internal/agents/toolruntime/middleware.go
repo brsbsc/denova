@@ -218,6 +218,11 @@ func appendAgentMutationEffect(result agentschema.ToolResult, record agenttool.E
 	if err != nil || !present {
 		return result, err
 	}
+	for _, existing := range result.Effects {
+		if existing.Kind == effect.Kind && string(existing.Data) == string(effect.Data) {
+			return result, nil
+		}
+	}
 	result.Effects = append(result.Effects, effect)
 	return result, nil
 }
@@ -237,7 +242,10 @@ func projectToolError(decision agenttool.Decision, args string, returned agentsc
 	// valid receipt even when the tool reports a transport/domain error after the
 	// workspace effect committed.
 	if len(returned.Details) != 0 {
-		errorResult.Details = append(errorResult.Details[:0], returned.Details...)
+		errorResult.Details = append([]byte(nil), returned.Details...)
+	}
+	if len(returned.Effects) != 0 {
+		errorResult.Effects = append([]agentschema.Effect(nil), returned.Effects...)
 	}
 	errorResult.Artifacts = append([]agentschema.ToolArtifactRef(nil), returned.Artifacts...)
 	errorResult.ContextHints = returned.ContextHints

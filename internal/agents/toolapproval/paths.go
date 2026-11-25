@@ -102,7 +102,7 @@ func (boundary pathBoundary) containsLiteral(value string) bool {
 	if isForeignAbsolutePath(value) {
 		return false
 	}
-	candidate := filepath.FromSlash(value)
+	candidate := filepath.FromSlash(strings.ReplaceAll(value, `\`, "/"))
 	if !filepath.IsAbs(candidate) {
 		candidate = filepath.Join(boundary.cwd, candidate)
 	}
@@ -144,7 +144,7 @@ func (boundary pathBoundary) isWorkspaceRoot(value string) bool {
 	if isForeignAbsolutePath(value) {
 		return false
 	}
-	candidate := filepath.FromSlash(value)
+	candidate := filepath.FromSlash(strings.ReplaceAll(value, `\`, "/"))
 	if !filepath.IsAbs(candidate) {
 		candidate = filepath.Join(boundary.cwd, candidate)
 	}
@@ -163,7 +163,10 @@ func (boundary pathBoundary) isWorkspaceRoot(value string) bool {
 // relative workspace path and must fail closed.
 func isForeignAbsolutePath(value string) bool {
 	value = strings.TrimSpace(value)
-	return strings.HasPrefix(value, "/") && !filepath.IsAbs(filepath.FromSlash(value))
+	if strings.HasPrefix(value, "/") && !filepath.IsAbs(filepath.FromSlash(value)) {
+		return true
+	}
+	return (strings.HasPrefix(value, `\`) || hasWindowsDrivePrefix(value)) && !filepath.IsAbs(value)
 }
 
 func withinRoot(root, candidate string) bool {

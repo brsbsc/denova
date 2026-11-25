@@ -103,13 +103,14 @@ func attemptConfig(models []byte, model string, contextWindow int, server map[st
 }
 
 type headlessAttempt struct {
-	cmd        *exec.Cmd
-	out        io.ReadCloser
-	home       string
-	promptPath string
-	removeDir  string
-	bridge     *toolBridge
-	diagnostic *boundedBuffer
+	cmd         *exec.Cmd
+	killProcess func()
+	out         io.ReadCloser
+	home        string
+	promptPath  string
+	removeDir   string
+	bridge      *toolBridge
+	diagnostic  *boundedBuffer
 }
 
 // boundedBuffer keeps the last slice of CLI diagnostics without letting a
@@ -130,6 +131,9 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 func (a *headlessAttempt) close() error {
 	if a.out != nil {
 		_ = a.out.Close()
+	}
+	if a.killProcess != nil {
+		a.killProcess()
 	}
 	if a.cmd != nil && a.cmd.Process != nil {
 		_ = a.cmd.Process.Kill()
@@ -253,6 +257,7 @@ func (c *Client) startHeadless(ctx context.Context, input external.Input, host e
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start Grok headless attempt: %w", err)
 	}
+	attempt.killProcess = external.OwnProcessTree(cmd.Process)
 	return attempt, nil
 }
 

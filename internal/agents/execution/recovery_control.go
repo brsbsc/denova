@@ -138,9 +138,11 @@ func (r *RecoveryObservation) Wait(ctx context.Context, emit func(agentrun.Event
 		emitRecoveryTerminal(emit, outcome)
 		return outcome
 	}
+	events := r.publicObservation.Events
+	errs := r.publicObservation.Errors
 	for {
 		select {
-		case event, ok := <-r.publicObservation.Events:
+		case event, ok := <-events:
 			if !ok {
 				err := errors.New("Agent recovery observation closed before settlement")
 				emitExecutionError(emit, err)
@@ -156,8 +158,12 @@ func (r *RecoveryObservation) Wait(ctx context.Context, emit func(agentrun.Event
 			outcome := publicResultOutcome(agent.Result{Status: settled.Status, Reason: settled.Reason}, nil, "", "")
 			emitRecoveryTerminal(emit, outcome)
 			return outcome
-		case observationErr, ok := <-r.publicObservation.Errors:
-			if ok && observationErr != nil {
+		case observationErr, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			if observationErr != nil {
 				emitExecutionError(emit, observationErr)
 				return agentrun.NewOutcome(agentrun.OutcomeFailed, observationErr, observationErr.Error(), "", "")
 			}

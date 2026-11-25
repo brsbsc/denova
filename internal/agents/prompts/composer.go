@@ -329,7 +329,3 @@ func appendSystemPromptReason(current, next string) string {
 	}
 	return current + "; " + next
 }
-
-func failedSystemPromptComposition(mode, agentKind, workspace string, err error) SystemPromptComposition {
-	return SystemPromptComposition{mode: mode, agentKind: agentKind, workspace: workspace, assemblyErr: err}
-}

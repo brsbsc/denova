@@ -27,26 +27,51 @@ func safeSearchArguments(name string, args []string, boundary pathBoundary) bool
 		if name == "rg" && optionPathInside(args, index, lower, "--ignore-file", boundary) == optionPathOutside {
 			return false
 		}
-		if name == "grep" && (optionPathInside(args, index, lower, "-f", boundary) == optionPathOutside ||
+		if (name == "rg" || name == "grep") && (optionPathInside(args, index, lower, "-f", boundary) == optionPathOutside ||
 			optionPathInside(args, index, lower, "--file", boundary) == optionPathOutside ||
 			optionPathInside(args, index, lower, "--exclude-from", boundary) == optionPathOutside) {
 			return false
 		}
-		if name == "grep" && strings.HasPrefix(arg, "-f") && arg != "-f" &&
-			!boundary.containsLiteral(strings.TrimPrefix(arg, "-f")) {
-			return false
+		if name == "rg" || name == "grep" {
+			if target, hasFileFlag := searchShortFileOptionValue(args, index); hasFileFlag &&
+				(target == "" || !boundary.containsLiteral(target)) {
+				return false
+			}
 		}
 	}
-	// Search patterns are not paths. Only reject explicit absolute/home paths
+	// Search patterns are not paths. Only reject explicit absolute/home/UNC/drive paths
 	// and relative traversal operands; ordinary literals remain valid patterns.
 	for _, arg := range nonFlagArguments(args) {
-		if strings.HasPrefix(arg, "/") || strings.HasPrefix(arg, "~") || strings.HasPrefix(arg, "..") {
+		if looksLikeExternalPath(arg) || strings.HasPrefix(arg, "..") {
 			if !boundary.containsLiteral(arg) {
 				return false
 			}
 		}
 	}
 	return len(args) > 0
+}
+
+func searchShortFileOptionValue(args []string, index int) (string, bool) {
+	arg := args[index]
+	if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
+		return "", false
+	}
+	for pos := 1; pos < len(arg); pos++ {
+		switch arg[pos] {
+		case 'f':
+			if pos+1 < len(arg) {
+				return strings.TrimPrefix(arg[pos+1:], "="), true
+			}
+			if index+1 >= len(args) {
+				return "", true
+			}
+			return args[index+1], true
+		case 'e', 'm', 'A', 'B', 'C', 'g', 't', 'T', 'j', 'M', 'd', 'D':
+			// Value-bearing short options consume the remainder of the token.
+			return "", false
+		}
+	}
+	return "", false
 }
 
 func safeJQArguments(args []string, boundary pathBoundary) bool {
@@ -334,8 +359,20 @@ func positionalArguments(args []string, valueOptions map[string]bool) ([]string,
 
 func looksLikeExternalPath(value string) bool {
 	value = strings.TrimSpace(value)
-	return strings.HasPrefix(value, "/") || strings.HasPrefix(value, "~") ||
-		value == ".." || strings.HasPrefix(value, "../")
+	if strings.HasPrefix(value, "/") || strings.HasPrefix(value, `\`) || strings.HasPrefix(value, "~") ||
+		value == ".." || strings.HasPrefix(value, "../") || strings.HasPrefix(value, `..\`) {
+		return true
+	}
+	return hasWindowsDrivePrefix(value)
+}
+
+func hasWindowsDrivePrefix(value string) bool {
+	return len(value) >= 2 && isASCIILetter(value[0]) && value[1] == ':' &&
+		(len(value) == 2 || value[2] == '\\' || value[2] == '/' || value[2] == '.')
+}
+
+func isASCIILetter(char byte) bool {
+	return (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z')
 }
 
 func hasExternalLiteralArgument(args []string, boundary pathBoundary) bool {

@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"denova/internal/localfs"
+	"denova/internal/portablepath"
 )
 
 type skillLeaseTarget struct {
@@ -26,7 +27,7 @@ func withSkillLeases[T any](ctx context.Context, targets []skillLeaseTarget, ope
 		if err := ValidateName(target.name); err != nil {
 			return result, err
 		}
-		lockPath := filepath.Join(target.dir.Path, ".denova-locks", "skill-mutations", target.name+".lock")
+		lockPath := filepath.Join(target.dir.Path, ".denova-locks", "skill-mutations", portablepath.FoldKey(target.name)+".lock")
 		if !seen[lockPath] {
 			seen[lockPath] = true
 			paths = append(paths, lockPath)

@@ -20,7 +20,7 @@ func classifyPowerShellWithAllowedFiles(command, workspace, cwd string, mode con
 		return prompt("invalid_workspace_boundary", RiskHigh,
 			"无法验证命令工作目录，需要你的确认。 / The command working directory cannot be verified, so approval is required.")
 	}
-	if strings.ContainsAny(command, "$`{}()><") || strings.Contains(command, "&&") || strings.Contains(command, "||") {
+	if strings.ContainsAny(command, "$`{}()><\r\n") || strings.Contains(command, "&&") || strings.Contains(command, "||") {
 		return prompt("pwsh_dynamic_syntax", RiskHigh,
 			"PowerShell 命令包含动态表达式、重定向或复杂语法，需要你的确认。 / The PowerShell command uses dynamic expressions, redirects, or complex syntax and requires approval.")
 	}
@@ -85,7 +85,7 @@ func splitSimplePowerShellWords(input string) ([]string, bool) {
 			quote = char
 			continue
 		}
-		if char == ';' || char == '&' {
+		if char == ';' || char == '&' || char == '\r' || char == '\n' {
 			return nil, false
 		}
 		if unicode.IsSpace(char) {
@@ -104,6 +104,11 @@ func splitSimplePowerShellWords(input string) ([]string, bool) {
 func classifyPowerShellCall(words []string, boundary pathBoundary, mode config.AgentApprovalMode) commandClass {
 	name := strings.ToLower(words[0])
 	args := words[1:]
+	for _, arg := range args {
+		if arg == "--%" {
+			return commandUnknown
+		}
+	}
 	switch name {
 	case "get-location", "pwd", "get-childitem", "gci", "ls", "dir":
 		if powerShellPathsInside(args, boundary) {
@@ -127,8 +132,11 @@ func classifyPowerShellCall(words []string, boundary pathBoundary, mode config.A
 	writeBoundary.allowedFiles = nil
 	switch name {
 	case "new-item", "set-content", "add-content", "copy-item", "move-item", "remove-item":
-		paths := powerShellPathArguments(args)
-		if name == "remove-item" && containsBroadWorkspaceTarget(writeBoundary, paths) {
+		paths, ok := powerShellPathArguments(args)
+		if !ok {
+			return commandUnknown
+		}
+		if name == "remove-item" && (len(paths) == 0 || containsBroadWorkspaceTarget(writeBoundary, paths)) {
 			return commandUnknown
 		}
 		if allPathsInside(writeBoundary, paths) {
@@ -154,70 +162,154 @@ func classifyPowerShellCall(words []string, boundary pathBoundary, mode config.A
 }
 
 func powerShellPathsInside(args []string, boundary pathBoundary) bool {
-	for _, value := range powerShellPathArguments(args) {
+	paths, ok := powerShellPathArguments(args)
+	if !ok {
+		return false
+	}
+	for _, value := range paths {
 		value = strings.TrimSpace(value)
 		if powerShellProviderPath.MatchString(value) &&
 			!(len(value) >= 3 && value[1] == ':' && (value[2] == '\\' || value[2] == '/')) {
 			return false
 		}
 	}
-	return allPathsInside(boundary, powerShellPathArguments(args))
+	return allPathsInside(boundary, paths)
 }
 
-func powerShellPathArguments(args []string) []string {
+func splitPowerShellParameter(arg string) (string, string, bool) {
+	if !strings.HasPrefix(arg, "-") || arg == "-" || arg == "--" {
+		return "", "", false
+	}
+	flag, inlineValue, hasInline := strings.Cut(arg, ":")
+	return strings.ToLower(flag), inlineValue, hasInline
+}
+
+func matchesPowerShellFlagPrefix(flag string, minLen int, full string) bool {
+	return len(flag) >= minLen && len(flag) <= len(full) && strings.HasPrefix(full, flag)
+}
+
+func powerShellPathArguments(args []string) ([]string, bool) {
 	paths := make([]string, 0)
+	flagsEnded := false
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
-		if strings.HasPrefix(arg, "-") {
-			if powerShellValueParameter(arg) && index+1 < len(args) {
-				index++
-				paths = append(paths, args[index])
+		if !flagsEnded && arg == "--" {
+			flagsEnded = true
+			continue
+		}
+		if !flagsEnded && strings.HasPrefix(arg, "-") && arg != "-" {
+			flag, inlineValue, hasInline := splitPowerShellParameter(arg)
+			if powerShellValueParameter(flag) {
+				if hasInline {
+					if strings.TrimSpace(inlineValue) == "" {
+						return nil, false
+					}
+					paths = append(paths, inlineValue)
+					continue
+				}
+				if index+1 < len(args) && !strings.HasPrefix(args[index+1], "-") {
+					index++
+					paths = append(paths, args[index])
+					continue
+				}
+				// -File and -F may act as boolean switches (e.g., Get-ChildItem -File, Remove-Item -Force).
+				if matchesPowerShellFlagPrefix(flag, 2, "-file") {
+					continue
+				}
+				return nil, false
+			}
+			if hasInline {
+				trimmed := strings.TrimSpace(inlineValue)
+				if looksLikeExternalPath(trimmed) || powerShellProviderPath.MatchString(trimmed) {
+					paths = append(paths, trimmed)
+				}
 			}
 			continue
 		}
 		paths = append(paths, arg)
 	}
-	return paths
+	return paths, true
 }
 
-func powerShellValueParameter(value string) bool {
-	switch strings.ToLower(value) {
-	case "-path", "-literalpath", "-destination", "-file", "-outfile":
-		return true
-	default:
-		return false
-	}
+func powerShellValueParameter(flag string) bool {
+	return matchesPowerShellFlagPrefix(flag, 2, "-path") ||
+		matchesPowerShellFlagPrefix(flag, 2, "-literalpath") ||
+		flag == "-lp" ||
+		matchesPowerShellFlagPrefix(flag, 2, "-pspath") ||
+		matchesPowerShellFlagPrefix(flag, 2, "-destination") ||
+		matchesPowerShellFlagPrefix(flag, 2, "-filepath") ||
+		matchesPowerShellFlagPrefix(flag, 2, "-outfile") ||
+		matchesPowerShellFlagPrefix(flag, 4, "-referenceobject") ||
+		matchesPowerShellFlagPrefix(flag, 4, "-differenceobject")
+}
+
+func powerShellDeletePathParameter(flag string) bool {
+	return matchesPowerShellFlagPrefix(flag, 2, "-path") ||
+		matchesPowerShellFlagPrefix(flag, 2, "-literalpath") ||
+		flag == "-lp" ||
+		matchesPowerShellFlagPrefix(flag, 2, "-pspath")
 }
 
 func powerShellNetworkRead(args []string, boundary pathBoundary) bool {
 	uri := ""
-	for index, arg := range args {
-		switch strings.ToLower(arg) {
-		case "-uri":
-			if index+1 >= len(args) {
-				return false
-			}
-			uri = args[index+1]
-		case "-method":
-			if index+1 >= len(args) || !strings.EqualFold(args[index+1], "get") {
-				return false
-			}
-		case "-body", "-form", "-infile":
-			return false
-		case "-credential", "-usedefaultcredentials", "-authentication", "-token":
-			return false
-		case "-outfile":
-			if index+1 >= len(args) || !boundary.containsLiteral(args[index+1]) {
-				return false
-			}
+	consumeValue := func(index *int, inlineValue string, hasInline bool) (string, bool) {
+		if hasInline {
+			value := strings.TrimSpace(inlineValue)
+			return value, value != ""
 		}
+		if *index+1 >= len(args) {
+			return "", false
+		}
+		*index++
+		value := strings.TrimSpace(args[*index])
+		return value, value != ""
 	}
-	if uri == "" {
-		for _, arg := range args {
-			if !strings.HasPrefix(arg, "-") {
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			if uri == "" {
 				uri = arg
-				break
 			}
+			continue
+		}
+		flag, inlineValue, hasInline := splitPowerShellParameter(arg)
+		if flag == "" {
+			return false
+		}
+		switch {
+		case matchesPowerShellFlagPrefix(flag, 3, "-uri"):
+			value, ok := consumeValue(&index, inlineValue, hasInline)
+			if !ok {
+				return false
+			}
+			uri = value
+		case matchesPowerShellFlagPrefix(flag, 2, "-method"):
+			method, ok := consumeValue(&index, inlineValue, hasInline)
+			if !ok || !strings.EqualFold(method, "get") {
+				return false
+			}
+		case matchesPowerShellFlagPrefix(flag, 2, "-outfile"):
+			outFile, ok := consumeValue(&index, inlineValue, hasInline)
+			if !ok || !boundary.containsLiteral(outFile) {
+				return false
+			}
+		case matchesPowerShellFlagPrefix(flag, 5, "-usebasicparsing"):
+			if hasInline {
+				trimmed := strings.TrimPrefix(strings.TrimSpace(inlineValue), "$")
+				if !strings.EqualFold(trimmed, "true") && !strings.EqualFold(trimmed, "false") && trimmed != "1" && trimmed != "0" {
+					return false
+				}
+			}
+		case matchesPowerShellFlagPrefix(flag, 4, "-timeoutsec"),
+			matchesPowerShellFlagPrefix(flag, 4, "-maximumredirection"),
+			matchesPowerShellFlagPrefix(flag, 6, "-useragent"):
+			if _, ok := consumeValue(&index, inlineValue, hasInline); !ok {
+				return false
+			}
+		default:
+			// Reject abbreviated or unrecognized flags (-Me, -InF, -Body, -Form, -Token,
+			// -UseDefaultCredentials, -Headers, etc.) so network writes/exfiltration prompt.
+			return false
 		}
 	}
 	lowerURI := strings.ToLower(strings.TrimSpace(uri))

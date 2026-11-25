@@ -162,3 +162,16 @@ func TestSemanticDecisionRequiresEvidenceAndUsesOwningModelFallback(t *testing.T
 		})
 	}
 }
+
+func TestModelTaskNilConfigReturnsErrorWithoutPanic(t *testing.T) {
+	question := decision.Choice("Choose option.", map[string]string{"a": "Option A", "b": "Option B"})
+	if _, err := SelectChoices(t.Context(), nil, config.AgentKindToolAgent, "nil_cfg", "state", map[string]decision.Question{"q": question}, 0.8); err == nil {
+		t.Fatal("SelectChoices(nil cfg) expected error")
+	}
+	if _, err := EvaluateSemanticTrigger(t.Context(), nil, config.AgentKindGeneral, automation.TriggerEvaluationRecord{
+		Condition:   "Gate opened",
+		Instruction: "Evaluate gate.",
+	}); err == nil {
+		t.Fatal("EvaluateSemanticTrigger(nil cfg) expected error")
+	}
+}

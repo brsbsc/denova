@@ -135,10 +135,6 @@ func boundedIDEContextPath(path string) string {
 	return string(runes[:ideContextMaxPathRunes]) + "[truncated]"
 }
 
-func BuildInteractiveStoryInstruction(cfg *config.Config, state *book.State, teller InteractiveStorySystemInstructionInput) string {
-	return BuildInteractiveStoryInstructionComposition(cfg, state, teller).Instruction()
-}
-
 func buildImageBuiltinInstruction(cfg *config.Config, state *book.State, systemPrompt string) (string, string) {
 	workspace := ""
 	if cfg != nil {
@@ -296,34 +292,6 @@ func readonlyPromptSource(id, title, source, content string) config.AgentPromptS
 	}
 }
 
-func styleRulePromptSources(rules []StyleRule) []promptSource {
-	sources := make([]promptSource, 0, len(rules))
-	for _, rule := range rules {
-		scene := strings.TrimSpace(rule.Scene)
-		if !rule.Global && scene == "" {
-			continue
-		}
-		if len(rule.StyleReferences) == 0 && len(rule.StyleContents) == 0 {
-			continue
-		}
-		content := StyleRulesInstruction([]StyleRule{rule})
-		if strings.TrimSpace(content) == "" {
-			continue
-		}
-		title := "Prose Style Reference: Global"
-		if !rule.Global {
-			title = "Prose Style Reference: " + scene
-		}
-		sources = append(sources, promptSource{
-			source:  "System prompt",
-			title:   title,
-			content: content,
-			note:    "Current narrative style",
-		})
-	}
-	return sources
-}
-
 func ideFlowInstruction(cfg *config.Config, workspace string) string {
 	if cfg == nil {
 		cfg = &config.Config{}
@@ -363,13 +331,6 @@ func editablePromptFlowForAgent(agentKind, flow string) string {
 	default:
 		return strings.TrimSpace(flow)
 	}
-}
-
-type promptSource struct {
-	source  string
-	title   string
-	content string
-	note    string
 }
 
 // PartSummary returns a bounded, content-safe diagnostic summary for one

@@ -56,6 +56,7 @@ func (projector *PublicEventProjector) projectRetry(meta agentEventMetadata, ret
 			truncatePreview(content, preview.contentStart)
 			truncatePreview(thinking, preview.thinkingStart)
 			if !meta.SubAgent {
+				projector.responseContent.Reset()
 				projector.interactive = publicInteractiveOutput{}
 			}
 		} else if !meta.SubAgent {
