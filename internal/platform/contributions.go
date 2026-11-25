@@ -80,7 +80,7 @@ func compatibleManifest(manifest Manifest) error {
 	if err != nil {
 		return failure("INVALID_ARGUMENT", "minHostVersion must be a semantic version: %v", err)
 	}
-	host, err := semver.StrictNewVersion(hostVersion())
+	host, err := semver.StrictNewVersion(buildinfo.BaseReleaseVersion(hostVersion()))
 	if err != nil || host.LessThan(minimum) {
 		return failure("API_INCOMPATIBLE", "Package %s requires Denova %s; host provides %s", manifest.ID, minimum, hostVersion())
 	}

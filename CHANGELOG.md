@@ -17,12 +17,12 @@ Denova records only major user-visible features, important compatibility or data
 #### 中文
 
 - 加固仅限宿主机执行的平台管理接口校验，防止通过反向代理转发头或 DNS Rebinding 绕过本机限制。
-- 修复本 fork 一键安装脚本下载地址、思考过程展开偏好冲突、更新说明对 `fixN` 补丁版本与 fork 发布页链接的支持，以及 OpenAI Responses 流内未分类错误未触发重试的问题。
+- 修复本 fork 一键安装脚本下载地址、思考过程展开偏好冲突、扩展与资源包宿主版本校验及更新说明对 `fixN` 补丁版本和 fork 发布页链接的支持，以及 OpenAI Responses 流内未分类错误未触发重试的问题。
 
 #### English
 
 - Hardens host-only platform management endpoint checks against reverse-proxy forwarded host headers and DNS rebinding.
-- Fixes fork `install.sh` release downloads, duplicate thinking-expansion preferences, update notes for `fixN` hotfix versions and fork fallback links, and retries for unclassified OpenAI Responses in-stream errors.
+- Fixes fork `install.sh` release downloads, duplicate thinking-expansion preferences, `fixN` hotfix version support in extension and resource-pack host checks alongside update notes (plus fork fallback links), and retries for unclassified OpenAI Responses in-stream errors.
 
 ### Security / 安全
 
@@ -35,8 +35,8 @@ Denova records only major user-visible features, important compatibility or data
 - Points this fork's `scripts/install.sh` installer to `brsbsc/denova` by default while supporting explicit repository overrides via `DENOVA_REPOSITORY`.
 - 将思考过程自动展开收口到 `agent_trace_display` 偏好中，保留旧版 `auto_expand_thinking` 配置的向后兼容，并在会话流重连期间保留用户手动展开状态。
 - Consolidates thinking auto-expansion into `agent_trace_display` while keeping legacy `auto_expand_thinking` fallback compatibility, and preserves manual expansion across live stream reattach.
-- 更新说明现可正确解析与比较 `fixN` 补丁版本，且加载失败时的兜底发布页链接指向本 fork 仓库。
-- Upgrade notes now parse and compare `fixN` hotfix versions properly, and fallback release links on load failure point to this fork's repository.
+- 扩展与资源包的最低宿主版本校验及更新说明现可正确支持 `fixN` 补丁版本，且更新说明加载失败时的兜底发布页链接指向本 fork 仓库。
+- Extension and resource-pack host version checks alongside upgrade notes now properly support `fixN` hotfix versions, and fallback release links on update-note load failure point to this fork's repository.
 - 修复 OpenAI Responses 协议流内返回未分类错误时未触发流内重试的问题，同时继续对不可重试错误立即停止。
 - Retries unclassified errors returned inside OpenAI Responses streams while continuing to stop immediately on permanent errors.
 

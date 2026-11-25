@@ -3,11 +3,14 @@ package platform
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"denova/config"
+	"denova/internal/buildinfo"
 	"github.com/google/uuid"
 )
 
@@ -206,5 +209,47 @@ func TestProjectPluginConfigurationPreservesOtherSettings(t *testing.T) {
 	stored, err := config.ReadSettingsFile(filepath.Join(layout.StoreRoot, "config.toml"))
 	if err != nil || stored.Theme != "light" || stored.Extensions.Models["builtin/assistant"] != "writer" {
 		t.Fatalf("settings were lost: %#v %v", stored, err)
+	}
+}
+
+func TestCompatibleManifestSupportsForkHotfixVersions(t *testing.T) {
+	previous := buildinfo.Version
+	t.Cleanup(func() { buildinfo.Version = previous })
+
+	m, projectID := testManager(t)
+	base := pluginPanelCandidate(t, m, projectID, "test.hotfix-compat")
+	freezeWithMinHost := func(minHost string) error {
+		var manifest Manifest
+		if err := json.Unmarshal(base.files[Plugin.manifestFile()], &manifest); err != nil {
+			t.Fatal(err)
+		}
+		manifest.MinHostVersion = minHost
+		files := map[string][]byte{}
+		for key, raw := range base.files {
+			files[key] = raw
+		}
+		files[Plugin.manifestFile()], _ = json.Marshal(manifest)
+		_, err := m.freeze(Plugin, files)
+		return err
+	}
+
+	buildinfo.Version = "0.8.0fix1"
+	for _, allowed := range []string{"0.6.0", "0.8.0"} {
+		if err := freezeWithMinHost(allowed); err != nil {
+			t.Fatalf("minHostVersion %q rejected on 0.8.0fix1: %v", allowed, err)
+		}
+	}
+
+	err := freezeWithMinHost("0.8.1")
+	var platformErr *Error
+	if !errors.As(err, &platformErr) || platformErr.Code != "API_INCOMPATIBLE" || !strings.Contains(platformErr.Diagnostic, "0.8.0fix1") {
+		t.Fatalf("expected API_INCOMPATIBLE mentioning 0.8.0fix1 for minHostVersion 0.8.1, got: %v", err)
+	}
+
+	buildinfo.Version = "0.8.0fix0"
+	err = freezeWithMinHost("0.8.0")
+	platformErr = nil
+	if !errors.As(err, &platformErr) || platformErr.Code != "API_INCOMPATIBLE" {
+		t.Fatalf("expected API_INCOMPATIBLE for malformed host version 0.8.0fix0, got: %v", err)
 	}
 }

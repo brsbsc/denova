@@ -339,7 +339,7 @@ func (s *Service) preparePackage(ctx context.Context, dir, root string, manifest
 			return PackagePreview{}, err
 		}
 		if buildinfo.Version != "dev" {
-			current, err := semver.NewVersion(buildinfo.Version)
+			current, err := semver.NewVersion(buildinfo.BaseReleaseVersion(buildinfo.Version))
 			if err != nil || current.LessThan(minimum) {
 				return PackagePreview{}, fmt.Errorf("package requires Denova %s", minimum)
 			}

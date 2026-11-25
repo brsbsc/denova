@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
+	"denova/internal/buildinfo"
 	"denova/internal/platform"
 )
 
@@ -69,5 +71,40 @@ func TestPackageMetadataSurvivesPreviewInstallAndExport(t *testing.T) {
 	}
 	if _, err := s.Preview(ctx, Source{Kind: "file", Filename: "copy.zip"}, raw); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPreparePackageSupportsForkHotfixHostVersions(t *testing.T) {
+	previous := buildinfo.Version
+	t.Cleanup(func() { buildinfo.Version = previous })
+
+	ctx := context.Background()
+	s := testService(t)
+	previewWithMinVersion := func(minVersion string) error {
+		manifest := Manifest{
+			Format:        "denova.resource-pack",
+			SchemaVersion: 1,
+			Package:       PackageInfo{ID: "hotfix-pack", Name: "Hotfix Pack", MinVersion: minVersion},
+			Resources:     []Resource{{ID: "image", Kind: "preset.image", Path: "image.json"}},
+		}
+		files := map[string][]byte{
+			"denova-pack.json": jsonBytes(t, manifest),
+			"image.json":       []byte(`{"name":"Ink","prompt":"Draw in ink"}`),
+		}
+		_, err := s.previewFiles(ctx, Source{Kind: "file", Filename: "hotfix-pack.zip"}, files)
+		return err
+	}
+
+	buildinfo.Version = "0.8.0fix1"
+	if err := previewWithMinVersion("0.8.0"); err != nil {
+		t.Fatalf("minVersion 0.8.0 rejected on host 0.8.0fix1: %v", err)
+	}
+	if err := previewWithMinVersion("0.9.0"); err == nil || !strings.Contains(err.Error(), "0.9.0") {
+		t.Fatalf("expected minVersion 0.9.0 rejection on host 0.8.0fix1, got: %v", err)
+	}
+
+	buildinfo.Version = "0.8.0fix0"
+	if err := previewWithMinVersion("0.8.0"); err == nil || !strings.Contains(err.Error(), "package requires Denova 0.8.0") {
+		t.Fatalf("expected rejection on malformed host version 0.8.0fix0, got: %v", err)
 	}
 }

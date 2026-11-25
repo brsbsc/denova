@@ -157,6 +157,7 @@ try {
   assert.equal(await app.evaluate(() => localStorage.getItem('desktop-smoke-persistence')), 'retained')
   assert.match((await app.api(`/api/projects/${book.project_id}/files/file?path=chapters/desktop-chapter.md`)).content, /MyGo 真实保存/)
   assert.deepEqual(await app.evaluate(() => window.smokeErrors), [])
+  await until(async () => !(await app.api('/api/update/status')).busy)
   await app.close(); app = null
   console.log(`Desktop smoke passed (${process.platform}/${process.arch})`)
 } finally {
