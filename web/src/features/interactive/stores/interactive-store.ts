@@ -27,6 +27,7 @@ export interface StoryStageRuntimeState {
   /** Exact durable pause checkpoint projected by the server. */
   pendingInterruptionId: string
   operationId: string
+  lastOperationStatus?: string
   cycle: number
   activeOutput?: AgentRuntimeActiveOutput
   pendingAsk?: AgentAskInteraction
@@ -73,6 +74,7 @@ export function emptyStoryStageRun(): StoryStageRunState {
       recoveryAbortAvailable: false,
       pendingInterruptionId: '',
       operationId: '',
+      lastOperationStatus: '',
       cycle: 0,
       queue: [],
       openTools: [],

@@ -1,5 +1,5 @@
 import { closeMobilePanes } from '@/components/layout/mobile-pane-events'
-import { startTransition, useLayoutEffect, useRef, useState, type ComponentProps } from 'react'
+import { useLayoutEffect, useRef, useState, type ComponentProps } from 'react'
 import { DndContext, KeyboardSensor, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { useTranslation } from 'react-i18next'
@@ -124,12 +124,13 @@ export function AgentChatActivitySidebar({
                     pinned={preferences.isProjectPinned(project.id)}
                     activities={activitiesByProject.get(project.id) ?? []}
                     onToggle={() => {
-                      if (project.id === activeProjectId) { onSelectProject(project); return }
-                      // Paint the row expansion before mounting the destination workspace.
-                      startTransition(() => {
+                      if (project.id !== activeProjectId) {
                         preferences.recordProjectOpened(project.id)
-                        onSelectProject(project)
-                      })
+                      }
+                      // Commit project selection synchronously with expansion: react-virtuoso 4.18
+                      // mutates its useSyncExternalStore streams inside useLayoutEffect, which
+                      // triggers React 19 forceStoreRerender loops when interleaved with TransitionLane.
+                      onSelectProject(project)
                     }}
                     onCreateSession={(customAgentId) => {
                       preferences.recordProjectOpened(project.id)

@@ -76,6 +76,7 @@ export type AgentPanelView = 'chat' | 'sessions'
 export type AgentPanelChrome = 'panel' | 'workbench'
 
 const WRITING_AGENT_INIT_EVENT = 'nova:writing-agent-init'
+const EMPTY_TIMELINE_ATTACHMENTS: never[] = []
 export const WRITING_COMPOSER_SETTING_DEFAULTS = {
   ide_story_teller_id: DEFAULT_NARRATIVE_STYLE_ID,
   ide_image_preset_id: 'game-cg',
@@ -472,26 +473,28 @@ function AgentPanelComponent({
   }
 
   const timelineAttachments = useMemo(
-    () =>
-      (changeGroupsQuery.data ?? [])
+    () => {
+      const eligible = (changeGroupsQuery.data ?? [])
         // A change group is mutable until its owning Run reaches a terminal
         // state. Mounting it earlier makes an incomplete review look ready and
         // shifts the live timeline while the Agent is still producing output.
         .filter((summary) => Boolean(summary.run_id) && summary.run_id !== activeRunID)
-        .map((summary, index) => ({
-          id: summary.id,
-          runId: summary.run_id || '',
-          content: (
-            <AgentChangeSummaryCard
-              projectId={projectId}
-              summary={summary}
-              disabled={isExecutionActive}
-              eagerPreload={!isExecutionActive && index === 0}
-              onReview={(reviewThreadID, groupID) => onOpenChangeReview?.(reviewThreadID, groupID)}
-              onWorkspaceChanged={onWorkspaceChanged}
-            />
-          ),
-        })),
+      if (eligible.length === 0) return EMPTY_TIMELINE_ATTACHMENTS
+      return eligible.map((summary, index) => ({
+        id: summary.id,
+        runId: summary.run_id || '',
+        content: (
+          <AgentChangeSummaryCard
+            projectId={projectId}
+            summary={summary}
+            disabled={isExecutionActive}
+            eagerPreload={!isExecutionActive && index === 0}
+            onReview={(reviewThreadID, groupID) => onOpenChangeReview?.(reviewThreadID, groupID)}
+            onWorkspaceChanged={onWorkspaceChanged}
+          />
+        ),
+      }))
+    },
     [activeRunID, changeGroupsQuery.data, isExecutionActive, onOpenChangeReview, onWorkspaceChanged, projectId],
   )
 
@@ -648,9 +651,37 @@ function AgentPanelComponent({
     },
     [activeSessionId, onAnswerAsk, onCancelAsk, onRefreshHistory],
   )
+  const attachmentScope = useMemo(
+    () => (activeSessionId ? { kind: 'session' as const, id: activeSessionId } : undefined),
+    [activeSessionId],
+  )
+  const runtimePhase = runtimeProjection?.phase
+  const messageListAfterContent = useMemo(
+    () =>
+      recoveryFailed || runtimePhase === 'suspended' || lastRuntimeFailure ? (
+        <>
+          {recoveryFailed && (
+            <div role="alert" className="rounded-lg border border-[var(--nova-danger-border)] bg-[var(--nova-danger-bg)] px-3 py-2 text-xs text-[var(--nova-danger)]">
+              <p>{t('chat.activity.recoveryFailed')}</p>
+              <Button variant="outline" size="sm" className="mt-2" onClick={onRetryRecovery}>{t('chat.activity.retryRecovery')}</Button>
+            </div>
+          )}
+          <AgentTaskControls suspended={runtimePhase === 'suspended'} pending={commandSubmitting || abortPending} onResume={onResumeTask} onAbort={onStop} />
+          {lastRuntimeFailure ? (
+            <div
+              role="alert"
+              className="whitespace-pre-wrap break-words rounded-lg border border-[var(--nova-danger-border)] bg-[var(--nova-danger-bg)] px-3 py-2 text-xs leading-relaxed text-[var(--nova-danger)]"
+            >
+              {t('chat.activity.requestFailed', { error: lastRuntimeFailure })}
+            </div>
+          ) : null}
+        </>
+      ) : null,
+    [abortPending, commandSubmitting, lastRuntimeFailure, onResumeTask, onRetryRecovery, onStop, recoveryFailed, runtimePhase, t],
+  )
   const messageListProps = {
     projectId,
-    attachmentScope: activeSessionId ? { kind: 'session' as const, id: activeSessionId } : undefined,
+    attachmentScope,
     messages,
     isStreaming,
     visible: active,
@@ -675,21 +706,8 @@ function AgentPanelComponent({
     onExitPlanMode,
     onResolveAsk: resolveAsk,
     activeRunId: runtimeProjection?.active_operation_id,
-    afterContent: recoveryFailed || runtimeProjection?.phase === 'suspended' || lastRuntimeFailure ? <>
-      {recoveryFailed && <div role="alert" className="rounded-lg border border-[var(--nova-danger-border)] bg-[var(--nova-danger-bg)] px-3 py-2 text-xs text-[var(--nova-danger)]">
-        <p>{t('chat.activity.recoveryFailed')}</p>
-        <Button variant="outline" size="sm" className="mt-2" onClick={onRetryRecovery}>{t('chat.activity.retryRecovery')}</Button>
-      </div>}
-      <AgentTaskControls suspended={runtimeProjection?.phase === 'suspended'} pending={commandSubmitting || abortPending} onResume={onResumeTask} onAbort={onStop} />
-      {lastRuntimeFailure ? (
-      <div
-        role="alert"
-        className="whitespace-pre-wrap break-words rounded-lg border border-[var(--nova-danger-border)] bg-[var(--nova-danger-bg)] px-3 py-2 text-xs leading-relaxed text-[var(--nova-danger)]"
-      >
-        {t('chat.activity.requestFailed', { error: lastRuntimeFailure })}
-      </div>
-    ) : null}</> : null,
-    afterContentKey: `${recoveryFailed}:${runtimeProjection?.phase || 'idle'}:${commandSubmitting}:${lastRuntimeFailure || ''}`,
+    afterContent: messageListAfterContent,
+    afterContentKey: `${recoveryFailed}:${runtimePhase || 'idle'}:${commandSubmitting}:${lastRuntimeFailure || ''}`,
   }
   const inputAreaProps = {
     page,

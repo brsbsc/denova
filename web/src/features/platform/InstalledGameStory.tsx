@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useTheme } from 'next-themes'
 import { useQueryClient } from '@tanstack/react-query'
@@ -29,6 +29,8 @@ export function InstalledGameStory({ instance, item, active, picker, onRefresh }
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [upgrade, setUpgrade] = useState<string | null>(null)
+  const openWantedRef = useRef(false)
+  const openingRef = useRef<{ key: string; promise: Promise<RuntimeSnapshot> } | null>(null)
   const release = item?.releases.find(release => release.ref.releaseId === instance.releaseId)
   const gameName = localized(release?.manifest.name, i18n.language) || t('platform.type.game')
   const available = !!item?.enabled && !item.removed && !item.unavailableReason
@@ -39,23 +41,40 @@ export function InstalledGameStory({ instance, item, active, picker, onRefresh }
     finally { setBusy(false) }
   }
   useEffect(() => {
-    if (!active || !available || !hostLocal) return
+    if (!active || !available || !hostLocal) {
+      openWantedRef.current = false
+      return
+    }
+    openWantedRef.current = true
     let cancelled = false
     setBusy(true)
-    void management<RuntimeSnapshot>(`/instances/${instance.instanceId}/open`, 'POST', { locale: i18n.language, theme: resolvedTheme })
+    const openKey = instance.instanceId
+    const pending = openingRef.current?.key === openKey
+      ? openingRef.current.promise
+      : management<RuntimeSnapshot>(`/instances/${openKey}/open`, 'POST', { locale: i18n.language, theme: resolvedTheme })
+    openingRef.current = { key: openKey, promise: pending }
+    void pending
       .then(value => {
         if (cancelled) {
-          void management(`/runtimes/${value.id}/stop`, 'POST', {}).catch(stopError => {
-            console.warn('[extensions] stopping cancelled game runtime failed', { runtimeId: value.id, error: stopError })
-          })
+          if (!openWantedRef.current) {
+            void management(`/runtimes/${value.id}/stop`, 'POST', {}).catch(stopError => {
+              console.warn('[extensions] stopping cancelled game runtime failed', { runtimeId: value.id, error: stopError })
+            })
+          }
           return
         }
         setRuntime(value)
         setError('')
       })
       .catch(error => { if (!cancelled) setError(platformError(error)) })
-      .finally(() => { if (!cancelled) setBusy(false) })
-    return () => { cancelled = true }
+      .finally(() => {
+        if (openingRef.current?.promise === pending) openingRef.current = null
+        if (!cancelled) setBusy(false)
+      })
+    return () => {
+      cancelled = true
+      openWantedRef.current = false
+    }
     // Appearance changes are delivered to the frame without starting another runtime.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instance.instanceId, active, available, hostLocal])

@@ -28,7 +28,8 @@ test('generates usable LAN credentials in one save and preserves existing creden
   const generatedPassword = await password.inputValue()
   expect(generatedUsername).toMatch(/^denova-.+/)
   expect(generatedPassword).toMatch(/^[\w-]{24}$/)
-  const login = await request.post('/api/auth/login', {
+  const backendOrigin = `http://127.0.0.1:${process.env.DENOVA_E2E_BACKEND_PORT || '18080'}`
+  const login = await request.post(`${backendOrigin}/api/auth/login`, {
     headers: { 'X-Forwarded-For': '192.168.1.8' },
     data: { username: generatedUsername, password: generatedPassword },
   })

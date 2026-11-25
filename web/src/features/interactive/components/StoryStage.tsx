@@ -669,10 +669,16 @@ export function StoryStage({ active = true, projectId, workspace, styleSceneSugg
     await onDone({ silent: true })
   }
 
+  const attachmentScope = useMemo(
+    () => (storyId ? { kind: 'story' as const, id: storyId } : undefined),
+    [storyId],
+  )
   const waitingToStartOpening = Boolean(pendingOpeningStoryId) && pendingOpeningStoryId === storyId
   const openingRuntimeActive = streaming
     || Boolean(stageRun.runtime.operationId)
     || Boolean(stageRun.runtime.pendingInterruptionId)
+    || Boolean(stageRun.runtime.lastOperationStatus)
+    || stageRun.runtime.abortPending
     || stageRun.runtime.recoveryPaused
     || stageRun.runtime.queue.length > 0
     || Boolean(stageRun.retryMessage)
@@ -776,7 +782,7 @@ export function StoryStage({ active = true, projectId, workspace, styleSceneSugg
             ) : (
               <MessageList
                 projectId={projectId}
-                attachmentScope={storyId ? { kind: 'story', id: storyId } : undefined}
+                attachmentScope={attachmentScope}
                 messages={agentMessages}
                 onResolveAsk={async (view, action) => {
                   const askID = agentViewAskID(view)

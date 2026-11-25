@@ -103,6 +103,10 @@ export interface AgentChatConversationHost {
   }
 }
 
+const EMPTY_LORE_LABELS: Record<string, string> = {}
+const EMPTY_LORE_SUGGESTIONS: AgentPanelProps['loreSuggestions'] = []
+const EMPTY_FILE_SUGGESTIONS: string[] = []
+
 /**
  * One independently running AgentChat conversation.
  *
@@ -335,6 +339,25 @@ function AgentChatConversationTabComponent({
     [onRunningChange, projectId, sessionId],
   )
 
+  const conversationBinding = useMemo(
+    () => ({ mode: 'agent_chat' as const, project_id: projectId, session_id: sessionId }),
+    [projectId, sessionId],
+  )
+  const handleAnalyzeContext = useCallback<AgentPanelProps['onAnalyzeContext']>(
+    (message, options) => chat.analyzeContext(messageTransform?.(message) ?? message, options),
+    [chat.analyzeContext, messageTransform],
+  )
+  const handleRetryRecovery = useCallback(() => {
+    void chat.resumeActiveChat()
+  }, [chat.resumeActiveChat])
+  const handlePanelWorkspaceChanged = useCallback(
+    (paths: string[]) => onWorkspaceChanged?.(workspace, paths, {
+      impact: 'structure',
+      origin: 'external',
+    }),
+    [onWorkspaceChanged, workspace],
+  )
+
   return (
     <AgentPanel
       page={page}
@@ -366,7 +389,7 @@ function AgentChatConversationTabComponent({
       activeSessionId={chat.activeSessionId || sessionId}
       sessionDraft={draft}
       sessionTransitionPending={host?.sessionTransitionPending}
-      conversationBinding={{ mode: 'agent_chat', project_id: projectId, session_id: sessionId }}
+      conversationBinding={conversationBinding}
       isStreaming={chat.isStreaming}
       isExecutionActive={chat.isExecutionActive}
       runtimeProjection={chat.runtimeProjection}
@@ -376,14 +399,14 @@ function AgentChatConversationTabComponent({
       activityContent={chat.activityContent}
       references={chat.references}
       loreReferences={chat.loreReferences}
-      loreReferenceLabels={host?.loreReferenceLabels ?? {}}
-      loreSuggestions={host?.loreSuggestions ?? []}
+      loreReferenceLabels={host?.loreReferenceLabels ?? EMPTY_LORE_LABELS}
+      loreSuggestions={host?.loreSuggestions ?? EMPTY_LORE_SUGGESTIONS}
       styleScenes={chat.styleScenes}
       textSelections={chat.textSelections}
       planMode={chat.planMode}
       hasEarlierMessages={chat.hasEarlierMessages}
       isLoadingEarlierHistory={chat.isLoadingEarlierHistory}
-      fileSuggestions={host?.fileSuggestions ?? []}
+      fileSuggestions={host?.fileSuggestions ?? EMPTY_FILE_SUGGESTIONS}
       onCreateSession={onCreateSession}
       onSwitchSession={host?.onSwitchSession ?? chat.switchChatSession}
       onRenameSession={host?.onRenameSession ?? chat.renameChatSession}
@@ -394,13 +417,13 @@ function AgentChatConversationTabComponent({
       onCancelAsk={client.cancelSessionAsk}
       onRemoveContextCompaction={client.removeContextCompaction}
       onSend={send}
-      onAnalyzeContext={(message, options) => chat.analyzeContext(messageTransform?.(message) ?? message, options)}
+      onAnalyzeContext={handleAnalyzeContext}
       ideContext={host?.ideContext}
       onStop={chat.stop}
       onSuspend={chat.suspend}
       onResumeTask={chat.resumeTask}
       recoveryFailed={chat.recoveryFailed}
-      onRetryRecovery={() => { void chat.resumeActiveChat() }}
+      onRetryRecovery={handleRetryRecovery}
       onSteerQueuedCommand={chat.steerQueuedCommand}
       onDeleteQueuedCommand={chat.deleteQueuedCommand}
       onEditQueuedCommand={chat.editQueuedCommand}
@@ -418,10 +441,7 @@ function AgentChatConversationTabComponent({
       onOpenChangeReview={onOpenChangeReview}
       activeSubAgentSession={activeSubAgentSession ?? host?.activeSubAgentSession}
       onSubAgentSessionOpen={onSubAgentSessionOpen ?? host?.onSubAgentSessionOpen}
-      onWorkspaceChanged={(paths) => onWorkspaceChanged?.(workspace, paths, {
-        impact: 'structure',
-        origin: 'external',
-      })}
+      onWorkspaceChanged={handlePanelWorkspaceChanged}
     />
   )
 }

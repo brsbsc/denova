@@ -47,11 +47,15 @@ vi.mock('@/hooks/useSkillCommands', () => ({
   useSkillCommands: (...args: unknown[]) => testMocks.useSkillCommandsMock(...args),
 }))
 
-vi.mock('../api', () => ({
+vi.mock('../api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api')>()),
   analyzeInteractiveContext: vi.fn(),
   compactInteractiveContext: vi.fn(),
   generateInteractiveImage: testMocks.generateInteractiveImageMock,
   getActiveInteractiveChat: testMocks.getActiveInteractiveChatMock,
+  getActorStateModules: vi.fn().mockResolvedValue([]),
+  getEventPackages: vi.fn().mockResolvedValue([]),
+  getRuleSystems: vi.fn().mockResolvedValue([]),
   removeInteractiveContextCompaction: vi.fn(),
   recoverInteractiveAgentRuntime: testMocks.recoverInteractiveAgentRuntimeMock,
   resolveInteractiveAsk: testMocks.resolveInteractiveAskMock,
@@ -807,6 +811,97 @@ describe('StoryStage runtime recovery', () => {
       expect(submitInteractiveAgentCommandMock).not.toHaveBeenCalled()
       expect(sendInteractiveMessageMock).not.toHaveBeenCalled()
     } finally {
+      unmount()
+    }
+  })
+
+  it('keeps the composer and opening summary visible when cancelling a reloaded suspended opening that settles immediately', async () => {
+    const user = userEvent.setup()
+    const abortAction = {
+      kind: 'abort',
+      action_id: 'abort-opening-1',
+      command_id: 'abort-cmd-1',
+      operation_id: 'opening-op-1',
+    }
+    const resumeAction = {
+      kind: 'resume',
+      action_id: 'resume-opening-1',
+      command_id: 'resume-cmd-1',
+      operation_id: 'opening-op-1',
+    }
+    getActiveInteractiveChatMock
+      .mockResolvedValueOnce({
+        active: false,
+        phase: 'suspended',
+        recovery_paused: true,
+        runtime_recoverable: true,
+        active_operation_id: 'opening-op-1',
+        pending_interruption_id: 'intr-opening-1',
+        recovery_actions: [resumeAction, abortAction],
+      })
+      .mockResolvedValue({
+        active: false,
+        phase: 'idle',
+        recovery_paused: false,
+        runtime_recoverable: false,
+        active_operation_id: '',
+        pending_interruption_id: '',
+        last_operation: { operation_id: 'opening-op-1', command_id: 'abort-cmd-1', status: 'aborted', reason: 'user_requested' },
+      })
+    recoverInteractiveAgentRuntimeMock.mockResolvedValue({
+      task_id: 'settled-abort-task',
+      status: 'aborted',
+      stream_cursor: 2,
+      cursor: 4,
+      recovery_action: abortAction,
+    })
+    const abortStream = controllableInteractiveStream()
+    streamActiveInteractiveChatMock.mockResolvedValue(abortStream.readable)
+
+    const zeroTurnStory = {
+      id: 'story-1',
+      title: '未命名故事',
+      title_source: 'pending' as const,
+      origin: '',
+      protagonist: { mode: 'custom' as const, name: '旅行者林川', profile: '旅人' },
+      story_teller_id: 'classic',
+      planning_template_id: 'default',
+      choice_count: 5,
+      reply_target_chars: 2000,
+      image_settings: { mode: 'manual' as const, interval_turns: 3 },
+      opening: { mode: 'custom' as const, custom_text: '雨夜车站广播响起。' },
+      created_at: '2026-06-27T00:00:00Z',
+      updated_at: '2026-06-27T00:00:00Z',
+      branches: 1,
+      events: 0,
+      turn_count: 0,
+    }
+    const emptySnapshot = { story_id: 'story-1', branch_id: 'main', turns: [], turn_count: 0, state: {} }
+    const { unmount } = render(
+      <StoryStageHarness
+        story={zeroTurnStory}
+        initialSnapshot={emptySnapshot}
+        onDone={() => Promise.resolve(emptySnapshot)}
+      />,
+    )
+
+    try {
+      await screen.findByRole('button', { name: '继续任务' })
+      expect(await screen.findByRole('region', { name: '故事开局' })).toHaveTextContent('雨夜车站广播响起。')
+
+      await user.click(screen.getByRole('button', { name: '取消任务' }))
+      abortStream.enqueue({
+        id: '1',
+        event: 'aborted',
+        data: JSON.stringify({ reason: 'user_requested' }),
+      })
+      abortStream.close()
+
+      await waitFor(() => expect(screen.queryByRole('button', { name: '继续任务' })).not.toBeInTheDocument())
+      expect(getStageInput()).toBeVisible()
+      expect(screen.getByRole('region', { name: '故事开局' })).toHaveTextContent('旅行者林川')
+    } finally {
+      abortStream.close()
       unmount()
     }
   })

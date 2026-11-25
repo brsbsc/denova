@@ -304,11 +304,14 @@ export function useStoryStageRuntime({
     try {
       const outcome = await interactiveAgentCommands.abort()
       const recoveryTaskID = outcome.receipt && 'task_id' in outcome.receipt ? String(outcome.receipt.task_id || '').trim() : ''
+      const projected = await getActiveInteractiveChat(storyId, branchId)
       if (recoveryTaskID) {
-        const projected = await getActiveInteractiveChat(storyId, branchId)
         const controller = new AbortController()
         registerStoryRunAbortController(stageKey, controller)
         void resumeActiveStoryRun({ ...projected, task_id: recoveryTaskID, runtime_recoverable: false }, controller, () => controller.signal.aborted).catch(appendError)
+      } else {
+        interactiveAgentCommands.project(projected, 'disconnected')
+        setActivity('')
       }
     } catch (error) {
       setActivity('')

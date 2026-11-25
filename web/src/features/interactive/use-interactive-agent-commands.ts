@@ -33,6 +33,7 @@ export function useInteractiveAgentCommands({ storyId, branchId, readRuntime, on
       const sameOperation = Boolean(projected.operationId && projected.operationId === current.operationId)
       return {
         ...projected,
+        lastOperationStatus: projected.lastOperationStatus || current.lastOperationStatus || '',
         streamEventCursor: sameOperation ? current.streamEventCursor : '',
         abortPending: sameOperation ? current.abortPending : false,
       }
@@ -272,6 +273,7 @@ export function runtimeFromActiveInteractiveChat(
     recoveryAbortAvailable: Boolean(active.recovery_actions?.some((action) => action.kind === 'abort')),
     pendingInterruptionId: active.pending_interruption_id?.trim() || '',
     operationId: active.active_operation_id || '',
+    lastOperationStatus: active.last_operation?.status || '',
     cycle: active.active_cycle || 0,
     activeOutput: active.active_output,
     pendingAsk: active.pending_ask,

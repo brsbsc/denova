@@ -1,16 +1,19 @@
 package book
 
 import (
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
 	"strings"
-
-	workspacelayout "denova/internal/workspace"
+	"syscall"
+	"time"
 )
 
 // StructureTitles supplies localized names only for containers absent in the
@@ -270,64 +273,198 @@ func (s *Service) PreserveEmptyManuscriptDirectories(nodes []ManuscriptNode) err
 }
 
 // ApplyStructure requires the caller's exclusive workspace lease and a durable
-// version backup. Stage on the same filesystem and roll back both directory and
-// confirmation state if any step fails. Version history covers crash recovery.
+// version backup. Mutate chapters in place rather than renaming the watched
+// chapters root directory (which Windows rejects with ERROR_ACCESS_DENIED when
+// fsnotify holds ReadDirectoryChangesW handles on chapters or child containers)
+// and roll back both manuscript files and confirmation state if any step fails.
 func (s *Service) ApplyStructure(plan StructurePreview) (err error) {
 	if !plan.To.Valid() || plan.files == nil {
 		return ErrInvalidStructure
 	}
-	stageRoot := workspacelayout.Path(s.workspace, "changes")
-	if err = os.MkdirAll(stageRoot, 0o755); err != nil {
-		return err
-	}
-	stage, err := os.MkdirTemp(stageRoot, "structure-")
+	structureData, err := json.Marshal(struct {
+		Structure ChapterStructure `json:"structure"`
+	}{plan.To})
 	if err != nil {
 		return err
 	}
-	cleanupStage := true
-	defer func() {
-		if cleanupStage {
-			_ = os.RemoveAll(stage)
-		}
-	}()
-	if err = InitializeChapterStructure(stage, plan.To); err != nil {
-		return err
+	targetFiles := make(map[string][]byte, len(plan.files)+1)
+	for rel, data := range plan.files {
+		clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(rel)))
+		targetFiles[clean] = data
 	}
-	for path, data := range plan.files {
-		absolute := filepath.Join(stage, filepath.FromSlash(path))
-		if err = os.MkdirAll(filepath.Dir(absolute), 0o755); err != nil {
-			return err
-		}
-		if err = os.WriteFile(absolute, data, 0o644); err != nil {
-			return err
-		}
-	}
+	targetFiles[structureFile] = append(structureData, '\n')
+	targetDirs := manuscriptAncestorDirs(targetFiles)
+
 	oldStatus, err := s.readChapterStatusStore()
 	if err != nil {
 		return err
 	}
 	root := filepath.Join(s.workspace, "chapters")
-	if err = os.MkdirAll(root, 0o755); err != nil {
+	if err = mkdirAllRetryPermission(root); err != nil {
 		return err
 	}
-	backup := filepath.Join(stage, "original")
-	if err = os.Rename(root, backup); err != nil {
+	beforeDirs, beforeFiles, err := snapshotManuscriptSubtree(s.workspace, root)
+	if err != nil {
 		return err
 	}
 	defer func() {
 		if err != nil {
-			removeErr := os.RemoveAll(root)
-			restoreErr := os.Rename(backup, root)
-			if restoreErr != nil {
-				cleanupStage = false
-			}
+			restoreErr := syncManuscriptSubtree(s.workspace, beforeDirs, beforeFiles)
 			statusErr := s.writeChapterStatusStore(oldStatus)
-			err = errors.Join(err, removeErr, restoreErr, statusErr)
+			err = errors.Join(err, restoreErr, statusErr)
 		}
 		s.InvalidateSummary(nil, true)
 	}()
-	if err = os.Rename(filepath.Join(stage, "chapters"), root); err != nil {
+	if err = syncManuscriptSubtree(s.workspace, targetDirs, targetFiles); err != nil {
 		return err
 	}
 	return s.writeChapterStatusStore(chapterStatusStore{Chapters: plan.confirmed})
+}
+
+func manuscriptAncestorDirs(files map[string][]byte) map[string]bool {
+	dirs := map[string]bool{"chapters": true}
+	for rel := range files {
+		for dir := path.Dir(rel); dir != "." && dir != "/" && dir != ""; dir = path.Dir(dir) {
+			dirs[dir] = true
+			if dir == "chapters" {
+				break
+			}
+		}
+	}
+	return dirs
+}
+
+func snapshotManuscriptSubtree(workspace, root string) (map[string]bool, map[string][]byte, error) {
+	dirs := map[string]bool{"chapters": true}
+	files := map[string][]byte{}
+	err := filepath.WalkDir(root, func(fullPath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, relErr := filepath.Rel(workspace, fullPath)
+		if relErr != nil {
+			return relErr
+		}
+		norm := filepath.ToSlash(rel)
+		if entry.IsDir() {
+			dirs[norm] = true
+			return nil
+		}
+		data, readErr := os.ReadFile(fullPath)
+		if readErr != nil {
+			return readErr
+		}
+		files[norm] = data
+		return nil
+	})
+	return dirs, files, err
+}
+
+func syncManuscriptSubtree(workspace string, targetDirs map[string]bool, targetFiles map[string][]byte) error {
+	root := filepath.Join(workspace, "chapters")
+	currentDirs, currentFiles, err := snapshotManuscriptSubtree(workspace, root)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	for rel := range currentFiles {
+		if _, keep := targetFiles[rel]; !keep || targetDirs[rel] {
+			if removeErr := os.Remove(filepath.Join(workspace, filepath.FromSlash(rel))); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				return removeErr
+			}
+		}
+	}
+	if err := removeObsoleteManuscriptDirs(workspace, currentDirs, targetDirs); err != nil {
+		return err
+	}
+	sortedDirs := make([]string, 0, len(targetDirs))
+	for rel := range targetDirs {
+		sortedDirs = append(sortedDirs, rel)
+	}
+	sort.Strings(sortedDirs)
+	for _, rel := range sortedDirs {
+		if err := mkdirAllRetryPermission(filepath.Join(workspace, filepath.FromSlash(rel))); err != nil {
+			return err
+		}
+	}
+	sortedFiles := make([]string, 0, len(targetFiles))
+	for rel := range targetFiles {
+		sortedFiles = append(sortedFiles, rel)
+	}
+	sort.Strings(sortedFiles)
+	for _, rel := range sortedFiles {
+		if err := atomicWriteManuscriptFile(workspace, rel, targetFiles[rel]); err != nil {
+			return err
+		}
+	}
+	return removeObsoleteManuscriptDirs(workspace, currentDirs, targetDirs)
+}
+
+func removeObsoleteManuscriptDirs(workspace string, currentDirs, targetDirs map[string]bool) error {
+	obsolete := make([]string, 0, len(currentDirs))
+	for rel := range currentDirs {
+		if rel == "chapters" || targetDirs[rel] {
+			continue
+		}
+		obsolete = append(obsolete, rel)
+	}
+	sort.SliceStable(obsolete, func(i, j int) bool { return len(obsolete[i]) > len(obsolete[j]) })
+	for _, rel := range obsolete {
+		fullPath := filepath.Join(workspace, filepath.FromSlash(rel))
+		if err := os.Remove(fullPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			if errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
+				continue
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func mkdirAllRetryPermission(dirPath string) error {
+	var err error
+	for attempt := 0; attempt < 6; attempt++ {
+		if err = os.MkdirAll(dirPath, 0o755); err == nil || !errors.Is(err, os.ErrPermission) {
+			return err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return err
+}
+
+func atomicWriteManuscriptFile(workspace, rel string, data []byte) error {
+	targetPath := filepath.Join(workspace, filepath.FromSlash(rel))
+	parentPath := filepath.Dir(targetPath)
+	if err := mkdirAllRetryPermission(parentPath); err != nil {
+		return err
+	}
+	var random [8]byte
+	if _, err := cryptorand.Read(random[:]); err != nil {
+		return err
+	}
+	tempPath := filepath.Join(parentPath, fmt.Sprintf(".%s.denova-%x.tmp", filepath.Base(targetPath), random[:]))
+	file, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	removeTemp := true
+	defer func() {
+		_ = file.Close()
+		if removeTemp {
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if _, err := file.Write(data); err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, targetPath); err != nil {
+		return err
+	}
+	removeTemp = false
+	return nil
 }

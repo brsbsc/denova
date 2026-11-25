@@ -187,3 +187,35 @@ func TestManagerInstancesSkipsIncompleteInstanceDirectory(t *testing.T) {
 		t.Fatalf("Instances() = %+v, want only %q", list, valid.ID)
 	}
 }
+
+func TestServeStaticViewServesModuleScriptsWithJavaScriptMimeType(t *testing.T) {
+	m, projectID := testManager(t)
+	release := testInstall(t, m, testCandidate(t, m, projectID, "static", "test.static.mime", Game))
+	rt := &Runtime{
+		ctx:          context.Background(),
+		manager:      m,
+		baseURL:      "http://example.com",
+		parentOrigin: "http://127.0.0.1:15173",
+		status:       "running",
+		owner:        &activation{release: release},
+	}
+
+	viewID := release.Manifest.Views[0].ID
+	for _, tc := range []struct {
+		target string
+		want   string
+	}{
+		{target: "/views/" + viewID + "/", want: "text/html"},
+		{target: "/views/" + viewID + "/server.mjs", want: "text/javascript"},
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, tc.target, nil)
+		rt.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want 200: %s", tc.target, rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, tc.want) {
+			t.Fatalf("GET %s Content-Type = %q, want prefix %q", tc.target, got, tc.want)
+		}
+	}
+}

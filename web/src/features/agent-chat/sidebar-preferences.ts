@@ -216,9 +216,10 @@ export function useAgentChatSidebarPreferences(projects: AgentChatProject[], pro
     [projects, projectsLoaded],
   )
   const recordProjectOpened = useCallback((id: string) => {
+    const openedAt = Date.now()
     setPreferences((current) => ({
       ...current,
-      projectOpenedAt: { ...current.projectOpenedAt, [id]: Date.now() },
+      projectOpenedAt: { ...current.projectOpenedAt, [id]: openedAt },
     }))
   }, [])
   const toggleProjectPinned = useCallback((id: string) => {

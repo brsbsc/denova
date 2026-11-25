@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  memo,
   useCallback,
   useImperativeHandle,
   useMemo,
@@ -81,10 +82,13 @@ interface ChapterOutlineListContext {
   fileOperations: OutlineFileMenuOperations
 }
 
-const OUTLINE_LIST_COMPONENTS: Components<ChapterOutlineRow, ChapterOutlineListContext> = {
+const OUTLINE_LIST_COMPONENTS: Components<undefined, ChapterOutlineListContext> = {
   Header: ChapterOutlineListHeader,
   Footer: ChapterOutlineListFooter,
 }
+const OUTLINE_LIST_OVERSCAN = { main: 240, reverse: 120 }
+const OUTLINE_LIST_INCREASE_VIEWPORT_BY = { top: 160, bottom: 320 }
+const MemoizedVirtuoso = memo(Virtuoso) as typeof Virtuoso
 
 /**
  * Windowed chapter navigation. Only visible chapter rows mount their menus and React subtree;
@@ -161,19 +165,27 @@ export const ChapterOutlineList = forwardRef<ChapterOutlineListHandle, ChapterOu
   const handleScroll = useCallback((event: UIEvent<HTMLElement>) => {
     onScrollTopChange(event.currentTarget.scrollTop)
   }, [onScrollTopChange])
+  const computeItemKey = useCallback((index: number) => rows[index]?.key ?? `outline-${index}`, [rows])
+  const renderItemContent = useCallback(
+    (index: number, _item: undefined, ctx: ChapterOutlineListContext) => {
+      const row = rows[index]
+      return row ? renderChapterOutlineRow(index, row, ctx) : null
+    },
+    [rows],
+  )
 
   return (
-    <Virtuoso
+    <MemoizedVirtuoso
       ref={virtuosoRef}
       scrollerRef={handleScrollerRef}
-      data={rows}
+      totalCount={rows.length}
       context={context}
       components={OUTLINE_LIST_COMPONENTS}
-      computeItemKey={(_index, row) => row.key}
-      itemContent={renderChapterOutlineRow}
+      computeItemKey={computeItemKey}
+      itemContent={renderItemContent}
       initialItemCount={Math.min(rows.length, 24)}
-      overscan={{ main: 240, reverse: 120 }}
-      increaseViewportBy={{ top: 160, bottom: 320 }}
+      overscan={OUTLINE_LIST_OVERSCAN}
+      increaseViewportBy={OUTLINE_LIST_INCREASE_VIEWPORT_BY}
       onScroll={handleScroll}
       role="navigation"
       aria-label={navigationLabel}

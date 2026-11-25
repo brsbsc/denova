@@ -1,5 +1,5 @@
 import { ToolInspectorHost, type InspectableToolMessage } from './ToolInspector'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode, UIEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso } from 'react-virtuoso'
@@ -112,6 +112,10 @@ export interface TurnScrollRequest {
 
 const MESSAGE_LIST_OVERSCAN = { main: 520, reverse: 260 }
 const MESSAGE_LIST_INCREASE_VIEWPORT_BY = { top: 420, bottom: 900 }
+const MESSAGE_LIST_INITIAL_END_INDEX = { index: 'LAST', align: 'end' } as const
+const EMPTY_TIMELINE_ATTACHMENTS: AgentTimelineAttachment[] = []
+const EMPTY_CHAT_LIST_ITEMS: AgentChatListItem[] = []
+const MemoizedVirtuoso = memo(Virtuoso) as typeof Virtuoso
 const MESSAGE_LIST_COMPONENTS: Components<AgentChatListItem, MessageListVirtuosoContext> = {
   Header: MessageListHeader,
   Footer: MessageListFooter,
@@ -137,7 +141,7 @@ export function MessageList(props: MessageListProps) {
   return <VirtualizedMessageState key={props.scrollResetKey || 'default'}><MessageListContent {...props} /></VirtualizedMessageState>
 }
 
-function MessageListContent({ projectId, attachmentScope, messages, projection, isStreaming, activeRunId, visible = true, isExecutionActive = isStreaming, activityContent, highlightDialogue = false, scrollResetKey, bottomPaddingClassName = '', bottomPaddingPx, contentClassName, onScrollerChange, beforeContent, afterContent, afterContentScroll = 'follow', afterContentKey, hasEarlierMessages = false, isLoadingEarlierMessages = false, onLoadEarlierMessages, autoLoadEarlierMessages = false, onLoadExecutionDetails, timelineAttachments = [], messageStyle, collapseTraceGroups = false, activeTraceDisplay = 'expanded', canMutateMessage, onEditMessage, onEditAssistantReply, onCreateBranch, onRegenerateMessage, onSwitchMessageVersion, onOpenSubAgentSession, onInsertIllustration, onReadAloud, onGenerateInteractiveImage, generatingInteractiveImageTurnId, activeSubAgentSessionKey, onApprovePlan, onContinuePlan, onExitPlanMode, onResolveAsk, turnScrollRequest, onVisibleTurnAnchorChange }: MessageListProps) {
+function MessageListContent({ projectId, attachmentScope, messages, projection, isStreaming, activeRunId, visible = true, isExecutionActive = isStreaming, activityContent, highlightDialogue = false, scrollResetKey, bottomPaddingClassName = '', bottomPaddingPx, contentClassName, onScrollerChange, beforeContent, afterContent, afterContentScroll = 'follow', afterContentKey, hasEarlierMessages = false, isLoadingEarlierMessages = false, onLoadEarlierMessages, autoLoadEarlierMessages = false, onLoadExecutionDetails, timelineAttachments = EMPTY_TIMELINE_ATTACHMENTS, messageStyle, collapseTraceGroups = false, activeTraceDisplay = 'expanded', canMutateMessage, onEditMessage, onEditAssistantReply, onCreateBranch, onRegenerateMessage, onSwitchMessageVersion, onOpenSubAgentSession, onInsertIllustration, onReadAloud, onGenerateInteractiveImage, generatingInteractiveImageTurnId, activeSubAgentSessionKey, onApprovePlan, onContinuePlan, onExitPlanMode, onResolveAsk, turnScrollRequest, onVisibleTurnAnchorChange }: MessageListProps) {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const renderedItemsRef = useRef<ListItem<AgentChatListItem>[]>([])
@@ -174,18 +178,21 @@ function MessageListContent({ projectId, attachmentScope, messages, projection, 
     ? ''
     : activityContent || (isStreaming && !hasFinalResponse ? t('chat.activity.thinking') : '')
   const listItems = useMemo(
-    () => buildAgentChatListItems({
-      views,
-      isStreaming,
-      activeRunId,
-      isExecutionActive,
-      visibleActivityContent,
-      collapseTraceGroups,
-      groupSubAgentTimeline: Boolean(onOpenSubAgentSession),
-      timelineAttachments,
-      disclosures,
-      activeTraceDisplay,
-    }),
+    () => {
+      const built = buildAgentChatListItems({
+        views,
+        isStreaming,
+        activeRunId,
+        isExecutionActive,
+        visibleActivityContent,
+        collapseTraceGroups,
+        groupSubAgentTimeline: Boolean(onOpenSubAgentSession),
+        timelineAttachments,
+        disclosures,
+        activeTraceDisplay,
+      })
+      return built.length === 0 ? EMPTY_CHAT_LIST_ITEMS : built
+    },
     [activeTraceDisplay, disclosures, activeRunId, collapseTraceGroups, isExecutionActive, isStreaming, onOpenSubAgentSession, timelineAttachments, views, visibleActivityContent],
   )
   useLayoutEffect(() => {
@@ -382,6 +389,11 @@ function MessageListContent({ projectId, attachmentScope, messages, projection, 
     setDisclosures(current => ({ ...current, [key]: expanded }))
   }, [onLoadExecutionDetails, resolveMessageScroller, scrollLock.releaseBottomLock])
 
+  const computeItemKey = useCallback(
+    (index: number, item?: AgentChatListItem) => item?.key || listItems[index - firstItemIndex]?.key || `agent-chat-item-${index}`,
+    [firstItemIndex, listItems],
+  )
+
   const itemContent = useCallback((index: number, item?: AgentChatListItem) => {
     const resolvedItem = item || listItems[index - firstItemIndex]
     if (!resolvedItem) return null
@@ -464,7 +476,7 @@ function MessageListContent({ projectId, attachmentScope, messages, projection, 
     <ToolInspectorHost projectId={projectId} resolveMessage={resolveInspectedMessage} restoreFocus={resolveMessageScroller}>
     <AttachmentPreviewScopeProvider projectId={projectId} scope={attachmentScope}>
       <div ref={containerRef} className="relative flex min-h-0 flex-1 flex-col">
-      <Virtuoso
+      <MemoizedVirtuoso
         key={scrollResetKey || 'default'}
         ref={scrollLock.virtuosoRef}
         scrollerRef={setScroller}
@@ -478,15 +490,17 @@ function MessageListContent({ projectId, attachmentScope, messages, projection, 
         atBottomStateChange={scrollLock.onAtBottomStateChange}
         atBottomThreshold={VIRTUOSO_BOTTOM_THRESHOLD}
         totalListHeightChanged={tailFollowActive ? scrollLock.syncStreamingTailLayout : scrollLock.syncIdleBottomLayout}
-        initialTopMostItemIndex={initialPosition === 'end' ? { index: 'LAST', align: 'end' } : 0}
+        initialTopMostItemIndex={initialPosition === 'end' ? MESSAGE_LIST_INITIAL_END_INDEX : 0}
         firstItemIndex={firstItemIndex}
-        data={listItems}
+        // Pass totalCount instead of data: react-virtuoso 4.18's listState stream does not
+        // deduplicate data emissions when empty or hidden, causing React 19 store loops.
+        totalCount={listItems.length}
         context={virtuosoContext}
         components={MESSAGE_LIST_COMPONENTS}
         // Keep short conversations top-aligned. Initial restoration still scrolls
         // long history to its latest message, while the streaming tail owns active runs.
         alignToBottom={false}
-        computeItemKey={(index, item) => item?.key || listItems[index - firstItemIndex]?.key || `agent-chat-item-${index}`}
+        computeItemKey={computeItemKey}
         itemContent={itemContent}
         itemsRendered={handleItemsRendered}
         overscan={MESSAGE_LIST_OVERSCAN}

@@ -84,3 +84,48 @@ func TestBookStructureRejectsStalePreviewAndRestoresWholeBook(t *testing.T) {
 		t.Fatalf("empty volume not restored: %+v", summary.Manuscript)
 	}
 }
+
+func TestBookStructureConvertsWhileFileWatchSubscribed(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	application, err := New(ctx, &config.Config{OpenAIModel: "test-model", DenovaDir: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer application.Close()
+
+	created, err := application.CreateBook(ctx, root, "Watched Structure Book", "", "", book.StructureVolumes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := book.NewService(created.Workspace)
+	chapterPath := "chapters/v00001-Volume/ch00001-Chapter.md"
+	if err := files.Create(chapterPath, "file", "Watched prose"); err != nil {
+		t.Fatal(err)
+	}
+	if err := files.SetChapterConfirmed(chapterPath, true); err != nil {
+		t.Fatal(err)
+	}
+
+	_, releaseWatch, err := application.SubscribeProjectFileChanges(created.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseWatch()
+
+	titles := book.StructureTitles{Volume: "Volume 1", Section: "Section 1"}
+	for _, target := range []book.ChapterStructure{
+		book.StructureSections,
+		book.StructureVolumes,
+		book.StructureChapters,
+		book.StructureSections,
+	} {
+		preview, err := application.BookStructure(ctx, created.ProjectID, target, "", titles, "Watched structure backup")
+		if err != nil {
+			t.Fatalf("preview %s failed: %v", target, err)
+		}
+		if _, err := application.BookStructure(ctx, created.ProjectID, target, preview.Revision, titles, "Watched structure backup"); err != nil {
+			t.Fatalf("apply %s while watched failed: %v", target, err)
+		}
+	}
+}

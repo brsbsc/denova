@@ -292,11 +292,32 @@ func (r *Runtime) serveView(w http.ResponseWriter, request *http.Request) {
 			writeError(w, failure("NOT_FOUND", "View asset is unavailable"))
 			return
 		}
-		w.Header().Set("Content-Type", mime.TypeByExtension(path.Ext(name)))
+		if contentType := staticViewContentType(name); contentType != "" {
+			w.Header().Set("Content-Type", contentType)
+		}
 		http.ServeContent(w, request, name, info.ModTime(), file)
 		return
 	}
 	writeError(w, failure("NOT_FOUND", "Undeclared view"))
+}
+
+func staticViewContentType(name string) string {
+	switch strings.ToLower(path.Ext(name)) {
+	case ".mjs", ".js":
+		return "text/javascript; charset=utf-8"
+	case ".html", ".htm":
+		return "text/html; charset=utf-8"
+	case ".css":
+		return "text/css; charset=utf-8"
+	case ".json":
+		return "application/json"
+	case ".wasm":
+		return "application/wasm"
+	case ".svg":
+		return "image/svg+xml"
+	default:
+		return mime.TypeByExtension(path.Ext(name))
+	}
 }
 
 func resolveBackendViewPath(basePath, relative, rawPath string) (string, error) {

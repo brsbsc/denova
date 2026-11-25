@@ -60,8 +60,8 @@ export function useVirtuosoBottomLock({ resetKey, resetPosition = 'end', itemCou
   const scheduleScrollRef = useRef<() => void>(() => {})
   const [isAwayFromBottom, setIsAwayFromBottom] = useState(false)
   const isLayoutMeasurable = useCallback(() => (
-    visible && previousVisibleRef.current === visible && !visibilitySettlingRef.current
-  ), [visible])
+    visibleRef.current && previousVisibleRef.current === visibleRef.current && !visibilitySettlingRef.current
+  ), [])
 
   const cancelScheduledScroll = useCallback(() => {
     schedulerRef.current.cancel()
