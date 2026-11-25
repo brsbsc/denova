@@ -19,6 +19,52 @@ func isDevVersion(v string) bool {
 	return v == "" || v == "dev" || v == "development" || strings.Contains(v, "dirty")
 }
 
+// ParseReleaseVersion validates a strict release version (X.Y.Z or X.Y.Zfix[N],
+// with an optional leading "v") and returns the normalized version without the
+// "v" prefix. Prereleases, build metadata, dev labels, and non-3-part versions
+// are rejected.
+func ParseReleaseVersion(v string) (string, bool) {
+	normalized := strings.TrimPrefix(v, "v")
+	if normalized == "" || strings.Contains(normalized, "-") {
+		return "", false
+	}
+	parts, hotfix, ok := parseVersionParts(normalized)
+	if !ok || len(parts) != 3 {
+		return "", false
+	}
+	release, number, hasFix := strings.Cut(normalized, "fix")
+	for _, part := range strings.Split(release, ".") {
+		if !isCanonicalDigits(part) {
+			return "", false
+		}
+	}
+	if hasFix && number != "" {
+		if !isCanonicalDigits(number) || hotfix <= 0 {
+			return "", false
+		}
+	}
+	return normalized, true
+}
+
+// CompareVersions compares two Denova version strings numerically, ordering
+// fork hotfix releases (such as 0.5.1fix and 0.5.1fix18) after their base
+// release and before the next release.
+func CompareVersions(a, b string) int {
+	return compareVersions(a, b)
+}
+
+func isCanonicalDigits(s string) bool {
+	if s == "" || (len(s) > 1 && s[0] == '0') {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func compareVersions(a, b string) int {
 	a = normalizeVersion(a)
 	b = normalizeVersion(b)

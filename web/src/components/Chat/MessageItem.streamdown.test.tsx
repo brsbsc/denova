@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { MessageItem } from './MessageItem'
-import { ThinkingExpansionPreference } from './thinking-expansion-preference'
+import { AgentTraceDisplayProvider } from './agent-trace-display'
 import { NovaMotionProvider } from '@/features/motion/motion-preferences'
 
 describe('MessageItem streaming Markdown', () => {
@@ -18,23 +18,33 @@ describe('MessageItem streaming Markdown', () => {
   })
   it('honors automatic expansion changes while preserving an explicit manual choice', () => {
     const content = 'Reasoning observation'
-    const renderMessage = (enabled: boolean, streaming = true) => (
-      <ThinkingExpansionPreference value={enabled}>
+    const renderMessage = (display: 'compact' | 'live', streaming = true) => (
+      <AgentTraceDisplayProvider value={display}>
         <MessageItem message={{ id: 'thinking-preference', role: 'thinking', content, streaming }} />
-      </ThinkingExpansionPreference>
+      </AgentTraceDisplayProvider>
     )
-    const { rerender } = render(renderMessage(true))
+    const { rerender } = render(renderMessage('live'))
     expect(screen.getByRole('region', { name: '思考内容' })).toHaveTextContent(content)
-    rerender(renderMessage(false))
+    rerender(renderMessage('compact'))
     expect(screen.queryByRole('region', { name: '思考内容' })).not.toBeInTheDocument()
-    rerender(renderMessage(true))
+    rerender(renderMessage('live'))
     expect(screen.getByRole('region', { name: '思考内容' })).toHaveTextContent(content)
+    // Auto-collapses once streaming finishes when still in automatic mode.
+    rerender(renderMessage('live', false))
+    expect(screen.queryByRole('region', { name: '思考内容' })).not.toBeInTheDocument()
+    // Manual expansion stays open even if streaming toggles false -> true (e.g. stream reattach).
+    fireEvent.click(screen.getByRole('button', { name: '展开思考' }))
+    expect(screen.getByRole('region', { name: '思考内容' })).toHaveTextContent(content)
+    rerender(renderMessage('compact', false))
+    expect(screen.getByRole('region', { name: '思考内容' })).toHaveTextContent(content)
+    rerender(renderMessage('compact', true))
+    expect(screen.getByRole('region', { name: '思考内容' })).toHaveTextContent(content)
+    // Manual collapse also persists across streaming transitions.
     fireEvent.click(screen.getByRole('button', { name: '收起思考' }))
-    rerender(renderMessage(true))
     expect(screen.queryByRole('region', { name: '思考内容' })).not.toBeInTheDocument()
-    rerender(renderMessage(true, false))
-    rerender(renderMessage(true))
-    expect(screen.getByRole('region', { name: '思考内容' })).toHaveTextContent(content)
+    rerender(renderMessage('live', false))
+    rerender(renderMessage('live', true))
+    expect(screen.queryByRole('region', { name: '思考内容' })).not.toBeInTheDocument()
   })
   it('renders animated Markdown, math, CJK emphasis, links, and project images', () => {
     const content = [
@@ -149,9 +159,9 @@ describe('MessageItem streaming Markdown', () => {
 
   it('enables thinking word animations only for explicit full motion and reacts during streaming', () => {
     const message = { role: 'thinking' as const, content: '**Streaming text** remains readable.', streaming: true }
-    // Thinking is collapsed by default in this fork; expand it to observe its content.
+    // Thinking starts collapsed in compact mode; use live trace display to observe streaming content.
     const at = (intensity: string) => (
-      <ThinkingExpansionPreference value={true}><NovaMotionProvider intensity={intensity}><MessageItem message={message} /></NovaMotionProvider></ThinkingExpansionPreference>
+      <AgentTraceDisplayProvider value="live"><NovaMotionProvider intensity={intensity}><MessageItem message={message} /></NovaMotionProvider></AgentTraceDisplayProvider>
     )
     const { container, rerender } = render(at('system'))
     expect(container.querySelector('[data-sd-animate]')).not.toBeInTheDocument()

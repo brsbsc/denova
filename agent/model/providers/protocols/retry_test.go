@@ -62,6 +62,8 @@ func TestStreamErrorEventsFollowTransientRetryPolicy(t *testing.T) {
 		{"chat completions interrupted", openaichatcompletions.NewAdapter(), interrupted, agentmodel.RetryAgain},
 		{"responses interrupted", openairesponses.NewAdapter(), interrupted, agentmodel.RetryAgain},
 		{"responses server error event", openairesponses.NewAdapter(), `data: {"type":"error","code":"server_error","message":"boom","sequence_number":1}` + "\n\n", agentmodel.RetryAgain},
+		{"responses unclassified error event", openairesponses.NewAdapter(), `data: {"type":"error","code":"upstream_stream_error","message":"stream interrupted","sequence_number":1}` + "\n\n", agentmodel.RetryAgain},
+		{"responses invalid request error event", openairesponses.NewAdapter(), `data: {"type":"error","code":"invalid_request_error","message":"bad","sequence_number":1}` + "\n\n", agentmodel.RetryStop},
 		{"anthropic api error", anthropicmessages.NewAdapter(), "event: error\n" + `data: {"type":"error","error":{"type":"api_error","message":"boom"}}` + "\n\n", agentmodel.RetryAgain},
 		{"chat completions invalid request", openaichatcompletions.NewAdapter(), `data: {"error":{"message":"bad","type":"invalid_request_error"}}` + "\n\n", agentmodel.RetryStop},
 		{"chat completions content filter", openaichatcompletions.NewAdapter(), `data: {"error":{"message":"filtered","code":"content_filter"}}` + "\n\n", agentmodel.RetryStop},

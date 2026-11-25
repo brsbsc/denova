@@ -89,6 +89,8 @@ type Settings struct {
 	Language               string `toml:"language,omitempty" json:"language,omitempty"`
 	Theme                  string `toml:"theme,omitempty" json:"theme,omitempty"`
 	MotionIntensity        string `toml:"motion_intensity,omitempty" json:"motion_intensity,omitempty"`
+	// AutoExpandThinking is a backward-compatible read alias for v0.6.3 config.toml files.
+	// When AgentTraceDisplay is unset in global/user layers, auto_expand_thinking = true resolves to "live".
 	AutoExpandThinking    *bool  `toml:"auto_expand_thinking,omitempty" json:"auto_expand_thinking,omitempty"`
 	// AgentTraceDisplay is a user-scoped presentation preference shared by all conversations.
 	AgentTraceDisplay     string `toml:"agent_trace_display,omitempty" json:"agent_trace_display,omitempty"`
@@ -222,7 +224,6 @@ func DefaultSettings() Settings {
 		Language:                    "auto",
 		Theme:                       "dark",
 		MotionIntensity:             "system",
-		AutoExpandThinking:          boolPtr(false),
 		AgentTraceDisplay:           "compact",
 		UpdateCheckEnabled:          boolPtr(true),
 		StatisticsEnabled:           boolPtr(true),
@@ -842,13 +843,18 @@ func LoadLayeredWithGlobalAt(novaDir, workspace, projectConfigPath string, globa
 		global.NovaDir = globalDir
 	}
 	eff := Merge(Merge(Merge(def, global), user), ws)
+	resolveLegacyAgentTraceDisplay(&eff, global, user)
 	// Creation defaults are Project-owned, never inherited from another book
 	// or the user's last-used global resource selection.
 	eff.GameCreationDefaults = ws.GameCreationDefaults
 	eff.GameLastCreation = ws.GameLastCreation
+	inheritedUser := withResolvedLabs(Merge(Merge(def, global), ws))
+	resolveLegacyAgentTraceDisplay(&inheritedUser, global)
+	inheritedWorkspace := withResolvedLabs(Merge(Merge(def, global), user))
+	resolveLegacyAgentTraceDisplay(&inheritedWorkspace, global, user)
 	inherited := SettingsInheritance{
-		User:      withResolvedLabs(Merge(Merge(def, global), ws)),
-		Workspace: withResolvedLabs(Merge(Merge(def, global), user)),
+		User:      inheritedUser,
+		Workspace: inheritedWorkspace,
 	}
 	catalogConfig := &Config{
 		AgentModels: eff.AgentModels, AgentTools: eff.AgentTools, AgentPrompts: eff.AgentPrompts,
@@ -911,6 +917,26 @@ func LoadLayeredWithGlobalAt(novaDir, workspace, projectConfigPath string, globa
 		ResolvedAgentContexts:      resolvedContexts,
 		ResolvedAgentDefinitions:   ResolveAgentDefinitions(eff.CustomAgents),
 	}, nil
+}
+
+// resolveLegacyAgentTraceDisplay maps the legacy v0.6.3 auto_expand_thinking
+// alias onto AgentTraceDisplay when no higher-than-default layer explicitly
+// configured agent_trace_display.
+func resolveLegacyAgentTraceDisplay(target *Settings, layers ...Settings) {
+	var explicitDisplay string
+	var legacyExpand *bool
+	for _, layer := range layers {
+		switch layer.AgentTraceDisplay {
+		case "compact", "live":
+			explicitDisplay = layer.AgentTraceDisplay
+		}
+		if layer.AutoExpandThinking != nil {
+			legacyExpand = layer.AutoExpandThinking
+		}
+	}
+	if explicitDisplay == "" && legacyExpand != nil && *legacyExpand {
+		target.AgentTraceDisplay = "live"
+	}
 }
 
 func withResolvedLabs(settings Settings) Settings {

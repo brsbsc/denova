@@ -221,8 +221,6 @@ const settings = {
   'settings.appearance.uiFontSize': 'Interface Text Size',
   'settings.appearance.uiFontSizeDescription': 'Change the text size in navigation, buttons, forms, dialogs, and panels.',
   'settings.appearance.sourceEditorFont': 'Source Editor Font',
-  'settings.appearance.autoExpandThinking': 'Automatically expand reasoning',
-  'settings.appearance.autoExpandThinkingHelp': 'Off by default: show status and a preview. You can open the full text manually at any time. Applies to writing, general chat, and games.',
   'settings.appearance.motionIntensity': 'Motion Intensity',
   'settings.appearance.motionIntensityDescription': 'Controls interface transitions. Full also animates words in expanded thinking.',
   'settings.appearance.agentTraceDisplay': 'Agent process display',

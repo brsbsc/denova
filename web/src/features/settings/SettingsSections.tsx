@@ -144,11 +144,7 @@ export const SettingsSections = memo(function SettingsSections({ layered, draft,
         <MotionIntensitySelect label={t('settings.appearance.motionIntensity')} value={draft.motion_intensity}
                                inherited={inherited.motion_intensity}
                                onChange={(v) => setField('motion_intensity', v)} />
-        <BoolTri label={t('settings.appearance.autoExpandThinking')} value={draft.auto_expand_thinking ?? null}
-                 inherited={inherited.auto_expand_thinking}
-                 onChange={(value) => setField('auto_expand_thinking', value)} />
-        <p className="text-xs text-[var(--nova-text-muted)]">{t('settings.appearance.autoExpandThinkingHelp')}</p>
-        <AgentTraceDisplaySelect value={draft.agent_trace_display}
+        <AgentTraceDisplaySelect value={draft.agent_trace_display || effective.agent_trace_display}
                                  onChange={(v) => setField('agent_trace_display', v)} />
         <FieldRow label={t('settings.appearance.uiFont')}>
           <FontPicker value={draft.ui_font_family}

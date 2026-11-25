@@ -57,7 +57,7 @@ test('writing re-anchors in the middle of a long tool-free thinking segment with
   // Expanded thinking exposes the whole segment text, which is what a lost or
   // doubled seam between the history prefix and the live suffix would change.
   await page.route(/\/api\/(?:projects\/[^/]+\/)?settings$/, route => route.fulfill({ json: {
-    ...settings, effective: { ...settings.effective, auto_expand_thinking: true },
+    ...settings, effective: { ...settings.effective, agent_trace_display: 'live' },
   } }))
   await createAndOpenBook(request, 'Live budget thinking')
   await page.goto('/')

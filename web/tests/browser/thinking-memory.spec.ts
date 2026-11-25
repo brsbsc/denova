@@ -12,7 +12,7 @@ for (const product of ['writing', 'game'] as const) {
       if (product === 'game') await createStartedStory(request, 'Thinking memory')
       const settings = await (await request.get('/api/settings')).json()
       await page.route(/\/api\/(?:projects\/[^/]+\/)?settings$/, route => route.fulfill({ json: {
-        ...settings, effective: { ...settings.effective, auto_expand_thinking: true, theme: product === 'game' ? 'dark' : 'light' },
+        ...settings, effective: { ...settings.effective, agent_trace_display: 'live', theme: product === 'game' ? 'dark' : 'light' },
       } }))
       await page.goto('/')
       if (product === 'game') await page.getByLabel('工作台侧边栏').getByRole('button', { name: '游戏', exact: true }).click()
@@ -58,20 +58,21 @@ for (const product of ['writing', 'game'] as const) {
   }
 }
 
-test('thinking expansion preference is saved from appearance settings', async ({ page, request }, testInfo) => {
+test('agent trace display preference is saved from appearance settings', async ({ page, request }, testInfo) => {
   test.setTimeout(60_000)
   await createAndOpenBook(request, 'Thinking preference')
   await page.goto('/')
   await page.getByRole('button', { name: '设置', exact: true }).click()
-  const preference = page.getByRole('combobox', { name: '自动展开思考内容', exact: true })
+  const preference = page.getByRole('combobox', { name: 'Agent 过程展示', exact: true })
   await expect(preference).toBeVisible()
-  for (const enabled of [true, false]) {
+  for (const mode of ['live', 'compact'] as const) {
+    const label = mode === 'live' ? '实时展开' : '紧凑'
     await preference.click()
-    await page.getByRole('option', { name: enabled ? '开启' : '关闭', exact: true }).click()
-    await expect.poll(async () => (await (await request.get('/api/settings')).json()).user.auto_expand_thinking).toBe(enabled)
+    await page.getByRole('option', { name: label, exact: true }).click()
+    await expect.poll(async () => (await (await request.get('/api/settings')).json()).user.agent_trace_display).toBe(mode)
     await expect(page.getByText('所有更改均已保存', { exact: true })).toBeVisible()
     await page.reload()
-    await expect(preference).toHaveText(enabled ? '开启' : '关闭', { timeout: 30_000 })
+    await expect(preference).toHaveText(label, { timeout: 30_000 })
   }
   await page.screenshot({ path: testInfo.outputPath('thinking-expansion-setting.png'), animations: 'disabled' })
   await page.setViewportSize({ width: 768, height: 900 })

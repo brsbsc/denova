@@ -2,7 +2,7 @@
 
 set -eu
 
-REPOSITORY="alfredxw/denova"
+REPOSITORY="${DENOVA_REPOSITORY:-brsbsc/denova}"
 RELEASES_URL="https://github.com/${REPOSITORY}/releases"
 MANAGED_MARKER=".installed-by-denova-install-sh"
 LAUNCHER_MARKER="# Managed by Denova install.sh"
@@ -170,10 +170,24 @@ restore_previous_install() {
   NEW_INSTALL_ACTIVE=0
 }
 
+validate_repository() {
+  newline="$(printf '\n_')"
+  newline="${newline%_}"
+  case "${REPOSITORY}" in
+    *"${newline}"* | ./* | ../* | */. | */..)
+      fail "invalid Denova repository: ${REPOSITORY}"
+      ;;
+  esac
+  if ! printf '%s\n' "${REPOSITORY}" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
+    fail "invalid Denova repository: ${REPOSITORY}"
+  fi
+}
+
 for command_name in curl tar uname mktemp awk grep sed cp mv rm mkdir chmod; do
   require_command "${command_name}"
 done
 
+validate_repository
 [ -n "${HOME:-}" ] || fail "HOME is required"
 
 INSTALL_DIR="$(absolute_dir "${DENOVA_INSTALL_DIR:-${HOME}/.local/lib/denova}" "DENOVA_INSTALL_DIR")"

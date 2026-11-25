@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { APP_VERSION } from '@/app-version'
 import { Button } from '@/components/ui/button'
@@ -17,7 +18,9 @@ const ANNOUNCED_UPDATE_KEY = 'nova.update.announcedTransaction'
  * remain in Settings and on the server, so opening notes never starts an update. */
 export function SoftwareUpdateMonitor({ onCheckResult }: { onCheckResult: (result: UpdateCheckResult, ready?: boolean) => void }) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const [target, setTarget] = useState<(UpdateNotesRange & { kind: 'available' | 'completed' }) | null>(null)
+  const [releasesURL, setReleasesURL] = useState('')
   const announced = useRef('')
   useEffect(() => {
     const check = (event: Event) => onCheckResult((event as CustomEvent<UpdateCheckResult>).detail)
@@ -37,6 +40,8 @@ export function SoftwareUpdateMonitor({ onCheckResult }: { onCheckResult: (resul
       try {
         const status = await getUpdateStatus(AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]))
         if (!controller.signal.aborted) {
+          queryClient.setQueryData(['update-status'], status)
+          setReleasesURL(status.releases_url ?? '')
           // Every workbench must load the new bundle, including tabs that did
           // not initiate the restart or open Settings.
           if (status.phase === 'succeeded' && status.id && status.version
@@ -72,8 +77,8 @@ export function SoftwareUpdateMonitor({ onCheckResult }: { onCheckResult: (resul
     }
     void poll()
     return () => { controller.abort(); clearTimeout(timer) }
-  }, [onCheckResult, t])
+  }, [onCheckResult, queryClient, t])
 
-  return target && <UpdateNotesDialog range={target} kind={target.kind} open onOpenChange={open => { if (!open) setTarget(null) }}
+  return target && <UpdateNotesDialog range={target} releasesURL={releasesURL} kind={target.kind} open onOpenChange={open => { if (!open) setTarget(null) }}
     actions={target.kind === 'available' && <Button onClick={() => { setTarget(null); requestSettingsSection('updates') }}>{t('settings.updates.notes.goToUpdate')}</Button>} />
 }

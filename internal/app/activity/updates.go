@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Masterminds/semver/v3"
-
 	"denova/internal/messages"
 	"denova/internal/update"
 )
@@ -27,14 +25,14 @@ type UpdateNotes struct {
 }
 
 func (service *Service) UpdateNotes(ctx context.Context, fromVersion, toVersion, locale string) (UpdateNotes, error) {
-	target, err := semver.StrictNewVersion(strings.TrimPrefix(toVersion, "v"))
-	if err != nil || target.Prerelease() != "" {
+	target, ok := update.ParseReleaseVersion(toVersion)
+	if !ok {
 		return UpdateNotes{}, ErrUpdateNotesRange
 	}
-	var from *semver.Version
+	from := ""
 	if fromVersion != "" {
-		from, err = semver.StrictNewVersion(strings.TrimPrefix(fromVersion, "v"))
-		if err != nil || from.Prerelease() != "" || !from.LessThan(target) {
+		from, ok = update.ParseReleaseVersion(fromVersion)
+		if !ok || update.CompareVersions(from, target) >= 0 {
 			return UpdateNotes{}, ErrUpdateNotesRange
 		}
 	}
@@ -43,10 +41,10 @@ func (service *Service) UpdateNotes(ctx context.Context, fromVersion, toVersion,
 	if err != nil {
 		return UpdateNotes{}, err
 	}
-	if strings.TrimPrefix(status.CurrentVersion, "v") == target.String() {
+	if strings.TrimPrefix(status.CurrentVersion, "v") == target {
 		content, err = messages.NewService(service.dataDir).ReadChangelog()
 	} else {
-		content, err = service.updates.Changelog(ctx, target.String())
+		content, err = service.updates.Changelog(ctx, target)
 	}
 	if err != nil {
 		return UpdateNotes{}, err
@@ -55,27 +53,25 @@ func (service *Service) UpdateNotes(ctx context.Context, fromVersion, toVersion,
 		return UpdateNotes{}, fmt.Errorf("changelog exceeds %d bytes", update.MaxChangelogBytes)
 	}
 	result := UpdateNotes{FromVersion: fromVersion, ToVersion: toVersion, Releases: []messages.ReleaseNotes{}}
-	seenFrom, seenTarget := from == nil, false
+	seenFrom, seenTarget := from == "", false
 	for _, release := range messages.ParseReleaseNotes(content, locale) {
-		version, err := semver.StrictNewVersion(strings.TrimPrefix(release.Version, "v"))
-		if err != nil || version.Prerelease() != "" {
+		version, ok := update.ParseReleaseVersion(release.Version)
+		if !ok {
 			continue
 		}
-		if from != nil && version.Equal(from) {
+		if from != "" && update.CompareVersions(version, from) == 0 {
 			seenFrom = true
 		}
-		if version.Equal(target) {
+		if update.CompareVersions(version, target) == 0 {
 			seenTarget = true
 		}
-		if version.GreaterThan(target) || (from != nil && !version.GreaterThan(from)) {
+		if update.CompareVersions(version, target) > 0 || (from != "" && update.CompareVersions(version, from) <= 0) {
 			continue
 		}
 		result.Releases = append(result.Releases, release)
 	}
 	sort.SliceStable(result.Releases, func(i, j int) bool {
-		a, _ := semver.NewVersion(result.Releases[i].Version)
-		b, _ := semver.NewVersion(result.Releases[j].Version)
-		return a.GreaterThan(b)
+		return update.CompareVersions(result.Releases[i].Version, result.Releases[j].Version) > 0
 	})
 	result.Complete = seenFrom && seenTarget
 	slog.InfoContext(ctx, "update_notes_loaded", "from_version", fromVersion, "to_version", toVersion, "releases", len(result.Releases), "complete", result.Complete)

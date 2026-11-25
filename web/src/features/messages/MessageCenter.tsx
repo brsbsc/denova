@@ -1,6 +1,7 @@
 import { InlineErrorNotice } from '@/components/common/inline-error-notice'
 import { errorMessage } from '@/lib/error-diagnostics'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, ArrowUpRight, Bell, CheckCheck, CircleAlert, Clock3, Loader2, Sparkles, Star, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { MarkdownRenderer } from '@/components/common/MarkdownRenderer'
@@ -9,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { getUpdateStatus } from '@/features/settings/api'
 import { useIsMobile } from '@/hooks/useIsMobile'
 import { formatDateTime } from '@/i18n'
 import { DENOVA_GITHUB_URL } from '@/lib/product-links'
@@ -44,6 +46,13 @@ export function MessageCenterButton({ className = '', showLabel = false, unreadC
 
   const activeItem = useMemo(() => items.find((item) => item.id === activeId) || null, [activeId, items])
   const visibleItems = useMemo(() => items.filter((item) => messageMatchesFilter(item, filter)), [filter, items])
+  const updateStatusQuery = useQuery({
+    queryKey: ['update-status'],
+    queryFn: ({ signal }) => getUpdateStatus(signal),
+    enabled: open && activeItem?.type === 'update',
+    staleTime: 5 * 60_000,
+    retry: false,
+  })
   const updateUnreadCount = useCallback((count: number) => {
     const normalized = Math.max(0, count)
     setUnreadCount(normalized)
@@ -247,7 +256,7 @@ export function MessageCenterButton({ className = '', showLabel = false, unreadC
                   )}
                   {activeItem.type === 'changelog' && <div className="mb-5"><GitHubStarPrompt /></div>}
                   {activeItem.type === 'update' && activeItem.version && activeItem.previous_version
-                    ? <UpdateNotesView key={activeItem.id} range={{ fromVersion: activeItem.previous_version, toVersion: activeItem.version }} />
+                    ? <UpdateNotesView key={activeItem.id} range={{ fromVersion: activeItem.previous_version, toVersion: activeItem.version }} releasesURL={updateStatusQuery.data?.releases_url} />
                     : <MarkdownRenderer content={activeItem.body} />}
                 </article>
               ) : <Empty className="h-full"><EmptyHeader><EmptyMedia variant="icon"><Bell /></EmptyMedia><EmptyTitle>{t('messages.selectEmpty')}</EmptyTitle></EmptyHeader></Empty>}

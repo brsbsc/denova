@@ -1,5 +1,5 @@
 import { useVirtualizedMessageState } from './VirtualizedMessageState'
-import { Children, Fragment, cloneElement, isValidElement, memo, useContext, useLayoutEffect, useMemo } from 'react'
+import { Children, Fragment, cloneElement, isValidElement, memo, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { cjk } from '@streamdown/cjk'
 import { math } from '@streamdown/math'
@@ -20,7 +20,6 @@ import { isWorkspaceImagePath } from '@/lib/workspace-file-kind'
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/components/ai-elements/reasoning'
 import { useAgentTraceDisplay } from './agent-trace-display'
 import { agentContentPreview } from './agent-content-preview'
-import { ThinkingExpansionPreference } from './thinking-expansion-preference'
 import { AgentSourceBadge } from './message-source-badge'
 import { StreamingContentStage } from './StreamingContentStage'
 import { useMotionIntensity } from '@/features/motion/motion-preferences'
@@ -236,23 +235,13 @@ export function ThinkingBlock({ projectId, message, content, streaming, showAgen
   const motionIntensity = useMotionIntensity()
   const traceDisplay = useAgentTraceDisplay()
   const preview = agentContentPreview(content)
-  const autoExpandThinking = useContext(ThinkingExpansionPreference)
   const [expansion, setExpanded] = useVirtualizedMessageState<'auto' | boolean>('thinking-expanded', 'auto')
-  const [wasStreaming, setWasStreaming] = useVirtualizedMessageState('thinking-streaming', streaming)
-  const autoExpanded = (traceDisplay === 'live' || autoExpandThinking) && streaming
-  const expanded = expansion === 'auto' ? autoExpanded : expansion
+  const expanded = expansion === 'auto' ? traceDisplay === 'live' && streaming : expansion
   const contentScrollLock = useBottomScrollLock<HTMLDivElement>({
     enabled: streaming && expanded,
     resetKey: `${message.id || message.created_at || 'thinking'}:thinking-stream`,
     contentKey: `${expanded ? 'expanded' : 'collapsed'}:${content.length}`,
   })
-
-  useLayoutEffect(() => {
-    setWasStreaming(streaming)
-    if (!wasStreaming && streaming) {
-      setExpanded('auto')
-    }
-  }, [setExpanded, setWasStreaming, streaming, wasStreaming])
   return (
     <div className="flex justify-start">
       <div className="w-full">

@@ -72,17 +72,19 @@ while [ "$#" -gt 0 ]; do
     *) url="$1"; shift ;;
   esac
 done
+expected_repo="${DENOVA_INSTALL_TEST_EXPECTED_REPO:-brsbsc/denova}"
+expected_base="https://github.com/${expected_repo}/releases"
 case "${url}" in
-  */releases/latest) printf '%s' 'https://github.com/alfredxw/denova/releases/tag/v0.7.1' ;;
-  */checksums.txt) cp "${DENOVA_INSTALL_TEST_RELEASE_DIR}/checksums.txt" "${output}" ;;
-  */denova-webui-v0.7.1-*.tar.gz)
+  "${expected_base}/latest") printf '%s' "${expected_base}/tag/v0.7.1" ;;
+  "${expected_base}/download/v0.7.1/checksums.txt") cp "${DENOVA_INSTALL_TEST_RELEASE_DIR}/checksums.txt" "${output}" ;;
+  "${expected_base}/download/v0.7.1/denova-webui-v0.7.1-"*.tar.gz)
     if [ ! -f "${DENOVA_INSTALL_TEST_RELEASE_DIR}/${url##*/}" ]; then
       printf '404'
       exit 22
     fi
     cp "${DENOVA_INSTALL_TEST_RELEASE_DIR}/${url##*/}" "${output}"
     ;;
-  */denova-v0.7.1-*.tar.gz) cp "${DENOVA_INSTALL_TEST_RELEASE_DIR}/${url##*/}" "${output}" ;;
+  "${expected_base}/download/v0.7.1/denova-v0.7.1-"*.tar.gz) cp "${DENOVA_INSTALL_TEST_RELEASE_DIR}/${url##*/}" "${output}" ;;
   *) printf 'Unexpected installer URL: %s\n' "${url}" >&2; exit 1 ;;
 esac
 EOF
@@ -90,11 +92,13 @@ chmod 0755 "${FAKE_BIN}/curl"
 
 PATH="${FAKE_BIN}:${PATH}" \
 HOME="${HOME_DIR}" \
+DENOVA_REPOSITORY="" \
 DENOVA_INSTALL_TEST_RELEASE_DIR="${RELEASE_DIR}" \
 sh "${ROOT_DIR}/scripts/install.sh" >/dev/null
 
 LAUNCHER="${HOME_DIR}/.local/bin/denova"
 INSTALL_DIR="${HOME_DIR}/.local/lib/denova"
+[ "$(sed -n '1p' "${INSTALL_DIR}/.installed-by-denova-install-sh")" = "brsbsc/denova" ]
 [ "$(HOME="${HOME_DIR}" "${LAUNCHER}" --version)" = "0.7.1" ]
 [ "$(HOME="${HOME_DIR}" "${LAUNCHER}")" = "${HOME_DIR}/.denova" ]
 [ "$(HOME="${HOME_DIR}" DENOVA_DIR="${TEST_ROOT}/custom-data" "${LAUNCHER}")" = "${TEST_ROOT}/custom-data" ]
@@ -104,8 +108,34 @@ INSTALL_DIR="${HOME_DIR}/.local/lib/denova"
 printf 'preserved = true\n' > "${INSTALL_DIR}/config.toml"
 PATH="${FAKE_BIN}:${PATH}" \
 HOME="${HOME_DIR}" \
+DENOVA_REPOSITORY="" \
 DENOVA_INSTALL_TEST_RELEASE_DIR="${RELEASE_DIR}" \
 sh "${ROOT_DIR}/scripts/install.sh" >/dev/null
+grep -Fq 'preserved = true' "${INSTALL_DIR}/config.toml"
+
+# DENOVA_REPOSITORY overrides the default release repository when valid.
+PATH="${FAKE_BIN}:${PATH}" \
+HOME="${HOME_DIR}" \
+DENOVA_REPOSITORY="custom-org/denova-fork" \
+DENOVA_INSTALL_TEST_EXPECTED_REPO="custom-org/denova-fork" \
+DENOVA_INSTALL_TEST_RELEASE_DIR="${RELEASE_DIR}" \
+sh "${ROOT_DIR}/scripts/install.sh" >/dev/null
+[ "$(sed -n '1p' "${INSTALL_DIR}/.installed-by-denova-install-sh")" = "custom-org/denova-fork" ]
+grep -Fq 'preserved = true' "${INSTALL_DIR}/config.toml"
+
+# Invalid DENOVA_REPOSITORY values must fail before any network or filesystem changes.
+for bad_repo in "not-a-repo" "owner/repo/extra" "../evil" "owner/.." "owner/repo?foo=bar" "https://github.com/brsbsc/denova"; do
+  if PATH="${FAKE_BIN}:${PATH}" \
+    HOME="${HOME_DIR}" \
+    DENOVA_REPOSITORY="${bad_repo}" \
+    DENOVA_INSTALL_TEST_RELEASE_DIR="${RELEASE_DIR}" \
+    sh "${ROOT_DIR}/scripts/install.sh" >"${TEST_ROOT}/bad-repo.log" 2>&1; then
+    printf 'Installer unexpectedly accepted DENOVA_REPOSITORY=%s\n' "${bad_repo}" >&2
+    exit 1
+  fi
+  grep -Fq 'invalid Denova repository' "${TEST_ROOT}/bad-repo.log"
+done
+[ "$(sed -n '1p' "${INSTALL_DIR}/.installed-by-denova-install-sh")" = "custom-org/denova-fork" ]
 grep -Fq 'preserved = true' "${INSTALL_DIR}/config.toml"
 
 # A missing new-style asset falls back to the naming used by earlier releases.
@@ -114,8 +144,10 @@ mv "${RELEASE_DIR}/${ARCHIVE_NAME}" "${RELEASE_DIR}/${LEGACY_NAME}"
 printf '%s  %s\n' "${checksum}" "${LEGACY_NAME}" > "${RELEASE_DIR}/checksums.txt"
 PATH="${FAKE_BIN}:${PATH}" \
 HOME="${HOME_DIR}" \
+DENOVA_REPOSITORY="" \
 DENOVA_INSTALL_TEST_RELEASE_DIR="${RELEASE_DIR}" \
 sh "${ROOT_DIR}/scripts/install.sh" >/dev/null
+[ "$(sed -n '1p' "${INSTALL_DIR}/.installed-by-denova-install-sh")" = "brsbsc/denova" ]
 [ "$(HOME="${HOME_DIR}" "${LAUNCHER}" --version)" = "0.7.1" ]
 grep -Fq 'preserved = true' "${INSTALL_DIR}/config.toml"
 mv "${RELEASE_DIR}/${LEGACY_NAME}" "${RELEASE_DIR}/${ARCHIVE_NAME}"
@@ -125,6 +157,7 @@ printf '%s  %s\n' "${checksum}" "${ARCHIVE_NAME}" > "${RELEASE_DIR}/checksums.tx
 printf 'corrupt archive\n' >> "${RELEASE_DIR}/${ARCHIVE_NAME}"
 if PATH="${FAKE_BIN}:${PATH}" \
   HOME="${HOME_DIR}" \
+  DENOVA_REPOSITORY="" \
   DENOVA_INSTALL_TEST_RELEASE_DIR="${RELEASE_DIR}" \
   sh "${ROOT_DIR}/scripts/install.sh" >"${TEST_ROOT}/corrupt-install.log" 2>&1; then
   printf 'Installer unexpectedly accepted a corrupt archive.\n' >&2

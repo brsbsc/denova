@@ -326,7 +326,7 @@ export function UpdatePanel({
           )}
           {error && <InlineErrorNotice className="mt-2" message={error} title={t('settings.updates.error')} />}
         </div>
-        {notesTarget && <UpdateNotesView range={notesTarget} variant="preview" onOpen={() => setNotesOpen(true)} />}
+        {notesTarget && <UpdateNotesView range={notesTarget} releasesURL={releasesURL} variant="preview" onOpen={() => setNotesOpen(true)} />}
         <div className="flex shrink-0 flex-wrap gap-2">
           {status?.release_url && (
             <a
@@ -391,7 +391,7 @@ export function UpdatePanel({
           </div>
         </CollapsibleContent>
       </Collapsible>}
-      {notesTarget && <UpdateNotesDialog range={notesTarget} kind={notesTarget.kind} open={notesOpen} onOpenChange={setNotesOpen} error={error}
+      {notesTarget && <UpdateNotesDialog range={notesTarget} releasesURL={releasesURL} kind={notesTarget.kind} open={notesOpen} onOpenChange={setNotesOpen} error={error}
         actions={notesTarget.kind === 'available' && installActions} />}
     </div>
   )

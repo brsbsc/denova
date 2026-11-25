@@ -86,7 +86,6 @@ export interface Settings {
   language?: string
   theme?: string
   motion_intensity?: string
-  auto_expand_thinking?: boolean | null
   agent_trace_display?: AgentTraceDisplay
   statistics_enabled?: boolean | null
   update_check_enabled?: boolean | null

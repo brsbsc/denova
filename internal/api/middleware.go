@@ -63,7 +63,7 @@ func localHostEffectMiddleware(ctx context.Context, c *app.RequestContext) {
 // and Project-scoped configuration stay available after login; a blanket gate
 // would also reject the read-only polling that renders the workbench.
 func platformManagementLocalHostMiddleware(ctx context.Context, c *app.RequestContext) {
-	if platformManagementHostOnly(string(c.Path()), string(c.Method())) && !isLocalClientIP(requestClientIP(c)) {
+	if platformManagementHostOnly(string(c.Path()), string(c.Method())) && !isLocalRequest(c) {
 		message := i18n.FromHeader(localeHeader(c)).T("api.access.localHostEffect")
 		c.AbortWithStatusJSON(consts.StatusForbidden, map[string]string{
 			"error":      message,

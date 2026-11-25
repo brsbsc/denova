@@ -16,7 +16,13 @@ export function displayVersion(version: string) {
   return version.startsWith('v') ? version : `v${version}`
 }
 
-type UpdateNotesProps = { range: UpdateNotesRange } & (
+function releaseHistoryURL(releasesURL?: string) {
+  const trimmed = releasesURL?.trim()
+  if (!trimmed) return `${DENOVA_GITHUB_URL}/releases`
+  return trimmed.replace(/\/releases\/latest\/?$/, '/releases')
+}
+
+type UpdateNotesProps = { range: UpdateNotesRange; releasesURL?: string } & (
   | { variant: 'preview'; onOpen: () => void }
   | { variant?: 'full' }
 )
@@ -24,7 +30,7 @@ type UpdateNotesProps = { range: UpdateNotesRange } & (
 /** Both the inbox and the pre-update reader use the same localized range.
  * Query caching shares a successful load without coupling reading to installing. */
 export function UpdateNotesView(props: UpdateNotesProps) {
-  const { range } = props
+  const { range, releasesURL } = props
   const { t, i18n } = useTranslation()
   const [history, setHistory] = useState(false)
   const from = history ? undefined : range.fromVersion
@@ -46,7 +52,7 @@ export function UpdateNotesView(props: UpdateNotesProps) {
     {notes.isPending ? <div role="status" className="flex items-center gap-2 py-4 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />{t('settings.updates.notes.loading')}</div>
       : notes.isError ? <div className="flex flex-col items-start gap-2">
         <InlineErrorNotice message={errorMessage(notes.error, t('settings.updates.notes.loadFailed'))} />
-        <div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" onClick={() => void notes.refetch()}>{t('common.retry')}</Button><Button variant="ghost" size="sm" asChild><a href={`${DENOVA_GITHUB_URL}/releases`} target="_blank" rel="noreferrer">{t('settings.updates.notes.releaseHistory')}<ExternalLink data-icon="inline-end" /></a></Button></div>
+        <div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" onClick={() => void notes.refetch()}>{t('common.retry')}</Button><Button variant="ghost" size="sm" asChild><a href={releaseHistoryURL(releasesURL)} target="_blank" rel="noreferrer">{t('settings.updates.notes.releaseHistory')}<ExternalLink data-icon="inline-end" /></a></Button></div>
       </div> : notes.data && <>
         {!notes.data.complete && <p role="status" className="text-sm text-muted-foreground">{t('settings.updates.notes.incomplete')}</p>}
         {notes.data.releases.length === 0 ? <Empty><EmptyHeader><EmptyTitle>{t('settings.updates.notes.empty')}</EmptyTitle></EmptyHeader></Empty>
@@ -73,8 +79,9 @@ export function UpdateNotesView(props: UpdateNotesProps) {
   </section>
 }
 
-export function UpdateNotesDialog({ range, kind = 'available', open, onOpenChange, actions, error }: {
+export function UpdateNotesDialog({ range, releasesURL, kind = 'available', open, onOpenChange, actions, error }: {
   range: UpdateNotesRange
+  releasesURL?: string
   kind?: 'available' | 'completed'
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -90,7 +97,7 @@ export function UpdateNotesDialog({ range, kind = 'available', open, onOpenChang
       </DialogHeader>
       <div className="flex min-h-0 flex-col gap-4">
         {error && <InlineErrorNotice message={error} />}
-        <UpdateNotesView key={`${range.fromVersion}:${range.toVersion}`} range={range} />
+        <UpdateNotesView key={`${range.fromVersion}:${range.toVersion}`} range={range} releasesURL={releasesURL} />
       </div>
       <DialogFooter className="shrink-0">
         <Button variant="ghost" onClick={() => onOpenChange(false)}>{t(kind === 'completed' ? 'common.close' : 'settings.updates.notes.later')}</Button>

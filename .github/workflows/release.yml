@@ -171,8 +171,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          RELEASE_SOURCE_SHA: ${{ needs.ci.outputs.sha }}
         run: |
           set -euo pipefail
+          [[ "$RELEASE_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           downloads=()
           for target in macos-arm64 macos-x64 linux-arm64 linux-x64 windows-x64; do
             extension=tar.gz
@@ -190,19 +192,21 @@ jobs:
             # Published assets are immutable: replacing them races clients that
             # already pinned this release's checksums.
             if [[ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" != true ]]; then
+              tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)"
+              release_target="$(gh release view "$RELEASE_TAG" --json targetCommitish --jq .targetCommitish)"
               existing="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | LC_ALL=C sort)"
               expected="$(printf '%s\n' "${downloads[@]}" | LC_ALL=C sort)"
-              if [[ "$existing" == "$expected" ]]; then
-                echo "Release $RELEASE_TAG is already published with the expected assets; keeping published assets untouched."
+              if [[ "$tag_sha" == "$RELEASE_SOURCE_SHA" && "$release_target" == "$RELEASE_SOURCE_SHA" && "$existing" == "$expected" ]]; then
+                echo "Release $RELEASE_TAG is already published for $RELEASE_SOURCE_SHA with the expected assets; keeping published assets untouched."
                 exit 0
               fi
-              echo "Refusing to replace published assets; publish a new version instead." >&2
+              echo "Refusing to reuse or replace published release $RELEASE_TAG (tag=$tag_sha, target=$release_target, expected=$RELEASE_SOURCE_SHA); publish a new version instead." >&2
               exit 1
             fi
-            gh release edit "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file RELEASE_NOTES.md
+            gh release edit "$RELEASE_TAG" --target "$RELEASE_SOURCE_SHA" --title "$RELEASE_TAG" --notes-file RELEASE_NOTES.md
             gh release upload "$RELEASE_TAG" "${downloads[@]}" --clobber
           else
-            gh release create "$RELEASE_TAG" --draft "${downloads[@]}" --title "$RELEASE_TAG" --notes-file RELEASE_NOTES.md
+            gh release create "$RELEASE_TAG" --draft --target "$RELEASE_SOURCE_SHA" "${downloads[@]}" --title "$RELEASE_TAG" --notes-file RELEASE_NOTES.md
           fi
           # Latest only points to this version once every archive and checksum
           # has finished uploading. Interrupted uploads leave a private draft.
@@ -237,8 +241,8 @@ jobs:
             test -x "dist/upstream/$arch/denova/denova"
             test -x "dist/upstream/$arch/denova/denova-updater"
           done
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
       - name: Build and smoke-test both source architectures
         run: |
           set -euo pipefail
@@ -249,13 +253,13 @@ jobs:
               --build-arg "SOURCE_REPOSITORY=$GITHUB_REPOSITORY" .
             bash docker/smoke-test.sh "denova-source-smoke:$arch" "linux/$arch" "$RELEASE_TAG"
           done
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - name: Publish tested source version and latest
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile

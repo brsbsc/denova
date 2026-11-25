@@ -221,8 +221,6 @@ const settings = {
   'settings.appearance.uiFontSize': '界面文字大小',
   'settings.appearance.uiFontSizeDescription': '调整导航、按钮、表单和弹窗等界面文字的大小。',
   'settings.appearance.sourceEditorFont': '源编辑器字体',
-  'settings.appearance.autoExpandThinking': '自动展开思考内容',
-  'settings.appearance.autoExpandThinkingHelp': '默认关闭，仅显示状态和摘要；可随时手动展开全文。适用于写作、通用对话和游戏。',
   'settings.appearance.motionIntensity': '动效强度',
   'settings.appearance.motionIntensityDescription': '控制界面过渡；选择“完整”还会开启已展开思考的逐词动画。',
   'settings.appearance.agentTraceDisplay': 'Agent 过程展示',

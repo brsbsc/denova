@@ -20,7 +20,6 @@ import type { ChapterSummary } from '@/lib/api'
 import { toast } from '@/lib/toast'
 import { setConfiguredLocale } from '@/i18n'
 import { NovaMotionProvider, normalizeMotionIntensity } from '@/features/motion/motion-preferences'
-import { ThinkingExpansionPreference } from '@/components/Chat/thinking-expansion-preference'
 import { AgentTraceDisplayProvider } from '@/components/Chat/agent-trace-display'
 import type { AgentTraceDisplay } from '@/features/settings/types'
 import {
@@ -96,7 +95,6 @@ function App() {
   const [editorAutoSaveDelayMs, setEditorAutoSaveDelayMs] = useState(AUTO_SAVE_DELAY_FALLBACK_MS)
   const [developerMode, setDeveloperMode] = useState<boolean | null>(null)
   const [motionIntensity, setMotionIntensity] = useState('system')
-  const [autoExpandThinking, setAutoExpandThinking] = useState(false)
   const [agentTraceDisplay, setAgentTraceDisplay] = useState<AgentTraceDisplay>('compact')
   const [novaDir, setNovaDir] = useState('')
   const [sidebarView, setSidebarView] = useState<SidebarView>('outline')
@@ -321,7 +319,6 @@ function App() {
       setConfiguredLocale(effective?.language)
       setTheme(normalizeAppTheme(effective?.theme))
       setMotionIntensity(normalizeMotionIntensity(effective?.motion_intensity))
-      setAutoExpandThinking(effective?.auto_expand_thinking === true)
       setAgentTraceDisplay(effective?.agent_trace_display === 'live' ? 'live' : 'compact')
       applyFontSettings(fontSettingsFromEffective(effective))
     }
@@ -947,7 +944,6 @@ function App() {
   })
 
   return (
-    <ThinkingExpansionPreference value={autoExpandThinking}>
     <NovaMotionProvider intensity={motionIntensity}>
     <AgentTraceDisplayProvider value={agentTraceDisplay}>
       <AnalyticsNotice onReadyChange={setAnalyticsReady} />
@@ -1128,7 +1124,6 @@ function App() {
       />
     </AgentTraceDisplayProvider>
     </NovaMotionProvider>
-    </ThinkingExpansionPreference>
   )
 }
 

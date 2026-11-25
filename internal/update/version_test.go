@@ -23,19 +23,64 @@ func TestCompareVersions(t *testing.T) {
 		{name: "next patch follows a hotfix", a: "0.5.1fix9", b: "0.5.2", want: -1},
 		{name: "two-digit patch follows a hotfix", a: "0.5.1fix9", b: "0.5.10", want: -1},
 		{name: "two-digit minor follows a hotfix", a: "0.5.1fix9", b: "0.10.0", want: -1},
+		{name: "minor upgrade follows multi-digit hotfix", a: "0.5.1fix18", b: "0.8.0", want: -1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := compareVersions(tt.a, tt.b)
+			got := CompareVersions(tt.a, tt.b)
 			switch {
 			case tt.want == 0 && got != 0:
-				t.Fatalf("compareVersions(%q,%q)=%d want 0", tt.a, tt.b, got)
+				t.Fatalf("CompareVersions(%q,%q)=%d want 0", tt.a, tt.b, got)
 			case tt.want < 0 && got >= 0:
-				t.Fatalf("compareVersions(%q,%q)=%d want <0", tt.a, tt.b, got)
+				t.Fatalf("CompareVersions(%q,%q)=%d want <0", tt.a, tt.b, got)
 			case tt.want > 0 && got <= 0:
-				t.Fatalf("compareVersions(%q,%q)=%d want >0", tt.a, tt.b, got)
+				t.Fatalf("CompareVersions(%q,%q)=%d want >0", tt.a, tt.b, got)
 			}
 		})
+	}
+}
+
+func TestParseReleaseVersion(t *testing.T) {
+	valid := map[string]string{
+		"0.8.0":       "0.8.0",
+		"v0.8.0":      "0.8.0",
+		"0.5.1fix":    "0.5.1fix",
+		"v0.5.1fix":   "0.5.1fix",
+		"0.5.1fix18":  "0.5.1fix18",
+		"v0.5.1fix18": "0.5.1fix18",
+	}
+	for input, want := range valid {
+		got, ok := ParseReleaseVersion(input)
+		if !ok || got != want {
+			t.Fatalf("ParseReleaseVersion(%q) = (%q, %v), want (%q, true)", input, got, ok, want)
+		}
+	}
+	invalid := []string{
+		"",
+		"dev",
+		"development",
+		"0.8",
+		"0.8.0.1",
+		"0.8.0-rc.1",
+		"0.8.0-beta",
+		"0.8.0-dirty",
+		"0.8.0+build.1",
+		"0.5.1fix0",
+		"0.5.1fix01",
+		"0.5.1fix-1",
+		"0.5.1fix+1",
+		"0.5.1fix9x",
+		"0.5.1-fix9",
+		"01.2.3",
+		"0.05.1",
+		"vv0.8.0",
+		" 0.8.0 ",
+		"refs/tags/v0.8.0",
+	}
+	for _, input := range invalid {
+		if got, ok := ParseReleaseVersion(input); ok {
+			t.Fatalf("ParseReleaseVersion(%q) = (%q, true), want rejected", input, got)
+		}
 	}
 }
 

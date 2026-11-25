@@ -111,6 +111,33 @@ func TestLocalHostEffectMiddlewareRejectsNonLoopbackHost(t *testing.T) {
 	}
 }
 
+func TestPlatformManagementLocalHostMiddlewareRejectsNonLoopbackHost(t *testing.T) {
+	called := false
+	server := hertzserver.Default()
+	server.POST("/api/platform/manage/instances/:id/open", platformManagementLocalHostMiddleware, func(_ context.Context, c *app.RequestContext) {
+		called = true
+		c.Status(http.StatusNoContent)
+	})
+	rebound := ut.PerformRequest(server.Engine, http.MethodPost, "http://rebound.example:8080/api/platform/manage/instances/one/open", nil)
+	if rebound.Code != http.StatusForbidden || !strings.Contains(rebound.Body.String(), "LOCAL_HOST_ONLY") || called {
+		t.Fatalf("rebound host response = %d called=%v body=%s", rebound.Code, called, rebound.Body.String())
+	}
+	forwarded := ut.PerformRequest(
+		server.Engine,
+		http.MethodPost,
+		"http://localhost:8080/api/platform/manage/instances/one/open",
+		nil,
+		ut.Header{Key: "X-Forwarded-Host", Value: "proxy.example"},
+	)
+	if forwarded.Code != http.StatusForbidden || !strings.Contains(forwarded.Body.String(), "LOCAL_HOST_ONLY") || called {
+		t.Fatalf("forwarded host response = %d called=%v body=%s", forwarded.Code, called, forwarded.Body.String())
+	}
+	local := ut.PerformRequest(server.Engine, http.MethodPost, "http://localhost:8080/api/platform/manage/instances/one/open", nil)
+	if local.Code != http.StatusNoContent || !called {
+		t.Fatalf("local host response = %d called=%v body=%s", local.Code, called, local.Body.String())
+	}
+}
+
 func TestPlatformManagementHostOnlyClassification(t *testing.T) {
 	for _, test := range []struct {
 		path, method string
@@ -202,8 +229,16 @@ func TestPlatformManagementReadsServeAuthenticatedLANClients(t *testing.T) {
 	if open.Code != http.StatusForbidden || !strings.Contains(open.Body.String(), "LOCAL_HOST_ONLY") {
 		t.Fatalf("remote host action: %d %s", open.Code, open.Body.String())
 	}
-	local := ut.PerformRequest(server.engine.Engine, http.MethodPost, "/api/platform/manage/instances/one/open", &ut.Body{Body: bytes.NewBufferString(`{}`), Len: 2}, ut.Header{Key: "Content-Type", Value: "application/json"})
-	if local.Code == http.StatusForbidden {
+	reboundHost := ut.PerformRequest(server.engine.Engine, http.MethodPost, "http://rebound.example:7789/api/platform/manage/instances/one/open", &ut.Body{Body: bytes.NewBufferString(`{}`), Len: 2}, ut.Header{Key: "Cookie", Value: cookie}, ut.Header{Key: "Content-Type", Value: "application/json"})
+	if reboundHost.Code != http.StatusForbidden || !strings.Contains(reboundHost.Body.String(), "LOCAL_HOST_ONLY") {
+		t.Fatalf("rebound host action: %d %s", reboundHost.Code, reboundHost.Body.String())
+	}
+	forwardedHost := ut.PerformRequest(server.engine.Engine, http.MethodPost, "http://localhost:7789/api/platform/manage/instances/one/open", &ut.Body{Body: bytes.NewBufferString(`{}`), Len: 2}, ut.Header{Key: "X-Forwarded-Host", Value: "proxy.example"}, ut.Header{Key: "Cookie", Value: cookie}, ut.Header{Key: "Content-Type", Value: "application/json"})
+	if forwardedHost.Code != http.StatusForbidden || !strings.Contains(forwardedHost.Body.String(), "LOCAL_HOST_ONLY") {
+		t.Fatalf("forwarded host action: %d %s", forwardedHost.Code, forwardedHost.Body.String())
+	}
+	local := ut.PerformRequest(server.engine.Engine, http.MethodPost, "http://localhost/api/platform/manage/instances/one/open", &ut.Body{Body: bytes.NewBufferString(`{}`), Len: 2}, ut.Header{Key: "Content-Type", Value: "application/json"})
+	if local.Code == http.StatusForbidden || local.Code == http.StatusUnauthorized {
 		t.Fatalf("local host action rejected: %d %s", local.Code, local.Body.String())
 	}
 	for _, sideEffect := range []struct{ method, path string }{
