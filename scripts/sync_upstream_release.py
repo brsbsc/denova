@@ -1,7 +1,7 @@
-"""Mirror a verified upstream release and prepare its Linux bundles for Buildx.
+"""Prepare verified upstream Linux release bundles for Docker-only GHCR sync.
 
-Run prepare before building, then finish only after publishing the tested image.
-GITHUB_TOKEN needs contents/packages write on the destination repository only.
+Checks GHCR OCI labels directly instead of creating or mirroring GitHub Releases.
+GITHUB_TOKEN needs packages:write on the destination repository only.
 """
 
 import argparse
@@ -15,7 +15,9 @@ import tarfile
 from urllib.parse import quote
 
 UPSTREAM = "alfredxw/denova"
-ORIGIN_MARKER = f"<!-- denova-mirror: {UPSTREAM} -->"
+MIRROR_LABEL = "io.denova.upstream.mirror"
+DIGEST_LABEL = "io.denova.upstream.digest"
+INSPECT_LABELS_FORMAT = '{{json (index .Image "linux/amd64").Config.Labels}}'
 
 
 def run(*args):
@@ -31,10 +33,7 @@ def find_release(repo, tag):
         return api(f"repos/{repo}/releases/tags/{quote(tag, safe='')}")
     except subprocess.CalledProcessError as error:
         if "(HTTP 404)" in error.stderr:
-            # The tag endpoint may omit drafts. Recover a previous partial run
-            # through the authenticated release listing before creating anything.
-            pages = json.loads(run("gh", "api", "--paginate", "--slurp", f"repos/{repo}/releases?per_page=100"))
-            return next((release for page in pages for release in page if release["tag_name"] == tag), None)
+            return None
         raise
 
 
@@ -45,17 +44,32 @@ def validate_release(release):
         raise ValueError("Expected a stable vMAJOR.MINOR.PATCH tag")
 
 
-def completion_marker(release):
+def release_digest(release):
     facts = {"id": release["id"], "tag": release["tag_name"], "assets": [
         {key: asset[key] for key in ("id", "name", "size", "updated_at")}
         for asset in sorted(release["assets"], key=lambda asset: asset["name"])
     ]}
-    digest = hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()
-    return f"<!-- denova-mirror-complete: {digest} -->"
+    return hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()
 
 
-def is_complete(release, mirror, force):
-    return bool(not force and mirror and not mirror["draft"] and completion_marker(release) in (mirror.get("body") or ""))
+def inspect_image_labels(image_ref):
+    try:
+        output = run("docker", "buildx", "imagetools", "inspect", image_ref, "--format", INSPECT_LABELS_FORMAT)
+    except subprocess.CalledProcessError as error:
+        stderr = (error.stderr or "").lower()
+        if "not found" in stderr or "manifest unknown" in stderr:
+            return None
+        raise
+    if not output or output == "null":
+        return {}
+    labels = json.loads(output)
+    return labels if isinstance(labels, dict) else {}
+
+
+def is_complete(release, labels, force):
+    if force or labels is None:
+        return False
+    return labels.get(MIRROR_LABEL) == UPSTREAM and labels.get(DIGEST_LABEL) == release_digest(release)
 
 
 def verify_assets(directory):
@@ -65,14 +79,9 @@ def verify_assets(directory):
         if not match or match[2] in checksums or match[2] in (".", ".."):
             raise ValueError("Invalid or duplicate checksum entry")
         checksums[match[2]] = match[1].lower()
-    archives = (
-        list(directory.glob("denova-*.tar.gz"))
-        + list(directory.glob("denova-*.zip"))
-        + list(directory.glob("denova-*.dmg"))
-        + list(directory.glob("denova-*.exe"))
-    )
+    archives = list(directory.glob("denova-*.tar.gz"))
     if not archives:
-        raise ValueError("No release archives found")
+        raise ValueError("No Linux release archives found")
     for archive in archives:
         if archive.name not in checksums:
             raise ValueError(f"Missing checksum: {archive.name}")
@@ -99,31 +108,32 @@ def prepare(args):
         raise ValueError("Upstream release does not exist")
     validate_release(release)
     tag = release["tag_name"]
-    mirror_tag = f"upstream-{tag}"
-    mirror = find_release(args.repository, mirror_tag)
-    if mirror and ORIGIN_MARKER not in (mirror.get("body") or ""):
-        raise ValueError(f"Destination release {tag} is not managed by this workflow; refusing to overwrite it")
-    outputs = {"changed": "false", "version": tag, "image": f"ghcr.io/{args.repository.lower()}"}
-    # A source release of the same version owns that image tag; never replace it with the upstream build.
-    own = find_release(args.repository, tag)
-    if own and ORIGIN_MARKER not in (own.get("body") or ""):
-        print(f"{args.repository} publishes its own {tag}; skipping the upstream mirror")
-    elif not is_complete(release, mirror, args.force):
-        if args.force and mirror:
-            # Clear only our completion marker so an interrupted rebuild can be
-            # retried by the next scheduled run, including unchanged upstream assets.
-            args.directory.mkdir(parents=True, exist_ok=True)
-            notes = args.directory / "retry-notes.md"
-            notes.write_text(re.sub(r"<!-- denova-mirror-complete: [0-9a-f]{64} -->", "", mirror.get("body") or ""), encoding="utf-8")
-            run("gh", "release", "edit", mirror_tag, "--repo", args.repository, "--notes-file", str(notes))
+    image = f"ghcr.io/{args.repository.lower()}"
+    digest = release_digest(release)
+    outputs = {"changed": "false", "version": tag, "image": image, "digest": digest}
+
+    existing_labels = inspect_image_labels(f"{image}:{tag}")
+    # An existing image without our upstream mirror label belongs to this fork's
+    # own source build; never replace it with an upstream build.
+    if existing_labels is not None and existing_labels.get(MIRROR_LABEL) != UPSTREAM:
+        print(f"{args.repository} publishes its own {image}:{tag}; skipping the upstream mirror")
+    elif not is_complete(release, existing_labels, args.force):
         assets = args.directory / "assets"
         assets.mkdir(parents=True, exist_ok=False)
-        run("gh", "release", "download", tag, "--repo", UPSTREAM, "--dir", str(assets))
+        run(
+            "gh", "release", "download", tag,
+            "--repo", UPSTREAM,
+            "--dir", str(assets),
+            "--pattern", "checksums.txt",
+            "--pattern", "denova*-linux-*.tar.gz",
+        )
         verify_assets(assets)
         for architecture, package in (("amd64", "x64"), ("arm64", "arm64")):
             archive = assets / f"denova-webui-{tag}-linux-{package}.tar.gz"
             if not archive.is_file():
                 archive = assets / f"denova-{tag}-linux-{package}.tar.gz"
+            if not archive.is_file():
+                raise ValueError(f"Missing Linux bundle archive for {architecture}")
             extract_bundle(archive, args.directory / architecture)
             root = args.directory / architecture / "denova"
             # The frontend is embedded in the binary; web/ may be an empty directory.
@@ -132,52 +142,17 @@ def prepare(args):
                     raise ValueError(f"Missing bundle file: {architecture}/{required}")
             if not (root / "skills").is_dir():
                 raise ValueError(f"Missing bundled Skills: {architecture}")
-        # Persist the exact asset identity used by this run, not a moving latest.
-        (args.directory / "release.json").write_text(json.dumps(release), encoding="utf-8")
         outputs["changed"] = "true"
+
     print(json.dumps(outputs))
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
             output.writelines(f"{key}={value}\n" for key, value in outputs.items())
 
 
-def finish(args):
-    release = json.loads((args.directory / "release.json").read_text(encoding="utf-8"))
-    validate_release(release)
-    tag = release["tag_name"]
-    current = find_release(UPSTREAM, tag)
-    if current is None or completion_marker(current) != completion_marker(release):
-        raise ValueError("Upstream assets changed during this run; retry with fresh assets")
-    validate_release(current)
-    mirror_tag = f"upstream-{tag}"
-    mirror = find_release(args.repository, mirror_tag)
-    if mirror and ORIGIN_MARKER not in (mirror.get("body") or ""):
-        raise ValueError("Refusing to overwrite an unmanaged destination release")
-    image = f"ghcr.io/{args.repository.lower()}"
-    body = (f"Mirrored from https://github.com/{UPSTREAM}/releases/tag/{tag}\n\n"
-            f"Container: `{image}:{tag}`\n\n"
-            "Attached installers are upstream binaries. GitHub-generated Source code archives "
-            "contain this fork's packaging workflow; use the upstream release for application source.\n\n"
-            f"{ORIGIN_MARKER}\n\n{release.get('body') or ''}\n")
-    notes = args.directory / "mirror-notes.md"
-    notes.write_text(body, encoding="utf-8")
-    if mirror is None:
-        # A separate tag on the workflow commit avoids importing upstream workflow
-        # changes (which GITHUB_TOKEN cannot write) and avoids v* release triggers.
-        revision = run("git", "rev-parse", "HEAD")
-        run("gh", "release", "create", mirror_tag, "--repo", args.repository, "--target", revision, "--draft", "--title", tag, "--notes-file", str(notes))
-    files = sorted(str(path) for path in (args.directory / "assets").iterdir() if path.is_file())
-    run("gh", "release", "upload", mirror_tag, *files, "--repo", args.repository, "--clobber")
-    notes.write_text(body + "\n" + completion_marker(release) + "\n", encoding="utf-8")
-    # The latest image tag and the Latest release belong to this fork's source
-    # releases. An upstream build lacks the fork's fixes, so it never takes them.
-    run("gh", "release", "edit", mirror_tag, "--repo", args.repository, "--draft=false", "--latest=false", "--notes-file", str(notes))
-    print(f"Published mirrored release {tag} and {image}:{tag}")
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("phase", choices=("prepare", "finish"))
+    parser.add_argument("phase", choices=("prepare",))
     parser.add_argument("--repository", required=True)
     parser.add_argument("--tag", default="")
     parser.add_argument("--force", action="store_true")
@@ -188,7 +163,7 @@ def main():
     if args.tag and not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", args.tag):
         parser.error("Expected a stable vMAJOR.MINOR.PATCH tag")
     try:
-        (prepare if args.phase == "prepare" else finish)(args)
+        prepare(args)
     except subprocess.CalledProcessError as error:
         raise SystemExit(f"Command failed: {error.stderr.strip()}") from error
 

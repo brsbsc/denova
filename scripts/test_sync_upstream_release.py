@@ -2,6 +2,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -18,11 +19,11 @@ class ReleaseTests(unittest.TestCase):
                 sync.validate_release({"tag_name": "v1.2.3", "draft": False, "prerelease": False, **change})
         sync.validate_release({"tag_name": "v1.2.3", "draft": False, "prerelease": False})
 
-    def test_asset_change_invalidates_completion_marker(self):
+    def test_asset_change_invalidates_digest(self):
         release = {"id": 1, "tag_name": "v1.2.3", "assets": [{"id": 2, "name": "a", "size": 3, "updated_at": "a"}]}
-        before = sync.completion_marker(release)
+        before = sync.release_digest(release)
         release["assets"][0]["updated_at"] = "b"
-        self.assertNotEqual(before, sync.completion_marker(release))
+        self.assertNotEqual(before, sync.release_digest(release))
 
     def test_verify_checksums_rejects_corruption_and_missing_coverage(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -39,13 +40,15 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Missing checksum"):
                 sync.verify_assets(root)
 
-    def test_prepare_extracts_webui_named_linux_archives(self):
+    def test_prepare_extracts_webui_named_linux_archives_only(self):
         release = {"id": 1, "tag_name": "v0.8.0", "draft": False, "prerelease": False, "assets": []}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            download_calls = []
 
             def fake_run(*args):
                 if args[:3] == ("gh", "release", "download"):
+                    download_calls.append(args)
                     assets_dir = Path(args[args.index("--dir") + 1])
                     lines = []
                     for package in ("x64", "arm64"):
@@ -61,10 +64,19 @@ class ReleaseTests(unittest.TestCase):
                     (assets_dir / "checksums.txt").write_text("".join(lines))
                 return ""
 
-            with patch.object(sync, "api", return_value=release), patch.object(sync, "find_release", return_value=None), patch.object(sync, "run", side_effect=fake_run), patch.dict("os.environ", {}, clear=True):
+            output_file = root / "github_output.txt"
+            with patch.object(sync, "api", return_value=release), \
+                 patch.object(sync, "inspect_image_labels", return_value=None), \
+                 patch.object(sync, "run", side_effect=fake_run), \
+                 patch.dict("os.environ", {"GITHUB_OUTPUT": str(output_file)}, clear=True):
                 sync.prepare(SimpleNamespace(tag="", repository="owner/repo", directory=root / "out", force=False))
                 self.assertTrue((root / "out/amd64/denova/denova").is_file())
                 self.assertTrue((root / "out/arm64/denova/denova").is_file())
+                self.assertEqual(len(download_calls), 1)
+                self.assertIn("denova*-linux-*.tar.gz", download_calls[0])
+                output_text = output_file.read_text(encoding="utf-8")
+                self.assertIn("changed=true\n", output_text)
+                self.assertIn(f"digest={sync.release_digest(release)}\n", output_text)
 
     def test_extract_preserves_bundle_and_rejects_unsafe_members(self):
         for member_name, member_type in [("denova/web/index.html", tarfile.REGTYPE), ("../escape", tarfile.REGTYPE), ("denova/link", tarfile.SYMTYPE)]:
@@ -84,91 +96,69 @@ class ReleaseTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         sync.extract_bundle(archive, root / "out")
 
-    def test_only_not_found_is_treated_as_missing_release(self):
-        import subprocess
-        for error, expected in [("gh: Not Found (HTTP 404)", None), ("gh: Bad credentials (HTTP 401)", "error")]:
-            with patch.object(sync, "run", side_effect=[subprocess.CalledProcessError(1, "gh", stderr=error), "[]"]):
+    def test_only_not_found_is_treated_as_missing_image(self):
+        for stderr, expected in [
+            ("ERROR: ghcr.io/owner/repo:v1.2.3: not found", None),
+            ("ERROR: manifest unknown", None),
+            ("ERROR: unauthorized: authentication required", "error"),
+        ]:
+            with self.subTest(stderr=stderr), patch.object(sync, "run", side_effect=subprocess.CalledProcessError(1, "docker", stderr=stderr)):
                 if expected is None:
-                    self.assertIsNone(sync.find_release("owner/repo", "v1.2.3"))
+                    self.assertIsNone(sync.inspect_image_labels("ghcr.io/owner/repo:v1.2.3"))
                 else:
                     with self.assertRaises(subprocess.CalledProcessError):
-                        sync.find_release("owner/repo", "v1.2.3")
+                        sync.inspect_image_labels("ghcr.io/owner/repo:v1.2.3")
 
-    def test_draft_release_is_found_after_tag_endpoint_returns_not_found(self):
-        import subprocess
-        draft = {"tag_name": "upstream-v1.2.3", "draft": True}
-        with patch.object(sync, "run", side_effect=[subprocess.CalledProcessError(1, "gh", stderr="gh: Not Found (HTTP 404)"), json.dumps([[draft]])]):
-            self.assertEqual(sync.find_release("owner/repo", "upstream-v1.2.3"), draft)
+    def test_inspect_image_labels_parses_json_and_null(self):
+        with patch.object(sync, "run", return_value=json.dumps({sync.MIRROR_LABEL: sync.UPSTREAM})):
+            self.assertEqual(sync.inspect_image_labels("ghcr.io/owner/repo:v1.2.3"), {sync.MIRROR_LABEL: sync.UPSTREAM})
+        with patch.object(sync, "run", return_value="null"):
+            self.assertEqual(sync.inspect_image_labels("ghcr.io/owner/repo:v1.2.3"), {})
 
-    def test_force_invalidates_completion_before_download_failure(self):
+    def test_completed_mirror_skips_unless_forced_or_digest_changed(self):
         release = {"id": 1, "tag_name": "v1.2.3", "assets": []}
-        mirror = {"draft": False, "body": sync.ORIGIN_MARKER + sync.completion_marker(release)}
-        with tempfile.TemporaryDirectory() as directory, patch.object(sync, "api", return_value=release), patch.object(sync, "find_release", return_value=mirror), patch.object(sync, "run", side_effect=["", RuntimeError("download failed")]) as command:
-            args = SimpleNamespace(tag="", repository="owner/repo", directory=Path(directory), force=True)
-            with self.assertRaisesRegex(RuntimeError, "download failed"):
-                sync.prepare(args)
-            self.assertEqual(command.call_args_list[0].args[:4], ("gh", "release", "edit", "upstream-v1.2.3"))
-            notes = (args.directory / "retry-notes.md").read_text()
-            self.assertIn(sync.ORIGIN_MARKER, notes)
-            self.assertNotIn(sync.completion_marker(release), notes)
-
-    def test_completed_release_skips_but_draft_and_force_retry(self):
-        release = {"id": 1, "tag_name": "v1.2.3", "assets": []}
-        mirror = {"draft": False, "body": sync.completion_marker(release)}
-        self.assertTrue(sync.is_complete(release, mirror, False))
-        self.assertFalse(sync.is_complete(release, mirror, True))
-        self.assertFalse(sync.is_complete(release, {**mirror, "draft": True}, False))
+        digest = sync.release_digest(release)
+        labels = {sync.MIRROR_LABEL: sync.UPSTREAM, sync.DIGEST_LABEL: digest}
+        self.assertTrue(sync.is_complete(release, labels, False))
+        self.assertFalse(sync.is_complete(release, labels, True))
+        self.assertFalse(sync.is_complete(release, {**labels, sync.DIGEST_LABEL: "old"}, False))
         self.assertFalse(sync.is_complete(release, None, False))
 
     def test_completed_prepare_does_not_download_or_create_files(self):
         release = {"id": 1, "tag_name": "v1.2.3", "assets": []}
-        mirror = {"draft": False, "body": sync.ORIGIN_MARKER + sync.completion_marker(release)}
-        with tempfile.TemporaryDirectory() as directory, patch.object(sync, "api", return_value=release), patch.object(sync, "find_release", return_value=mirror), patch.object(sync, "run") as command, patch.dict("os.environ", {}, clear=True):
+        labels = {sync.MIRROR_LABEL: sync.UPSTREAM, sync.DIGEST_LABEL: sync.release_digest(release)}
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(sync, "api", return_value=release), \
+             patch.object(sync, "inspect_image_labels", return_value=labels), \
+             patch.object(sync, "run") as command, \
+             patch.dict("os.environ", {}, clear=True):
             target = Path(directory) / "output"
             sync.prepare(SimpleNamespace(tag="", repository="owner/repo", directory=target, force=False))
             command.assert_not_called()
             self.assertFalse(target.exists())
 
-    def test_own_release_of_the_same_version_is_never_mirrored(self):
-        release = {"id": 1, "tag_name": "v1.2.3", "assets": []}
-        own = {"draft": False, "body": "Fork source release"}
-        with tempfile.TemporaryDirectory() as directory, patch.object(sync, "api", return_value=release), patch.object(sync, "find_release", side_effect=[None, own]), patch.object(sync, "run") as command, patch.dict("os.environ", {}, clear=True):
+    def test_own_source_image_of_same_version_is_never_overwritten(self):
+        release = {"id": 1, "tag_name": "v0.8.0", "assets": []}
+        own_labels = {"org.opencontainers.image.revision": "8815a3ff"}
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(sync, "api", return_value=release), \
+             patch.object(sync, "inspect_image_labels", return_value=own_labels), \
+             patch.object(sync, "run") as command, \
+             patch.dict("os.environ", {}, clear=True):
             target = Path(directory) / "output"
             sync.prepare(SimpleNamespace(tag="", repository="owner/repo", directory=target, force=True))
             command.assert_not_called()
             self.assertFalse(target.exists())
 
-    def test_finish_publishes_only_after_upload_and_never_moves_latest(self):
-        for upload_fails in (False, True):
-            with self.subTest(upload_fails=upload_fails), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                release = {"id": 1, "tag_name": "v1.2.3", "assets": []}
-                (root / "release.json").write_text(json.dumps(release))
-                (root / "assets").mkdir()
-                (root / "assets/checksums.txt").write_text("checksums")
-                calls = []
+    def test_find_release_returns_none_only_on_404(self):
+        for stderr, expected in [("gh: Not Found (HTTP 404)", None), ("gh: Bad credentials (HTTP 401)", "error")]:
+            with patch.object(sync, "run", side_effect=subprocess.CalledProcessError(1, "gh", stderr=stderr)):
+                if expected is None:
+                    self.assertIsNone(sync.find_release("alfredxw/denova", "v1.2.3"))
+                else:
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        sync.find_release("alfredxw/denova", "v1.2.3")
 
-                def command(*args):
-                    calls.append(args)
-                    if upload_fails and args[:3] == ("gh", "release", "upload"):
-                        raise RuntimeError("upload failed")
-                    return ""
-
-                # The mirrored release is upstream's newest one: latest still
-                # belongs to this fork's source releases.
-                with patch.object(sync, "find_release", side_effect=[release, None]), patch.object(sync, "api", return_value={"id": 1}), patch.object(sync, "run", side_effect=command):
-                    args = SimpleNamespace(directory=root, repository="owner/repo")
-                    if upload_fails:
-                        with self.assertRaisesRegex(RuntimeError, "upload failed"):
-                            sync.finish(args)
-                        self.assertFalse(any(call[:3] == ("gh", "release", "edit") for call in calls))
-                        self.assertNotIn(sync.completion_marker(release), (root / "mirror-notes.md").read_text())
-                    else:
-                        sync.finish(args)
-                        self.assertEqual(calls[-1][:3], ("gh", "release", "edit"))
-                        self.assertIn("--latest=false", calls[-1])
-                        self.assertIn(sync.completion_marker(release), (root / "mirror-notes.md").read_text())
-                    self.assertFalse(any(call[0] == "docker" for call in calls))
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,7 +10,7 @@ on:
         type: string
         default: ""
       force:
-        description: "Rebuild an already mirrored release"
+        description: "Rebuild an already mirrored upstream image"
         type: boolean
         default: false
   push:
@@ -53,13 +53,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
-      contents: write
+      contents: read
       packages: write
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
-      - name: Check upstream and verify release bundles
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Check upstream and verify Linux bundles
         id: upstream
         env:
           REQUESTED_TAG: ${{ inputs.tag }}
@@ -90,14 +96,7 @@ jobs:
               --build-arg "SOURCE_REPOSITORY=${GITHUB_REPOSITORY}" .
             bash docker/smoke-test.sh "denova-smoke:${arch}" "linux/${arch}" "${VERSION}"
           done
-      - name: Log in to GHCR
-        if: steps.upstream.outputs.changed == 'true'
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-      - name: Publish tested multi-platform version
+      - name: Publish tested multi-platform Docker image
         if: steps.upstream.outputs.changed == 'true'
         uses: docker/build-push-action@v7
         with:
@@ -109,9 +108,9 @@ jobs:
           build-args: |
             VERSION=${{ steps.upstream.outputs.version }}
             SOURCE_REPOSITORY=${{ github.repository }}
-      - name: Mirror release assets
-        if: steps.upstream.outputs.changed == 'true'
-        run: python3 -B scripts/sync_upstream_release.py finish --repository "${GITHUB_REPOSITORY}"
+          labels: |
+            io.denova.upstream.mirror=alfredxw/denova
+            io.denova.upstream.digest=${{ steps.upstream.outputs.digest }}
       - name: Report result
         env:
           CHANGED: ${{ steps.upstream.outputs.changed }}
@@ -119,7 +118,7 @@ jobs:
           IMAGE: ${{ steps.upstream.outputs.image }}
         run: |
           if [[ "${CHANGED}" == "true" ]]; then
-            echo "Published ${IMAGE}:${VERSION} and mirrored upstream release assets." >> "${GITHUB_STEP_SUMMARY}"
+            echo "Published ${IMAGE}:${VERSION} from upstream Linux bundles." >> "${GITHUB_STEP_SUMMARY}"
           else
-            echo "Upstream ${VERSION} is already mirrored. No changes needed." >> "${GITHUB_STEP_SUMMARY}"
+            echo "Upstream ${VERSION} is already up to date (or owned by a fork source image). No changes needed." >> "${GITHUB_STEP_SUMMARY}"
           fi

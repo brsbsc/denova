@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Denova 是一个面向小说写作与 AI 角色扮演游戏的一体化 AI 创作平台，内置 AI Agents、Skills、SubAgent 协作、自动化、图像生成与项目版本管理</strong>
+  <strong>Denova Docker 版 — 面向小说写作与 AI 角色扮演游戏的一体化 AI 创作平台容器镜像</strong>
 </p>
 
 <p align="center">
@@ -11,18 +11,17 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/BRSBSC/denova/releases"><img alt="Release" src="https://img.shields.io/github/v/release/BRSBSC/denova?style=flat-square"></a>
+  <a href="https://github.com/brsbsc/denova/pkgs/container/denova"><img alt="GHCR" src="https://img.shields.io/badge/GHCR-ghcr.io%2Fbrsbsc%2Fdenova-2496ED?style=flat-square&logo=docker&logoColor=white"></a>
+  <img alt="Arch" src="https://img.shields.io/badge/Arch-linux%2Famd64%20%7C%20linux%2Farm64-0db7ed?style=flat-square">
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/github/license/alfredxw/denova?style=flat-square"></a>
-  <img alt="Go" src="https://img.shields.io/badge/Go-1.26.9%2B-00ADD8?style=flat-square&logo=go&logoColor=white">
-  <img alt="Node.js" src="https://img.shields.io/badge/Node.js-22.13%2B-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white">
 </p>
 
 <p align="center">
-  当前版本：<strong>v0.8.0fix1</strong>（2026-11-25） · Beta · <a href="https://github.com/BRSBSC/denova/releases">下载最新版本</a>
+  当前镜像基线：<strong>v0.8.0fix1</strong> · 仅发布 Docker 镜像 · <a href="https://github.com/brsbsc/denova/pkgs/container/denova">查看 GHCR 镜像</a>
 </p>
 
 > [!NOTE]
-> 本仓库是 [alfredxw/denova](https://github.com/alfredxw/denova) 的 Docker 版本，只负责构建和发布容器镜像，不接受议题（Issue）和拉取请求（Pull Request）。应用本身的问题和建议请提交到上游仓库。
+> 本仓库是 [alfredxw/denova](https://github.com/alfredxw/denova) 的纯 **Docker** 版本，仅构建和发布 `ghcr.io/brsbsc/denova` 多架构容器镜像（`linux/amd64`、`linux/arm64`），不提供 Windows / macOS 桌面端安装包与 GitHub Releases，不接受议题（Issue）和拉取请求（Pull Request）。如需桌面端安装包或反馈应用问题，请前往上游仓库 [alfredxw/denova](https://github.com/alfredxw/denova)。
 
 ![Denova 写作](./img/ide.png)
 
@@ -49,47 +48,46 @@
 
 ![Denova 工作台](./img/workspace.png)
 
-支持局域网连接、手机自适应布局和 PWA 应用。
+支持局域网与公网访问、手机自适应布局及 PWA 添加到主屏幕。
 
 <img src="./img/mobile.png" alt="Denova 手机布局" width="360">
 
 </details>
 
-## 为什么选择 Denova
+## Docker 版特性
 
-Denova 把小说写作、互动故事、结构化资料库、AI Agent、图像生成、自动化和本地版本管理放进同一个工作区，适合需要长期维护设定、反复修改并持续积累内容的创作项目。
-
-你可以从一个灵感开始新书，导入已有小说继续创作，也可以使用角色卡和资料库搭建可分支的文字冒险。Agent 能读取项目内容、调用工具并修改文件，所有重要变更仍可检查、撤销和恢复。
-
-## 核心能力
-
-- **小说写作**：Markdown 文档与源码编辑、多文档 Tab、查找替换、大纲与章节细纲、进度追踪、正文评论、修改审阅和现有小说导入。
-- **创作 Agent**：支持 Native、Codex、Claude Code、Grok Build 和 Antigravity CLI，结合当前选区、项目文件和资料库进行创作；图片、SubAgent 和 Goal 等能力按运行时提供，支持多会话和任务暂停恢复。详见 [CLI 运行时](docs/cli-runtimes.md)。
-- **互动游戏**：通过玩家输入推进故事，支持剧情分支、故事线切换、行动建议、角色与世界状态、规则检定、剧情规划和语音朗读；可用资料库背景与角色差分编排舞台演出，并随故事分支保存。
-- **资料库**：通过自定义分类、文档式索引、@ 引用和反向引用组织设定，检索作品文件与指定故事分支中的正文提及，按组为写作与游戏 Agent 提供上下文；资料支持多图、音频与封面管理。
-- **创作方案与 Skills**：复用叙事风格、图像风格和规则等创作配置，通过 Skills 扩展 Agent 工作流；内置网文创作 Skill，覆盖构思、大纲、场景与改稿。
-- **资源中心**：发现、预览并按需导入创作方案、Skills、资料、插件和游戏；支持组合导出、来源追踪、更新审阅与备份恢复。
-- **插件与游戏扩展**：安装并管理插件与自定义游戏；插件可提供 Agent 工具、直接操作命令和独立面板，游戏可自定义界面、玩法与存档；工作台支持创建、构建、隔离预览和导出。
-- **图像创作**：生成书籍封面、章节插画、游戏背景与角色素材，并在界面中预览、关联资料和管理结果。
-- **版本与恢复**：保存本地版本、查看差异、恢复历史文件，并审阅或撤销 Agent 对工作区的修改。
-- **自动化**：按计划运行审阅、续写和自定义创作任务。
-- **跨平台体验**：支持中文与英文、浅色与深色主题、Windows / macOS / Linux、远程访问和添加到手机主屏幕，提供应用内更新与安装包上传更新。
-
-## 写作与游戏
-
-写作和游戏是工作台中并列的一级入口。写作侧重构思、设定、大纲、章节和进度；游戏侧重玩家行动、剧情分支、角色状态和故事线推进。
-
-资料库、创作方案、Skills 和版本管理由两类流程共享；章节进度和游戏状态则各自独立，避免一个入口的临时状态干扰另一个入口。
+- **开箱即用的多架构镜像**：提供 `ghcr.io/brsbsc/denova:latest`（以及固定版本标签如 `v0.8.0fix1`），同时支持 `linux/amd64` 与 `linux/arm64`。
+- **非 root 安全运行**：启动脚本自动修复受管数据目录属主后降权至 `UID/GID 10001:10001` 运行，默认启用远程访问密码保护。
+- **容器内外部 Agent CLI 托管与网页 OAuth**：
+  - 镜像保持轻量（内置 Bash、Git、curl、Python、ripgrep），不预装体积庞大的外部 Agent CLI。
+  - 默认开启容器沙箱适配（`DENOVA_CONTAINER_SANDBOX=1`），在标准非特权容器（无需 `--privileged`）下即可运行 **Antigravity CLI（`agy`）**、**Claude Code（`claude`）** 与 **Codex（`codex`）**。
+  - 可直接在 **设置 → Agents → 运行时** 中按需下载校验并安装/更新到持久化卷 `/data/.local/bin`，并通过统一 **网页 OAuth** 完成登录与退出登录（凭据持久保存在 `/data` 下，重建容器不丢失），也可在内置终端使用 `agy`、`claude`、`codex` 预设命令。
+  - 支持在 **设置 → 更新** 中开关已安装 CLI 的后台自动更新（每 24 小时检查一次，仅更新已安装的 CLI）。
+- **隐私默认关闭统计**：默认关闭使用统计且无首次启动弹窗，可在 **设置 → 常规** 中随时开关（口径见 [使用统计说明](./docs/analytics.md)）。
 
 ## 快速开始
 
-### Docker 部署（推荐）
+首次启动必须通过环境变量设置登录账号：`DENOVA_USERNAME` 与 `DENOVA_PASSWORD`（密码需为 1–72 个 UTF-8 字节）。这两个变量仅在数据卷尚未生成 `config.toml` 时生效，初始化后如需修改密码请在网页设置中操作。
 
-本 fork 发布 `ghcr.io/brsbsc/denova` 镜像，支持 `linux/amd64` 与 `linux/arm64`。标签 `latest` 指向最新版本，也可以固定为具体版本（例如 `v0.8.0fix1`）。镜像内置 Bash、Git、curl、Python 和 ripgrep，不包含其他语言工具链或外部 Agent CLI。
+### 方式一：Docker Compose（推荐）
 
-容器需要首次登录账号：`DENOVA_USERNAME` 和 `DENOVA_PASSWORD`（密码 1–72 个 UTF-8 字节）。它们只在数据目录还没有 `config.toml` 时生效，之后改密码请在应用设置中操作。
+在仓库根目录创建 `docker/.env`（已被 Git 忽略）：
 
-**docker run**
+```dotenv
+DENOVA_USERNAME=admin
+DENOVA_PASSWORD=replace-with-your-own-password
+DENOVA_IMAGE_TAG=latest
+```
+
+使用仓库内置的 [docker/compose.yml](docker/compose.yml) 启动：
+
+```bash
+docker compose --env-file docker/.env -f docker/compose.yml up -d
+```
+
+> [docker/compose.yml](docker/compose.yml) 默认只绑定宿主机 `127.0.0.1:8080`。如需局域网直接访问，可将端口映射改为 `8080:8080`；公网访问请配合 HTTPS 反向代理。
+
+### 方式二：docker run
 
 ```bash
 docker run -d --name denova \
@@ -101,140 +99,93 @@ docker run -d --name denova \
   ghcr.io/brsbsc/denova:latest
 ```
 
-**Docker Compose**
+启动后访问 `http://localhost:8080` 并使用上述账号登录。
 
-在 `docker/.env` 中写入账号和镜像标签（该文件已被 Git 忽略）：
+### 首次使用
 
-```dotenv
-DENOVA_USERNAME=admin
-DENOVA_PASSWORD=replace-with-your-own-password
-DENOVA_IMAGE_TAG=latest
+1. 按引导添加语言模型的服务商连接、API Key 与模型名（同一连接可复用于多个模型；Google Gemini 可选「Gemini 原生协议」）。
+2. 如需使用外部 CLI 引擎（Antigravity CLI / Claude Code / Codex），进入 **设置 → Agents → 运行时** 按需安装并通过网页 OAuth 登录。
+3. 创建或导入作品，从「写作」开始创作，或从「游戏」开启互动故事；需要配图时再配置图像模型。
+
+## 环境变量与数据卷
+
+### 常用环境变量
+
+| 变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `DENOVA_USERNAME` | 首次启动初始化登录用户名（已有 `config.toml` 时忽略） | 无（首次必填） |
+| `DENOVA_PASSWORD` | 首次启动初始化登录密码，1–72 UTF-8 字节（已有 `config.toml` 时忽略） | 无（首次必填） |
+| `DENOVA_IMAGE_TAG` | Compose 使用的镜像标签（如 `latest`、`v0.8.0fix1`） | `latest` |
+| `DENOVA_CONTAINER_SANDBOX` | 容器非特权沙箱适配开关 | `1`（镜像内置） |
+| `DENOVA_MANAGED_CLI_DIR` | 按需安装的外部 Agent CLI 持久化目录 | `/data/.local/bin`（镜像内置） |
+
+### 数据目录与权限
+
+所有持久化数据均位于 `/data`（默认使用命名卷 `denova-data`）：
+
+- `/data/.denova`：应用配置（`config.toml`）、项目数据、会话与版本记录
+- `/data/log`：运行日志
+- `/data/.local/bin`：通过网页设置按需安装的外部 Agent CLI 二进制
+- `/data/.gemini`、`/data/.claude`（及 `/data/.claude.json`）、`/data/.codex`：各外部 CLI 的 OAuth 登录凭据与配置
+
+权限与挂载注意事项：
+
+- 容器默认以 root 启动入口脚本，仅调整上述受管目录属主为 `10001:10001`（不递归修改 `/data` 下其他用户目录，拒绝符号链接），随后降权至 `10001:10001` 运行 Denova。
+- 使用宿主目录绑定挂载（如 `-v /path/to/denova:/data`）时，文件系统需允许 `chown`；若是禁止 `chown` 的 NFS / NAS，请先在宿主机赋予 UID `10001` 读写权限，再为容器指定 `--user 10001:10001`（Compose 为 `user: "10001:10001"`）跳过权限初始化。
+- 如需打开外部项目目录，请将其额外挂载到容器内（例如 `-v /host/projects:/projects`）。
+- 导入已有 `config.toml` 时，必须确保已启用 `allow_lan_access` 并配置 `remote_access_username` 与 `remote_access_password_hash`；切勿在容器内关闭局域网访问，否则端口将不可达。
+
+## 反向代理与 HTTPS
+
+公网或域名部署时，请在容器前配置 Caddy、Nginx 等 HTTPS 反向代理，避免明文传输登录凭据。
+
+当反向代理与 Denova 运行在同一台宿主机时，**必须转发原始 `Host` 或 `X-Forwarded-For`**，否则 Denova 会将代理请求误判为本机访问并跳过登录校验。Nginx 最小示例：
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
 ```
 
-在仓库根目录启动：
+## 更新、回退与备份
 
-```bash
-docker compose --env-file docker/.env -f docker/compose.yml up -d
-```
-
-启动后打开 `http://localhost:8080` 登录。仓库自带的 [docker/compose.yml](docker/compose.yml) 只把端口发布到宿主机 `127.0.0.1`；需要局域网访问时把端口映射改为 `8080:8080`，需要公网访问时请在前面加 HTTPS 反向代理。
-
-**数据与权限**
-
-- 所有数据在 `/data`：`/data/.denova` 是应用数据（配置、项目、会话），`/data/log` 是日志。默认使用命名卷 `denova-data`。
-- 容器以 root 启动，只把 `/data/.denova` 和 `/data/log` 的属主调整为 `10001:10001`，然后降权运行应用。
-- 绑定宿主目录（如 `-v /path/to/denova:/data`）时，文件系统需允许 chown；不允许 chown 的 NFS / NAS 目录，请先在宿主机给 UID `10001` 读写权限，再用 `--user 10001:10001`（Compose 为 `user: "10001:10001"`）跳过权限初始化。
-- 外部 Project 需要额外挂载对应目录，容器看不到未挂载的宿主文件。
-- 导入旧数据时，`config.toml` 必须启用 `allow_lan_access`，并包含 `remote_access_username` 与 `remote_access_password_hash`，否则容器拒绝启动。不要在容器内关闭局域网访问，否则端口不可达。
-
-**更新、备份与回退**
+**Docker Compose 更新：**
 
 ```bash
 docker compose --env-file docker/.env -f docker/compose.yml pull
 docker compose --env-file docker/.env -f docker/compose.yml up -d
 ```
 
-- 使用 `docker run` 时，先 `docker pull ghcr.io/brsbsc/denova:latest`，再删除旧容器并用相同参数重建；数据卷会保留。
-- 不要使用应用内更新器替换容器内的程序，也不要执行 `docker compose down -v`（会删除数据卷）。
-- 升级前备份数据卷。回退时把 `DENOVA_IMAGE_TAG` 改回旧版本并重建容器；回退镜像不会回退数据格式。
-
-镜像的构建、上游 Release 同步和验证流程见 [容器发布说明](docs/container-publishing.md)。
-
-### 安装发布版
-
-**Denova Desktop · 桌面版（推荐）**：安装后直接打开。
-
-| 系统 | 下载 |
-| --- | --- |
-| macOS Apple Silicon | [下载已公证的 DMG](https://github.com/alfredxw/denova/releases/download/macos-notarized-v0.8.0/denova-desktop-v0.8.0-macos-arm64.dmg) |
-| Windows x64 | [下载 EXE 安装器](https://github.com/alfredxw/denova/releases/download/v0.8.0/denova-desktop-v0.8.0-windows-x64-setup.exe) |
-
-macOS 打开 DMG，将 Denova 拖入 Applications；Windows 运行安装器。桌面版不提供 macOS Intel 或 Linux 包。[桌面构建说明](docs/desktop-distribution.md)介绍源码打包。
-
-macOS 需要 13 或更新版本。Windows 11 和绝大多数 Windows 10 已有 WebView2；仅缺少该运行时的设备需要安装 [Microsoft WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download)。
-
-v0.7.0、v0.7.1 桌面版需手动安装本版一次，以切换自动更新通道；v0.7.2 可自动升级。如果旧版无法启动，直接安装本版并选择原数据目录即可。v0.7.1 及之后的 WebUI 可继续自动升级。
-
-上方链接的 macOS DMG 已用 Apple Developer ID 签名并通过 Apple 公证。Windows 安装器未做代码签名，首次运行可能出现系统安全提示。桌面自动更新仍单独校验更新包签名。
-
-<details>
-<summary>Denova WebUI · 浏览器版</summary>
-
-在本机或服务器运行下载的程序，再通过浏览器访问。WebUI 需要下载运行，不是在线托管网站。
-
-| 系统 | 下载 |
-| --- | --- |
-| macOS Apple Silicon | [tar.gz](https://github.com/alfredxw/denova/releases/download/v0.8.0/denova-webui-v0.8.0-macos-arm64.tar.gz) |
-| macOS Intel | [tar.gz](https://github.com/alfredxw/denova/releases/download/v0.8.0/denova-webui-v0.8.0-macos-x64.tar.gz) |
-| Windows x64 | [zip](https://github.com/alfredxw/denova/releases/download/v0.8.0/denova-webui-v0.8.0-windows-x64.zip) |
-| Linux x64 | [tar.gz](https://github.com/alfredxw/denova/releases/download/v0.8.0/denova-webui-v0.8.0-linux-x64.tar.gz) |
-| Linux ARM64 | [tar.gz](https://github.com/alfredxw/denova/releases/download/v0.8.0/denova-webui-v0.8.0-linux-arm64.tar.gz) |
-
-macOS 和 Linux 可以使用一键安装脚本：
+**docker run 更新：**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BRSBSC/denova/v0.8.0fix1/scripts/install.sh | sh
+docker pull ghcr.io/brsbsc/denova:latest
+docker rm -f denova
+# 使用与之前相同的 -v denova-data:/data 参数重新运行容器
 ```
 
-安装完成后运行 `denova`。Windows 用户以及希望手动安装的用户，可以从 [GitHub Releases](https://github.com/BRSBSC/denova/releases) 下载对应平台的压缩包；Windows 运行 `denova.exe`。
+- 升级前建议先备份 `denova-data` 数据卷。
+- **不要**在容器内使用应用内置更新器替换程序，也**不要**执行 `docker compose down -v`（会删除数据卷）。
+- 回退版本时，将 `DENOVA_IMAGE_TAG` 改回旧标签并重建容器；注意回退镜像不会自动回退已升级的数据格式。
 
-</details>
+## Denova 核心能力
 
-稳定使用建议选择 [Release](https://github.com/alfredxw/denova/releases/latest)；`master` 分支可能包含尚未发布的改动。
+- **小说写作**：Markdown 文档与源码编辑、多文档 Tab、查找替换、大纲与章节细纲、进度追踪、正文评论、修改审阅和现有小说导入。
+- **创作 Agent**：支持 Native、Codex、Claude Code、Grok Build 和 Antigravity CLI，结合选区、项目文件和资料库创作，支持多会话与暂停恢复。详见 [CLI 运行时说明](docs/cli-runtimes.md)。
+- **互动游戏**：分支剧情、故事线切换、行动建议、角色与世界状态、规则检定、剧情规划、语音朗读及资料库舞台演出。
+- **资料库**：自定义分类、文档式索引、`@` 引用与反向引用、正文提及检索，以及多图、音频与封面管理。
+- **创作方案、Skills 与资源中心**：复用叙事/图像风格与规则，通过 Skills 扩展 Agent 能力，支持资源导入导出、版本更新审阅与备份恢复。
+- **插件、图像创作、版本与自动化**：支持插件与自定义游戏扩展、多服务商图像生成、本地版本差异/回滚及定时自动化任务。
 
-### 第一次使用
+## 镜像构建与发布说明
 
-1. 按启动引导添加语言模型的 API Key 和模型名。
-2. 创建或导入一本书，也可以直接打开已有项目目录。
-3. 从「写作」开始创作，或从「游戏」创建一条互动故事线；需要生成图片时再配置图像模型。
-
-### 从源码运行
-
-需要 Go 1.26.9+、Node.js 22.13+、pnpm、ripgrep 和 Bash。Windows 请在 Git Bash 或 WSL 中运行以下命令。
-
-```bash
-git clone https://github.com/alfredxw/denova.git
-cd denova
-corepack enable
-./scripts/bootstrap.sh
-```
-
-默认地址：
-
-- 前端：`http://localhost:7788`
-- 后端：`http://localhost:7789`
-
-## 模型与配置
-
-推荐在设置页完成模型配置：先添加服务商连接，再选择或填写模型并测试连接。同一连接可以复用于多个模型。语言模型支持内置服务商和自定义兼容端点；图像模型支持 OpenAI、xAI/Grok、火山引擎 Seedream、Google Gemini Image、ComfyUI Workflow 和自定义端点。
-
-Google Gemini 文本模型可在连接的协议选项中选择「Gemini 原生协议」，使用原生工具调用、图片输入与推理续接；已有 OpenAI 兼容连接保持原协议。
-
-可在设置中添加可选决策模型，用于游戏舞台素材选择、资料库语义分类和自动化语义触发；不确定或服务不可用时由语言模型兜底。
-
-## 远程访问与手机使用
-
-在 **设置 → 访问** 中开启局域网访问、设置用户名和密码并重启后，其他设备可以使用页面显示的地址登录 Denova。本机还可生成 5 分钟有效的一次性登录二维码及链接，同一局域网内的手机扫码即可登录，也可复制链接到其他设备打开。浏览器会保持登录 30 天，刷新或服务重启无需重新输入密码；可在设置中退出登录。手机浏览器可以将页面添加到主屏幕。
-
-从源码运行时，二维码和连接链接使用后端端口提供的 `web/dist` 构建产物。首次使用或更新前端后，执行 `pnpm --dir web build` 并重启后端；本机 Vite 热更新入口可继续用于开发。
-
-Docker 容器默认已开启局域网访问，并使用启动时设置的账号登录，无需再在设置中开启。
-
-通过公网或域名部署时，请使用 Caddy、Nginx 等反向代理提供 HTTPS，避免明文传输登录凭据。与 Denova 运行在同一台机器上的反向代理必须转发原始 `Host`，或以 `X-Forwarded-For` 传递客户端地址（如 Nginx 的 `proxy_set_header Host $host;` 与 `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`）；两者都不转发时，Denova 无法区分代理请求与本机浏览器，会跳过登录。
-
-## 使用统计
-
-本 fork 的正式发布版本默认关闭使用统计，也不弹出首次启动提示；如需开启，可在「设置 → 常规」中随时开启或关闭。开启后，PostHog 收到的固定字段包括活跃、功能使用、留存、版本、平台、执行结果、毫秒耗时、错误分类、HTTP 状态码以及主题和语言变更，不包含正文、提示词、AI 回答、图片、项目名称、文件路径、密钥或原始错误文本。随机本地标识用于关联留存，云端会接触连接 IP。源码和开发版本不发送统计；完整口径与字段见 [使用统计说明](./docs/analytics.md)。
-
-## 开发
-
-常用命令：
-
-```bash
-./scripts/bootstrap.sh fe
-./scripts/bootstrap.sh be
-./scripts/build.sh
-```
+关于多架构镜像构建、CI 校验、上游版本同步及本地构建步骤，请参阅 [容器发布说明](docs/container-publishing.md)。
 
 ## License
 

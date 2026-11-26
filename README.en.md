@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Denova is an integrated AI creative platform for novel writing and AI role-playing games, with built-in AI Agents, Skills, SubAgent collaboration, automation, image generation, and project version management</strong>
+  <strong>Denova Docker Edition — Containerized AI creative platform for novel writing and AI role-playing games</strong>
 </p>
 
 <p align="center">
@@ -11,18 +11,17 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/BRSBSC/denova/releases"><img alt="Release" src="https://img.shields.io/github/v/release/BRSBSC/denova?style=flat-square"></a>
+  <a href="https://github.com/brsbsc/denova/pkgs/container/denova"><img alt="GHCR" src="https://img.shields.io/badge/GHCR-ghcr.io%2Fbrsbsc%2Fdenova-2496ED?style=flat-square&logo=docker&logoColor=white"></a>
+  <img alt="Arch" src="https://img.shields.io/badge/Arch-linux%2Famd64%20%7C%20linux%2Farm64-0db7ed?style=flat-square">
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/github/license/alfredxw/denova?style=flat-square"></a>
-  <img alt="Go" src="https://img.shields.io/badge/Go-1.26.9%2B-00ADD8?style=flat-square&logo=go&logoColor=white">
-  <img alt="Node.js" src="https://img.shields.io/badge/Node.js-22.13%2B-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white">
 </p>
 
 <p align="center">
-  Current version: <strong>v0.8.0fix1</strong> (2026-11-25) · Beta · <a href="https://github.com/BRSBSC/denova/releases">Download the latest release</a>
+  Current image baseline: <strong>v0.8.0fix1</strong> · Docker only · <a href="https://github.com/brsbsc/denova/pkgs/container/denova">View GHCR Package</a>
 </p>
 
 > [!NOTE]
-> This repository is the Docker edition of [alfredxw/denova](https://github.com/alfredxw/denova). It only builds and publishes container images and does not accept issues or pull requests. Please report app issues and suggestions to the upstream repository.
+> This repository is the **Docker-only** edition of [alfredxw/denova](https://github.com/alfredxw/denova). It exclusively builds and publishes `ghcr.io/brsbsc/denova` multi-arch container images (`linux/amd64`, `linux/arm64`) with no Windows/macOS installers or GitHub Releases, and does not accept issues or pull requests. For desktop builds, native installers, or app feedback, please visit the upstream repository [alfredxw/denova](https://github.com/alfredxw/denova).
 
 ![Denova Writing](./img/ide.png)
 
@@ -49,47 +48,46 @@
 
 ![Denova workspace](./img/workspace.png)
 
-Supports LAN access, responsive mobile layouts, and PWA apps.
+Supports LAN/remote access, responsive mobile layouts, and PWA home-screen installation.
 
 <img src="./img/mobile.png" alt="Denova mobile layout" width="360">
 
 </details>
 
-## Why Denova
+## Docker Edition Highlights
 
-Denova brings novel writing, interactive stories, structured lore, AI Agents, image generation, automation, and local version management into one workspace. It is designed for creative projects whose settings and content need to evolve over time.
-
-Start a new book from an idea, import an existing novel to continue writing, or use character cards and lore to build a branching text adventure. Agents can read project content, use tools, and edit files while important changes remain reviewable, undoable, and recoverable.
-
-## Core Features
-
-- **Novel writing**: Markdown document and source editing, multiple tabs, find and replace, outlines and chapter plans, progress tracking, inline comments, change review, and novel import.
-- **Creative Agents**: choose Native, Codex, Claude Code, Grok Build, or Antigravity CLI to work with selections, project files, and lore, with multiple conversations and task pause/resume. Image, SubAgent, and Goal capabilities depend on the runtime; see [CLI runtimes](docs/cli-runtimes.md).
-- **Interactive games**: advance stories through player input, with branches, storyline switching, action suggestions, character and world state, rule checks, story planning, and read-aloud. Stage scenes with Lore backgrounds and character sprites, with presentation saved along story branches.
-- **Lore**: organize settings with custom categories, document-style indexes, @ references, and backlinks; find text mentions in project files and a selected story branch, provide grouped context to Writing and Game Agents, and manage multiple images, audio, and covers for each entry.
-- **Creative Setups and Skills**: reuse narrative styles, image styles, rules, and other creative configurations; extend Agent workflows with Skills, including a built-in novel-writing Skill for premises, outlines, scenes, and revision.
-- **Resource Center**: discover, preview, and selectively import Creative Setups, Skills, Lore, plugins, and games; combine resources for export, track sources, review updates, and restore backups.
-- **Plugins and game extensions**: install and manage plugins and custom games. Plugins can provide Agent tools, direct commands, and independent panels; games can define their own interface, gameplay, and save format. The workbench supports creation, builds, isolated previews, and export.
-- **Image creation**: generate book covers, chapter illustrations, game backgrounds, and character artwork, then preview results, associate them with Lore, and manage them in the app.
-- **Versions and recovery**: save local versions, inspect changes, restore historical files, and review or undo Agent edits to the workspace.
-- **Automation**: run scheduled review, continuation, and custom creative tasks.
-- **Cross-platform experience**: Chinese and English UI, light and dark themes, Windows / macOS / Linux support, remote access, installation to a phone's home screen, and in-app updates from online releases or uploaded packages.
-
-## Writing and Game
-
-Writing and Game are peer top-level destinations in the workbench. Writing focuses on ideas, settings, outlines, chapters, and progress. Game focuses on player actions, story branches, character state, and storyline progression.
-
-Lore, Creative Setups, Skills, and version management are shared between the two workflows. Chapter progress and game state remain separate so temporary state from one destination does not affect the other.
+- **Multi-arch GHCR images**: `ghcr.io/brsbsc/denova:latest` (and pinned version tags such as `v0.8.0fix1`) built for `linux/amd64` and `linux/arm64`.
+- **Non-root runtime**: The entrypoint prepares ownership on managed data directories and drops privileges to `UID/GID 10001:10001`, with remote-access authentication enabled out of the box.
+- **Managed External Agent CLIs & Web OAuth in Containers**:
+  - The base image stays lightweight (Bash, Git, curl, Python, ripgrep) without preinstalling heavy external Agent CLIs.
+  - Enables container sandbox adaptation (`DENOVA_CONTAINER_SANDBOX=1`) by default so **Antigravity CLI (`agy`)**, **Claude Code (`claude`)**, and **Codex (`codex`)** run under standard unprivileged containers (no `--privileged`).
+  - Install, verify, and update external CLIs on demand into the persistent `/data/.local/bin` volume directly from **Settings → Agents → Runtime**, and sign in/out via unified **Web OAuth** (credentials persist under `/data` across container recreations), or use built-in terminal presets (`agy`, `claude`, `codex`).
+  - Optional background auto-updates (every 24h) for already-installed CLIs can be toggled under **Settings → Updates**.
+- **Privacy-first defaults**: Usage statistics are off by default with no first-run prompt, and can be toggled anytime under **Settings → General** (see [analytics documentation](./docs/analytics.md)).
 
 ## Quick Start
 
-### Docker (Recommended)
+Set an initial account via `DENOVA_USERNAME` and `DENOVA_PASSWORD` (1–72 UTF-8 bytes). These variables are only used when no `config.toml` exists in the data volume yet; change the password inside the web UI afterwards.
 
-This fork publishes the `ghcr.io/brsbsc/denova` image for `linux/amd64` and `linux/arm64`. The `latest` tag follows the newest release; you can also pin a version such as `v0.8.0fix1`. The image includes Bash, Git, curl, Python, and ripgrep, but no other language toolchains or external Agent CLIs.
+### Option 1: Docker Compose (Recommended)
 
-The container needs a first-login account: `DENOVA_USERNAME` and `DENOVA_PASSWORD` (1–72 UTF-8 bytes). They only apply while the data directory has no `config.toml`; change the password in the app's settings afterwards.
+Create `docker/.env` at the repository root (ignored by Git):
 
-**docker run**
+```dotenv
+DENOVA_USERNAME=admin
+DENOVA_PASSWORD=replace-with-your-own-password
+DENOVA_IMAGE_TAG=latest
+```
+
+Start with the bundled [docker/compose.yml](docker/compose.yml):
+
+```bash
+docker compose --env-file docker/.env -f docker/compose.yml up -d
+```
+
+> [docker/compose.yml](docker/compose.yml) binds to `127.0.0.1:8080` on the host by default. Change the mapping to `8080:8080` for direct LAN access, or place an HTTPS reverse proxy in front for internet access.
+
+### Option 2: docker run
 
 ```bash
 docker run -d --name denova \
@@ -101,140 +99,93 @@ docker run -d --name denova \
   ghcr.io/brsbsc/denova:latest
 ```
 
-**Docker Compose**
+Open `http://localhost:8080` and sign in with the configured credentials.
 
-Put the account and image tag in `docker/.env` (ignored by Git):
+### First Run
 
-```dotenv
-DENOVA_USERNAME=admin
-DENOVA_PASSWORD=replace-with-your-own-password
-DENOVA_IMAGE_TAG=latest
+1. Follow the startup guide to add a language-model provider connection, API key, and model name (one connection can be reused across models; Google Gemini supports the native Gemini protocol).
+2. If you use external CLI engines (Antigravity CLI / Claude Code / Codex), open **Settings → Agents → Runtime** to install on demand and sign in via Web OAuth.
+3. Create or import a project, start writing in **Writing** or launch an interactive storyline in **Game**, and configure an image model when needed.
+
+## Environment Variables & Data Volume
+
+### Common Environment Variables
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `DENOVA_USERNAME` | Initial login username (ignored once `config.toml` exists) | Required on first run |
+| `DENOVA_PASSWORD` | Initial login password, 1–72 UTF-8 bytes (ignored once `config.toml` exists) | Required on first run |
+| `DENOVA_IMAGE_TAG` | Image tag used by Compose (e.g. `latest`, `v0.8.0fix1`) | `latest` |
+| `DENOVA_CONTAINER_SANDBOX` | Container unprivileged sandbox adaptation | `1` (image default) |
+| `DENOVA_MANAGED_CLI_DIR` | Persistent directory for on-demand managed Agent CLIs | `/data/.local/bin` (image default) |
+
+### Data Layout & Permissions
+
+All persistent state lives under `/data` (default named volume `denova-data`):
+
+- `/data/.denova`: application configuration (`config.toml`), projects, sessions, and version history
+- `/data/log`: application logs
+- `/data/.local/bin`: on-demand managed external Agent CLI binaries installed via web settings
+- `/data/.gemini`, `/data/.claude` (and `/data/.claude.json`), `/data/.codex`: persisted OAuth credentials and CLI settings
+
+Permission & mount notes:
+
+- The container starts as root solely to adjust ownership on the managed directories above to `10001:10001` (without touching unrelated user directories under `/data` or following symlinks), then drops privileges to `10001:10001`.
+- Bind mounts (e.g. `-v /path/to/denova:/data`) require `chown` support; on NFS/NAS mounts that disallow `chown`, grant UID `10001` read/write access on the host and run with `--user 10001:10001` (Compose: `user: "10001:10001"`) to skip ownership preparation.
+- External project directories must be mounted explicitly into the container (e.g. `-v /host/projects:/projects`).
+- Imported `config.toml` files must keep `allow_lan_access = true` with `remote_access_username` and `remote_access_password_hash` configured; disabling LAN access inside the container makes the port unreachable.
+
+## Reverse Proxy & HTTPS
+
+For domain or public deployments, put Denova behind an HTTPS reverse proxy (Caddy, Nginx, etc.) so credentials are never sent in cleartext.
+
+When the proxy runs on the same host as Denova, it **must forward the original `Host` or `X-Forwarded-For`**; otherwise Denova treats proxied traffic as local loopback and bypasses authentication. Minimal Nginx example:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
 ```
 
-Start it from the repository root:
+## Upgrade, Rollback & Backup
 
-```bash
-docker compose --env-file docker/.env -f docker/compose.yml up -d
-```
-
-Then open `http://localhost:8080` and sign in. The bundled [docker/compose.yml](docker/compose.yml) publishes the port on the host's `127.0.0.1` only; change the mapping to `8080:8080` for LAN access, and put an HTTPS reverse proxy in front for internet access.
-
-**Data and permissions**
-
-- All data lives in `/data`: `/data/.denova` holds app data (settings, projects, sessions) and `/data/log` holds logs. The default is the named volume `denova-data`.
-- The container starts as root, changes ownership of only `/data/.denova` and `/data/log` to `10001:10001`, then drops privileges to run the app.
-- When bind-mounting a host directory (for example `-v /path/to/denova:/data`), the file system must allow chown. For NFS / NAS directories that refuse chown, grant UID `10001` read/write access on the host first, then run with `--user 10001:10001` (Compose: `user: "10001:10001"`) to skip the permission setup.
-- External Projects need their directories mounted separately; the container cannot see unmounted host files.
-- When importing existing data, `config.toml` must enable `allow_lan_access` and contain `remote_access_username` and `remote_access_password_hash`, or the container refuses to start. Do not turn off LAN access inside the container, or the port becomes unreachable.
-
-**Update, backup, and rollback**
+**Docker Compose:**
 
 ```bash
 docker compose --env-file docker/.env -f docker/compose.yml pull
 docker compose --env-file docker/.env -f docker/compose.yml up -d
 ```
 
-- With `docker run`, run `docker pull ghcr.io/brsbsc/denova:latest`, remove the old container, and recreate it with the same arguments; the data volume is kept.
-- Do not use the in-app updater to replace the program inside the container, and do not run `docker compose down -v`, which deletes the data volume.
-- Back up the data volume before upgrading. To roll back, set `DENOVA_IMAGE_TAG` to the older version and recreate the container; rolling back the image does not roll back the data format.
-
-See [Container publishing](docs/container-publishing.en.md) for how the image is built, synced with upstream releases, and verified.
-
-### Install a Release
-
-**Denova Desktop (recommended)**: install it and open the app.
-
-| System | Download |
-| --- | --- |
-| macOS Apple Silicon | [Download notarized DMG](https://github.com/alfredxw/denova/releases/download/macos-notarized-v0.8.0/denova-desktop-v0.8.0-macos-arm64.dmg) |
-| Windows x64 | [Download EXE installer](https://github.com/alfredxw/denova/releases/download/v0.8.0/denova-desktop-v0.8.0-windows-x64-setup.exe) |
-
-macOS: open the DMG and drag Denova into Applications. Windows: run the installer. Desktop does not provide macOS Intel or Linux builds. See the [desktop build guide](docs/desktop-distribution.md) to package from source.
-
-macOS requires version 13 or later. Windows 11 and most Windows 10 devices already have WebView2; only devices without it need to install the [Microsoft WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download).
-
-Desktop v0.7.0 and v0.7.1 need one manual installation of this version to switch update feeds; v0.7.2 can update automatically. If an older version cannot start, install this version and select your existing data folder. WebUI v0.7.1 and later can still update automatically.
-
-The macOS DMG linked above is signed with Apple Developer ID and notarized by Apple. The Windows installer is unsigned and may show a security prompt on first launch. Desktop auto-updates still verify their own package signatures.
-
-<details>
-<summary>Denova WebUI · Browser interface</summary>
-
-Run the downloaded program on your computer or server, then open its address in a browser. WebUI is a downloadable application, not a hosted website.
-
-| System | Download |
-| --- | --- |
-| macOS Apple Silicon | [tar.gz](https://github.com/alfredxw/denova/releases/download/v0.8.0/denova-webui-v0.8.0-macos-arm64.tar.gz) |
-| macOS Intel | [tar.gz](https://github.com/alfredxw/denova/releases/download/v0.8.0/denova-webui-v0.8.0-macos-x64.tar.gz) |
-| Windows x64 | [zip](https://github.com/alfredxw/denova/releases/download/v0.8.0/denova-webui-v0.8.0-windows-x64.zip) |
-| Linux x64 | [tar.gz](https://github.com/alfredxw/denova/releases/download/v0.8.0/denova-webui-v0.8.0-linux-x64.tar.gz) |
-| Linux ARM64 | [tar.gz](https://github.com/alfredxw/denova/releases/download/v0.8.0/denova-webui-v0.8.0-linux-arm64.tar.gz) |
-
-On macOS and Linux, run the installer:
+**docker run:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BRSBSC/denova/v0.8.0fix1/scripts/install.sh | sh
+docker pull ghcr.io/brsbsc/denova:latest
+docker rm -f denova
+# Recreate the container with the same -v denova-data:/data mount
 ```
 
-Run `denova` after installation. Windows users and anyone who prefers manual installation can download the archive for their platform from [GitHub Releases](https://github.com/BRSBSC/denova/releases); on Windows, run `denova.exe`.
+- Back up the `denova-data` volume before upgrading.
+- Do **not** use the in-app updater inside the container, and do **not** run `docker compose down -v` (which deletes the data volume).
+- To roll back, set `DENOVA_IMAGE_TAG` back to an older tag and recreate the container (note that rolling back the image does not downgrade migrated data formats).
 
-</details>
+## Core Denova Capabilities
 
-For stable use, choose a [Release](https://github.com/alfredxw/denova/releases/latest). The `master` branch may contain unreleased changes.
+- **Novel writing**: Markdown & source editing, multi-tab workspace, find/replace, outlines and chapter plans, progress tracking, inline comments, change review, and novel import.
+- **Creative Agents**: Native, Codex, Claude Code, Grok Build, and Antigravity CLI runtimes with multi-session pause/resume and project/lore context. See [CLI runtimes](docs/cli-runtimes.md).
+- **Interactive games**: Branching storylines, action suggestions, character/world state, rule checks, story planning, read-aloud, and lore-backed stage presentation.
+- **Lore library**: Custom categories, document-style indexes, `@` references and backlinks, mention search, and multi-image/audio/cover management.
+- **Creative Setups, Skills & Resource Center**: Reusable styles and rules, Skill-extensible workflows, selective import/export, update review, and backups.
+- **Plugins, Image Creation, Versions & Automation**: Plugin & custom game extensions, multi-provider image generation, local version diffs/recovery, and scheduled automation.
 
-### First Run
+## Container Build & Publishing
 
-1. Follow the startup guide to add a language-model API key and model name.
-2. Create or import a book, or open an existing project directory.
-3. Start creating from Writing, or create an interactive storyline from Game. Configure an image model only when you need image generation.
-
-### Run from Source
-
-You need Go 1.26.9+, Node.js 22.13+, pnpm, ripgrep, and Bash. On Windows, run these commands from Git Bash or WSL.
-
-```bash
-git clone https://github.com/alfredxw/denova.git
-cd denova
-corepack enable
-./scripts/bootstrap.sh
-```
-
-Default addresses:
-
-- Frontend: `http://localhost:7788`
-- Backend: `http://localhost:7789`
-
-## Models and Configuration
-
-The recommended setup is through Settings: add a provider connection, select or enter a model, and test the connection. One connection can be reused by multiple models. Language models support built-in providers and custom API-compatible endpoints. Image models support OpenAI, xAI/Grok, Volcengine Seedream, Google Gemini Image, ComfyUI Workflow, and custom endpoints.
-
-For Google Gemini text models, select “Gemini native API” in the connection's protocol options to use native tool calls, image inputs and reasoning continuation. Existing OpenAI-compatible connections keep their protocol.
-
-Optional decision models can be configured in Settings for Game stage media, Lore semantic classification, and automation semantic triggers, with language-model fallback for uncertain results or service failures.
-
-## Remote Access and Phone Usage
-
-Enable LAN access under **Settings → Access**, set a username and password, and restart. Other devices can sign in at the displayed address. The host can also create a one-use sign-in QR code and link that expire after 5 minutes. Scan with a phone on the same LAN, or copy the link to another device. The browser stays signed in for 30 days across refreshes and server restarts; sign out from Settings. Phone browsers can add Denova to the home screen.
-
-When running from source, QR codes and connection links use the backend port to serve the `web/dist` build. Run `pnpm --dir web build` and restart the backend before first use or after frontend changes. The local Vite entry point remains available for development with hot reload.
-
-Docker containers already have LAN access enabled and use the account set at first start; no need to enable it in Settings.
-
-For public or domain-based deployments, put Denova behind an HTTPS reverse proxy such as Caddy or Nginx so login credentials are not transmitted in cleartext. A reverse proxy on the same machine as Denova must forward the original `Host` or pass the client address in `X-Forwarded-For` (for Nginx, `proxy_set_header Host $host;` and `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`). A proxy that forwards neither is indistinguishable from a local browser and skips the login.
-
-## Usage statistics
-
-This fork keeps usage statistics off by default in release builds with no first-run prompt. You can opt in or turn it off anytime under **Settings → General**. When enabled, PostHog receives fixed activity, feature usage, retention, version, platform, execution outcome, duration in milliseconds, error category, HTTP status, and theme/language changes, without creative text, prompts, AI replies, images, project names, file paths, keys or raw error text. A random local ID links return visits; the cloud receives the connection IP. Source and development builds do not send statistics. See the [metric and field definitions](./docs/analytics.md).
-
-## Development
-
-Common commands:
-
-```bash
-./scripts/bootstrap.sh fe
-./scripts/bootstrap.sh be
-./scripts/build.sh
-```
+For multi-arch image publishing, CI verification, upstream image sync, and local build instructions, see [Container publishing](docs/container-publishing.en.md).
 
 ## License
 

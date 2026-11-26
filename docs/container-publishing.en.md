@@ -6,25 +6,22 @@ This fork checks the latest stable `alfredxw/denova` release at minute 23 of eve
 
 1. Push these changes to the default `master` branch of `BRSBSC/denova`.
 2. Enable workflows in the fork's **Actions** tab. If the initial push did not start a run, select **Sync upstream release and publish GHCR → Run workflow**.
-3. Allow `contents: write` and `packages: write` for the built-in `GITHUB_TOKEN`. No separate PAT is needed. Organization restrictions may require administrator changes. If the GHCR package already exists, grant this repository access under the package's Actions access settings.
+3. Allow `packages: write` for the built-in `GITHUB_TOKEN`. No separate PAT or `contents: write` permission is needed, and no GitHub Releases are created or modified. Organization restrictions may require administrator changes. If the GHCR package already exists, grant this repository access under the package's Actions access settings.
 4. After the first publication, check **Packages → denova → Package settings**. Set visibility to Public for anonymous pulls; a public source repository does not guarantee a public package.
-5. Check the Actions logs and Summary for successful image and Release publication. GitHub may disable scheduled workflows in inactive public repositories; re-enable them in Actions when needed.
+5. Check the Actions logs and Summary for successful image publication. GitHub may disable scheduled workflows in inactive public repositories; re-enable them in Actions when needed.
 
-Images are published as `ghcr.io/brsbsc/denova:v0.4.5` (example), supporting `linux/amd64` and `linux/arm64`. Mirroring publishes version tags only; `ghcr.io/brsbsc/denova:latest` is moved only by this fork's source releases, described below. The publishing job is restricted to `BRSBSC/denova`. Other forks must adjust the repository condition and Compose image address.
+Images are published as `ghcr.io/brsbsc/denova:v0.4.5` (example), supporting `linux/amd64` and `linux/arm64`. Upstream sync publishes versioned Docker images only and never creates GitHub Releases; `ghcr.io/brsbsc/denova:latest` is moved only by this fork's source releases, described below. The publishing job is restricted to `BRSBSC/denova`. Other forks must adjust the repository condition and Compose image address.
 
 ## Publication and retries
 
-- Download all upstream Release assets and verify every Denova archive against `checksums.txt`. Missing Linux architectures, checksum failures, or unsafe archive paths stop publication.
+- Download only `checksums.txt` and the Linux bundles (`denova*-linux-*.tar.gz`) from the upstream release and verify every archive against `checksums.txt`. Missing Linux architectures, checksum failures, or unsafe archive paths stop publication.
 - Package the released Linux bundles without recompiling the application. Preserve the frontend, Skills, updater, and license. Add Bash, Git, curl, Python, and ripgrep. The image stays lightweight without preinstalling external Agent CLIs (Antigravity CLI, Claude Code, Codex), which can be installed on demand into the data volume from web settings; additional language toolchains require an extended image.
 - Application source fixes must first be included in the Linux bundle used by the image. Pushing an application patch to this fork or forcing a rebuild of the original version does not compile that patch into the image. Sync an upstream release containing the fix, or separately build and verify a patched bundle and image.
-- Build and test both architectures: version, HTTP frontend, rejection of unauthenticated access, login, settings access, managed external Agent CLI and web OAuth availability plus `/data/.local/bin` permissions, and configuration/session persistence after restart. Push the version image only after these tests pass.
-- Keep the upstream version as the Release title, using an `upstream-vMAJOR.MINOR.PATCH` tag on this workflow's commit. Image tags remain `vMAJOR.MINOR.PATCH`. This avoids additional permissions for importing upstream workflows and does not trigger the existing `v*` source-release workflow. GitHub-generated Source code archives contain the fork's packaging configuration; use the linked upstream release for application source. Existing Releases without this workflow's ownership marker are never overwritten.
-- Mirroring never moves the `latest` image tag and never marks the mirrored Release as Latest: both belong to this fork's source releases, and an upstream build lacks their fixes. Publish the mirrored Release with a completion marker last. Failures leave no success marker and can be retried; a draft Release or version image may remain.
-- GHCR and GitHub Releases cannot be committed atomically. If the final Release publication fails, the version image may already be pushed; the next retry completes the Release.
-- Scheduled runs process only the current latest release, not all historical releases. Enter a manual `tag` to backfill a version. Enable `force` to rebuild a completed version. Pushing container or synchronization changes to `master` also rebuilds the latest version.
-- Mirrored attachments remain byte-for-byte upstream files, including upstream download URLs in the installer. Synchronization adds files or replaces matching names; it does not automatically delete previously archived attachments. Completion markers track the Release ID and asset IDs, sizes, and update times; replaced upstream assets trigger processing again. Images use only the Linux bundles downloaded and verified in the current run.
+- Build and test both architectures: version, HTTP frontend, rejection of unauthenticated access, login, settings access, `/data/.local/bin` permissions, and configuration/session persistence after restart (fork source builds also assert managed external Agent CLI and web OAuth availability). Push the version image only after these tests pass, attaching `io.denova.upstream.mirror` and `io.denova.upstream.digest` OCI labels for idempotency.
+- Synchronization checks GHCR OCI labels directly: if the target tag already exists without `io.denova.upstream.mirror` (meaning it was published from this fork's source, such as `v0.8.0`), mirroring always skips it. Mirroring never moves `latest` and never creates GitHub Releases.
+- Scheduled runs process only the current latest release, not all historical releases. Enter a manual `tag` to backfill a version. Enable `force` to rebuild a mirrored upstream image. Pushing container or synchronization changes to `master` also checks and rebuilds if applicable.
 
-The entire pipeline runs in one workflow and does not rely on a tag triggering another workflow.
+The entire pipeline targets Docker images only, with no desktop installers and no GitHub Releases.
 
 ## Run the container
 
@@ -65,7 +62,7 @@ The `Release` workflow builds source from each `v*` tag rather than using upstre
 
 The `v0.8.0fix1` image is `ghcr.io/brsbsc/denova:v0.8.0fix1`. Set `DENOVA_IMAGE_TAG=v0.8.0fix1` in `docker/.env` and run the update commands above. `latest` always references the most recent source release and is unaffected by mirroring. To run an unmodified upstream build, set `DENOVA_IMAGE_TAG` to the upstream version (for example `v0.5.1`). A version this fork releases itself (such as `v0.8.0`) is always this fork's source build; mirroring skips that upstream version.
 
-Mirroring continues to process upstream stable releases and publishes the version image of a newer upstream version later, without changing `latest`. Installers attached to source releases install packages from this fork.
+Mirroring continues to process upstream stable releases and publishes the version image of a newer upstream version later, without changing `latest` or creating GitHub Releases.
 
 ## Validation
 
