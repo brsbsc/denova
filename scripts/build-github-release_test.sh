@@ -52,6 +52,8 @@ printf '#!/bin/sh\necho "Unexpected pnpm invocation" >&2\nexit 1\n' > "${TEST_RO
 chmod 755 "${TEST_ROOT}/fake-bin/"*
 export PATH="${TEST_ROOT}/fake-bin:${PATH}"
 export DENOVA_RELEASE_FRONTEND_DIR="${TEST_ROOT}/web/dist"
+# Isolate default-repository assertions from inherited GitHub Actions fork env.
+unset GITHUB_REPOSITORY DENOVA_RELEASE_DESKTOP DENOVA_DESKTOP_UPDATE_PUBLIC_KEY
 
 bash "${TEST_ROOT}/scripts/build-github-release.sh" v1.2.3 > "${TEST_ROOT}/build.log"
 assets="${TEST_ROOT}/dist/github-release"
