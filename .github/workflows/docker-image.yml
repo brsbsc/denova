@@ -1,9 +1,8 @@
 name: Publish Docker image
 
 # Builds the Linux bundles of an existing release tag and publishes only the
-# GHCR image. It runs entirely on Linux runners, so it does not wait on the
-# desktop packaging or macOS runners that gate the full Release workflow.
-# The tag's commit is expected to have passed CI already.
+# GHCR image. It runs entirely on Linux runners and skips the Full CI gate used
+# by the Release workflow. The tag's commit is expected to have passed CI already.
 on:
   workflow_dispatch:
     inputs:
