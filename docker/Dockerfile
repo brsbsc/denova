@@ -22,6 +22,7 @@ COPY dist/upstream/${TARGETARCH}/denova/ /opt/denova/
 COPY docker/entrypoint.py /usr/local/lib/denova-entrypoint.py
 COPY docker/prepare-data.sh /usr/local/lib/denova-prepare-data.sh
 RUN chmod 0755 /opt/denova/denova /opt/denova/denova-updater \
+    && sed -i 's/\r$//' /usr/local/lib/denova-prepare-data.sh \
     && rm -f /opt/denova/config.toml \
     && ln -s /data/log /opt/denova/log
 

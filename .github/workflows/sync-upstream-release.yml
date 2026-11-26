@@ -80,6 +80,8 @@ jobs:
         if: steps.upstream.outputs.changed == 'true'
         env:
           VERSION: ${{ steps.upstream.outputs.version }}
+          # Upstream mirror releases may predate fork-only managed CLI runtime metadata.
+          DENOVA_SMOKE_REQUIRE_MANAGED_CLI: "0"
         run: |
           for arch in amd64 arm64; do
             docker buildx build --load --platform "linux/${arch}" \

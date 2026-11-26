@@ -58,8 +58,9 @@ curl --fail --silent --cookie-jar "${scratch}/cookies" \
   "${base_url}/api/auth/login" > "${scratch}/login.json"
 python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["authenticated"]' "${scratch}/login.json"
 curl --fail --silent --cookie "${scratch}/cookies" "${base_url}/api/settings" > /dev/null
-curl --fail --silent --cookie "${scratch}/cookies" "${base_url}/api/agent-runtimes" > "${scratch}/runtimes.json"
-python3 -c '
+if [[ "${DENOVA_SMOKE_REQUIRE_MANAGED_CLI:-1}" == "1" ]]; then
+  curl --fail --silent --cookie "${scratch}/cookies" "${base_url}/api/agent-runtimes" > "${scratch}/runtimes.json"
+  python3 -c '
 import json, sys
 items = {item["id"]: item for item in json.load(open(sys.argv[1]))["items"]}
 for engine_id in ("antigravity", "claude", "codex"):
@@ -69,6 +70,7 @@ for engine_id in ("antigravity", "claude", "codex"):
     managed = item.get("managed") or {}
     assert managed.get("managed") is True, (engine_id, item)
 ' "${scratch}/runtimes.json"
+fi
 docker exec --user 10001:10001 "${container}" sh -c '
   test -d /data/.local/bin &&
   test -w /data/.local/bin &&
