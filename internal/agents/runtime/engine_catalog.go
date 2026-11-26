@@ -24,6 +24,9 @@ type EngineDescriptor struct {
 	NameKey               string                 `json:"name_key"`
 	Status                string                 `json:"status"`
 	ReasonKey             string                 `json:"reason_key,omitempty"`
+	Version               string                 `json:"version,omitempty"`
+	AuthSupported         bool                   `json:"auth_supported,omitempty"`
+	Managed               *ManagedCLIStatus      `json:"managed,omitempty"`
 	Capabilities          EngineCapabilities     `json:"capabilities"`
 	ConfigurationSections []ConfigurationSection `json:"configuration_sections"`
 }

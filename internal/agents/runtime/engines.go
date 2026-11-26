@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -44,6 +45,14 @@ func VersionUnsupportedReasonKey(err error) string {
 	}
 }
 
+// EnginesOptions overrides environment-detected managed CLI, web OAuth, or
+// connection factory defaults when constructing Engines.
+type EnginesOptions struct {
+	CLIManager  *CLIManagerOptions
+	AuthManager *AuthManagerOptions
+	Factories   map[config.RuntimeID]func(context.Context) (external.Connection, error)
+}
+
 // Engines owns host-local connections and their active-use leases. Creating or
 // listing it has no filesystem, process, account, or network side effects.
 // Native execution never calls Acquire and retains its existing runtime.
@@ -54,6 +63,8 @@ type Engines struct {
 	// final accept step across Writing and AgentChat, which share one journal.
 	admission      sync.RWMutex
 	entries        map[config.RuntimeID]*engineEntry
+	cli            *CLIManager
+	auth           *AuthManager
 	Operations     external.Service
 	apiMu          sync.Mutex
 	apiConnections map[external.Connection]struct{}
@@ -66,17 +77,23 @@ type Engines struct {
 // admissions share one CLI invocation. mu only guards the fields below, so
 // reading the cached status or catalog never waits for a process to start.
 type engineEntry struct {
-	probeMu      sync.Mutex
-	mu           sync.Mutex
-	id           config.RuntimeID
-	factory      func(context.Context) (external.Connection, error)
-	connection   external.Connection
-	state        external.ConnectionState
-	models       external.Models
-	modelsExpiry time.Time
-	retryAfter   time.Time
-	users        int
-	closed       bool
+	probeMu       sync.Mutex
+	mu            sync.Mutex
+	id            config.RuntimeID
+	factory       func(context.Context) (external.Connection, error)
+	connection    external.Connection
+	state         external.ConnectionState
+	version       string
+	models        external.Models
+	modelsExpiry  time.Time
+	retryAfter    time.Time
+	users         int
+	pendingReload bool
+	closed        bool
+}
+
+type versionedConnection interface {
+	Version() string
 }
 
 // engineModelsTTL bounds repeated CLI model discovery during admissions. An
@@ -87,11 +104,77 @@ const engineModelsTTL = 5 * time.Minute
 const engineRetryDelay = 30 * time.Second
 
 func NewEngines() *Engines {
-	return &Engines{apiConnections: make(map[external.Connection]struct{}), apiFactory: connectRuntimeAPI, entries: map[config.RuntimeID]*engineEntry{config.RuntimeCodex: {
-		id: config.RuntimeCodex, state: external.ConnectionState{Status: "unchecked"}, factory: connectCodex,
-	}, config.RuntimeClaude: {id: config.RuntimeClaude, state: external.ConnectionState{Status: "unchecked"}, factory: connectClaude},
-		config.RuntimeGrok:        {id: config.RuntimeGrok, state: external.ConnectionState{Status: "unchecked"}, factory: connectGrok},
-		config.RuntimeAntigravity: {id: config.RuntimeAntigravity, state: external.ConnectionState{Status: "unchecked"}, factory: connectAntigravity}}}
+	return NewEnginesWithOptions(EnginesOptions{})
+}
+
+// NewEnginesWithOptions constructs an Engines registry with optional managed
+// CLI, web OAuth, and connection factory overrides. It never starts subprocesses
+// or performs network I/O during construction.
+func NewEnginesWithOptions(options EnginesOptions) *Engines {
+	engines := &Engines{
+		apiConnections: make(map[external.Connection]struct{}),
+		apiFactory:     connectRuntimeAPI,
+		entries: map[config.RuntimeID]*engineEntry{
+			config.RuntimeCodex:       {id: config.RuntimeCodex, state: external.ConnectionState{Status: "unchecked"}, factory: connectCodex},
+			config.RuntimeClaude:      {id: config.RuntimeClaude, state: external.ConnectionState{Status: "unchecked"}, factory: connectClaude},
+			config.RuntimeGrok:        {id: config.RuntimeGrok, state: external.ConnectionState{Status: "unchecked"}, factory: connectGrok},
+			config.RuntimeAntigravity: {id: config.RuntimeAntigravity, state: external.ConnectionState{Status: "unchecked"}, factory: connectAntigravity},
+		},
+	}
+	for id, factory := range options.Factories {
+		if entry := engines.entries[id]; entry != nil && factory != nil {
+			entry.factory = factory
+		}
+	}
+
+	cliOpts := CLIManagerOptions{
+		Dir: hostruntime.ManagedAgentCLIDir(),
+	}
+	if options.CLIManager != nil {
+		cliOpts = *options.CLIManager
+	}
+	if cliOpts.OnReload == nil {
+		cliOpts.OnReload = engines.ReloadBinary
+	}
+	engines.cli = NewCLIManager(cliOpts)
+
+	authOpts := AuthManagerOptions{
+		Enabled: hostruntime.WebAuthEnabled,
+	}
+	if options.AuthManager != nil {
+		authOpts = *options.AuthManager
+	}
+	if authOpts.Enabled == nil {
+		authOpts.Enabled = hostruntime.WebAuthEnabled
+	}
+	if authOpts.Probe == nil {
+		authOpts.Probe = engines.Check
+	}
+	if authOpts.IsBusy == nil {
+		authOpts.IsBusy = engines.isEntryBusy
+	}
+	if authOpts.CloseIdle == nil {
+		authOpts.CloseIdle = engines.closeIdleEntry
+	}
+	engines.auth = NewAuthManager(authOpts)
+
+	return engines
+}
+
+// CLI exposes the container-managed CLI installer and auto-updater.
+func (engines *Engines) CLI() *CLIManager {
+	if engines == nil {
+		return nil
+	}
+	return engines.cli
+}
+
+// Auth exposes the headless web OAuth sign-in and logout manager.
+func (engines *Engines) Auth() *AuthManager {
+	if engines == nil {
+		return nil
+	}
+	return engines.auth
 }
 
 func connectGrok(ctx context.Context) (external.Connection, error) {
@@ -134,30 +217,111 @@ func (engines *Engines) Catalog() []EngineDescriptor {
 	items := []EngineDescriptor{engineDescriptor(config.RuntimeNative)}
 	for _, id := range []config.RuntimeID{config.RuntimeCodex, config.RuntimeClaude, config.RuntimeGrok, config.RuntimeAntigravity} {
 		entry := engines.entries[id]
-		items = append(items, entry.descriptor())
+		items = append(items, engines.descriptor(entry))
 	}
 	return items
 }
 
-func (entry *engineEntry) descriptor() EngineDescriptor {
-	_, state := entry.status()
+// Descriptor returns the cached descriptor for one registered runtime without
+// spawning subprocesses or performing network requests.
+func (engines *Engines) Descriptor(id config.RuntimeID) (EngineDescriptor, error) {
+	if id == config.RuntimeNative {
+		return engineDescriptor(id), nil
+	}
+	entry := engines.entries[id]
+	if entry == nil {
+		return EngineDescriptor{}, ErrEngineNotFound
+	}
+	return engines.descriptor(entry), nil
+}
+
+func (engines *Engines) descriptor(entry *engineEntry) EngineDescriptor {
+	_, state, version := entry.snapshot()
 	item := engineDescriptor(entry.id)
 	item.Status, item.ReasonKey = state.Status, state.ReasonKey
+	item.Version = version
+	if engines.auth != nil {
+		item.AuthSupported = engines.auth.Supported(entry.id)
+	}
+	if engines.cli != nil {
+		item.Managed = engines.cli.Status(entry.id)
+		if item.Version == "" && item.Managed != nil && item.Managed.Installed && item.Managed.InstalledVersion != "" {
+			item.Version = item.Managed.InstalledVersion
+		}
+	}
 	return item
 }
 
-// status reports readiness together with the connection it was read from. A live
-// connection owns the current state; the cached state only covers the interval
-// before the first connection exists.
-func (entry *engineEntry) status() (external.Connection, external.ConnectionState) {
+// snapshot reports readiness and cached version together with the connection it
+// was read from. A live connection owns the current state; the cached state
+// only covers the interval before the first connection exists.
+func (entry *engineEntry) snapshot() (external.Connection, external.ConnectionState, string) {
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 	connection := entry.connection
 	state := entry.state
+	version := entry.version
 	if connection != nil {
 		state = connection.Status()
 	}
-	return connection, state
+	return connection, state, version
+}
+
+func (entry *engineEntry) setVersion(version string) {
+	entry.mu.Lock()
+	entry.version = version
+	entry.mu.Unlock()
+}
+
+func connectionVersion(connection external.Connection) string {
+	if versioned, ok := connection.(versionedConnection); ok {
+		return strings.TrimSpace(versioned.Version())
+	}
+	return ""
+}
+
+func (engines *Engines) syncCLIInstalled(id config.RuntimeID, installed bool, version string) {
+	if engines.cli != nil {
+		engines.cli.RecordInstalled(id, installed, version)
+	}
+}
+
+func (engines *Engines) isEntryBusy(id config.RuntimeID) bool {
+	entry := engines.entries[id]
+	if entry == nil {
+		return false
+	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	return entry.users > 0
+}
+
+func (engines *Engines) closeIdleEntry(id config.RuntimeID) error {
+	entry, err := engines.entry(id)
+	if err != nil {
+		return err
+	}
+	entry.probeMu.Lock()
+	defer entry.probeMu.Unlock()
+
+	entry.mu.Lock()
+	if entry.users > 0 {
+		entry.mu.Unlock()
+		return ErrOperationActive
+	}
+	connection := entry.connection
+	entry.connection = nil
+	entry.models, entry.modelsExpiry = external.Models{}, time.Time{}
+	entry.retryAfter = time.Time{}
+	if !entry.closed {
+		entry.state = external.ConnectionState{Status: "unchecked"}
+	}
+	entry.mu.Unlock()
+
+	if connection != nil {
+		return connection.Close()
+	}
+	return nil
 }
 
 func (engines *Engines) entry(id config.RuntimeID) (*engineEntry, error) {
@@ -183,9 +347,56 @@ func (engines *Engines) Check(ctx context.Context, id config.RuntimeID) (EngineD
 		return EngineDescriptor{}, err
 	}
 	entry.probeMu.Lock()
-	_, _ = entry.catalog(ctx, true)
+	_, _ = engines.catalogEntry(ctx, entry, true)
 	entry.probeMu.Unlock()
-	return entry.descriptor(), nil
+	return engines.descriptor(entry), nil
+}
+
+// ReloadBinary switches an engine to a newly installed managed CLI binary
+// without interrupting active conversation leases. When leases are active, it
+// marks pendingReload so the old connection is retired once the last lease
+// finishes; when idle, it immediately recycles and re-probes the binary.
+func (engines *Engines) ReloadBinary(ctx context.Context, id config.RuntimeID) (bool, string, error) {
+	entry, err := engines.entry(id)
+	if err != nil {
+		return false, "", err
+	}
+	entry.probeMu.Lock()
+	defer entry.probeMu.Unlock()
+
+	entry.mu.Lock()
+	if entry.closed {
+		entry.mu.Unlock()
+		return false, "", ErrEngineNotReady
+	}
+	if entry.users > 0 {
+		entry.pendingReload = true
+		entry.mu.Unlock()
+		if engines.cli != nil {
+			engines.cli.SetPendingReload(id, true)
+		}
+		return true, "", nil
+	}
+	connection := entry.connection
+	entry.connection = nil
+	entry.models, entry.modelsExpiry = external.Models{}, time.Time{}
+	entry.retryAfter = time.Time{}
+	entry.version = ""
+	entry.pendingReload = false
+	entry.mu.Unlock()
+
+	if connection != nil {
+		_ = connection.Close()
+	}
+	if engines.cli != nil {
+		engines.cli.SetPendingReload(id, false)
+	}
+	if err := ctx.Err(); err != nil {
+		return false, "", err
+	}
+	_, _ = engines.catalogEntry(ctx, entry, true)
+	_, _, version := entry.snapshot()
+	return false, version, nil
 }
 
 // Models reads the last known catalog of a ready engine without probing it.
@@ -218,25 +429,26 @@ func (engines *Engines) ValidateSelection(ctx context.Context, selection config.
 	}
 	entry.probeMu.Lock()
 	defer entry.probeMu.Unlock()
-	models, err := entry.catalog(ctx, false)
+	models, err := engines.catalogEntry(ctx, entry, false)
 	if err != nil {
 		return err
 	}
 	return validateEngineModel(models, selection)
 }
 
-// catalog resolves readiness and the model catalog. It is the only place that
-// starts an engine process. Callers hold probeMu.
-func (entry *engineEntry) catalog(ctx context.Context, force bool) (external.Models, error) {
-	connection, state := entry.status()
+// catalogEntry resolves readiness and the model catalog. It is the only place
+// that starts an engine process. Callers hold entry.probeMu.
+func (engines *Engines) catalogEntry(ctx context.Context, entry *engineEntry, force bool) (external.Models, error) {
+	connection, state, _ := entry.snapshot()
 	entry.mu.Lock()
-	closed, users := entry.closed, entry.users
+	closed, users, pendingReload := entry.closed, entry.users, entry.pendingReload
 	expiry, cached, retryAfter := entry.modelsExpiry, entry.models, entry.retryAfter
 	entry.mu.Unlock()
 	if closed {
 		return external.Models{}, ErrEngineNotReady
 	}
-	if !force {
+	needsReplace := pendingReload && users == 0
+	if !force && !needsReplace {
 		if state.Status == "ready" && time.Now().Before(expiry) {
 			return cached, nil
 		}
@@ -250,7 +462,7 @@ func (entry *engineEntry) catalog(ctx context.Context, force bool) (external.Mod
 		}
 	}
 	// Replacing a connection is only safe while nothing holds a lease on it.
-	if connection != nil && ((force && users == 0) || state.Status == "unavailable") {
+	if connection != nil && (((force || needsReplace) && users == 0) || state.Status == "unavailable") {
 		if users != 0 {
 			return external.Models{}, ErrOperationActive
 		}
@@ -259,17 +471,37 @@ func (entry *engineEntry) catalog(ctx context.Context, force bool) (external.Mod
 		entry.mu.Lock()
 		entry.connection = nil
 		entry.models, entry.modelsExpiry = external.Models{}, time.Time{}
+		entry.version = ""
+		clearedPending := entry.pendingReload
+		entry.pendingReload = false
 		entry.mu.Unlock()
+		if clearedPending && engines.cli != nil {
+			engines.cli.SetPendingReload(entry.id, false)
+		}
+	} else if needsReplace {
+		entry.mu.Lock()
+		entry.pendingReload = false
+		entry.mu.Unlock()
+		if engines.cli != nil {
+			engines.cli.SetPendingReload(entry.id, false)
+		}
 	}
 	if connection == nil {
 		created, err := entry.factory(ctx)
 		if err != nil {
-			entry.record(engineFailureState(entry.id, err), nil)
+			failState := engineFailureState(entry.id, err)
+			entry.record(failState, nil)
+			if failState.Status == "not_installed" {
+				entry.setVersion("")
+				engines.syncCLIInstalled(entry.id, false, "")
+			}
 			return external.Models{}, err
 		}
 		connection = created
+		version := connectionVersion(created)
 		entry.mu.Lock()
 		entry.connection = created
+		entry.version = version
 		entry.mu.Unlock()
 	}
 	// A new connection establishes readiness before model discovery. An
@@ -278,6 +510,21 @@ func (entry *engineEntry) catalog(ctx context.Context, force bool) (external.Mod
 	var probed *external.Models
 	if state.Status == "unchecked" || (force && users != 0) {
 		state, probed = probeReadiness(ctx, connection)
+	}
+	version := connectionVersion(connection)
+	if version != "" {
+		entry.setVersion(version)
+	}
+	switch state.Status {
+	case "ready", "auth_required":
+		engines.syncCLIInstalled(entry.id, true, version)
+	case "not_installed":
+		entry.setVersion("")
+		engines.syncCLIInstalled(entry.id, false, "")
+	case "unavailable":
+		if version != "" {
+			engines.syncCLIInstalled(entry.id, true, version)
+		}
 	}
 	if state.Status != "ready" {
 		entry.record(state, probed)
@@ -396,7 +643,7 @@ func (engines *Engines) Acquire(ctx context.Context, selection config.RuntimeSel
 	// Hold probeMu until the lease is pinned so an explicit check cannot replace
 	// the connection between validation and the first turn.
 	entry.probeMu.Lock()
-	models, err := entry.catalog(ctx, false)
+	models, err := engines.catalogEntry(ctx, entry, false)
 	if err != nil {
 		entry.probeMu.Unlock()
 		return nil, nil, err
@@ -416,7 +663,45 @@ func (engines *Engines) Acquire(ctx context.Context, selection config.RuntimeSel
 	entry.mu.Unlock()
 	entry.probeMu.Unlock()
 	var once sync.Once
-	return connection, func() { once.Do(func() { entry.mu.Lock(); entry.users--; entry.mu.Unlock() }) }, nil
+	return connection, func() {
+		once.Do(func() {
+			entry.mu.Lock()
+			entry.users--
+			shouldFlush := entry.users == 0 && entry.pendingReload
+			entry.mu.Unlock()
+			if shouldFlush {
+				engines.flushPendingReload(entry)
+			}
+		})
+	}, nil
+}
+
+func (engines *Engines) flushPendingReload(entry *engineEntry) {
+	entry.probeMu.Lock()
+	defer entry.probeMu.Unlock()
+
+	entry.mu.Lock()
+	if entry.users != 0 || !entry.pendingReload {
+		entry.mu.Unlock()
+		return
+	}
+	connection := entry.connection
+	entry.connection = nil
+	entry.models, entry.modelsExpiry = external.Models{}, time.Time{}
+	entry.retryAfter = time.Time{}
+	entry.version = ""
+	entry.pendingReload = false
+	if !entry.closed {
+		entry.state = external.ConnectionState{Status: "unchecked"}
+	}
+	entry.mu.Unlock()
+
+	if connection != nil {
+		_ = connection.Close()
+	}
+	if engines.cli != nil {
+		engines.cli.SetPendingReload(entry.id, false)
+	}
 }
 
 // validateEngineModel reports whether the selection is served by the catalog the
@@ -444,6 +729,12 @@ func validateEngineModel(models external.Models, selection config.RuntimeSelecti
 }
 
 func (engines *Engines) Close() error {
+	if engines.auth != nil {
+		engines.auth.Close()
+	}
+	if engines.cli != nil {
+		engines.cli.Close()
+	}
 	var failures []error
 	engines.apiMu.Lock()
 	engines.apiClosed = true
@@ -457,6 +748,7 @@ func (engines *Engines) Close() error {
 		entry.mu.Lock()
 		entry.closed = true
 		entry.models, entry.modelsExpiry = external.Models{}, time.Time{}
+		entry.pendingReload = false
 		connection := entry.connection
 		entry.mu.Unlock()
 		if connection != nil {

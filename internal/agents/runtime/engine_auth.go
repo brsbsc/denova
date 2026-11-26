@@ -639,7 +639,7 @@ func (m *AuthManager) watchSessionProcess(session *authSession, outputDone <-cha
 	}
 	if errors.Is(ctxErr, context.DeadlineExceeded) {
 		session.status = AuthStatusFailed
-		session.errorKey = "agentRuntime.auth.timedOut"
+		session.errorKey = "agentRuntime.auth.expired"
 		session.done = true
 		session.mu.Unlock()
 		m.logger.Warn("[agent-runtime] auth session timed out",

@@ -51,6 +51,47 @@ func (a *App) updatePolicy() (update.Policy, error) {
 	return update.Policy{Check: s.UpdateCheckEnabled != nil && *s.UpdateCheckEnabled, Download: s.UpdateDownloadEnabled != nil && *s.UpdateDownloadEnabled}, nil
 }
 
+// startAgentCLIAutoUpdates runs periodic updates for already-installed managed
+// external CLIs when container-managed CLI support is enabled.
+func (a *App) startAgentCLIAutoUpdates(ctx context.Context) {
+	cli := a.AgentEngines().CLI()
+	if cli == nil || !cli.Enabled() {
+		return
+	}
+	workerCtx, lease, err := a.rootScope.AcquireContext(ctx)
+	if err != nil {
+		slog.Error("agent_cli_auto_update_worker_start_failed", "error", err)
+		return
+	}
+	go func() {
+		defer lease.Release()
+		defer func() {
+			if v := recover(); v != nil {
+				slog.Error("agent_cli_auto_update_worker_panic", "error", v)
+			}
+		}()
+		cli.RunAutoUpdate(workerCtx, a.agentCLIAutoUpdateEnabled)
+	}()
+}
+
+func (a *App) agentCLIAutoUpdateEnabled() (bool, error) {
+	a.mu.RLock()
+	dataDir := ""
+	if a.cfg != nil {
+		dataDir = a.cfg.DataDir()
+	}
+	a.mu.RUnlock()
+	layers, err := config.LoadLayeredWithStartupConfigAt(dataDir, "", "")
+	if err != nil {
+		return false, err
+	}
+	s := layers.Effective
+	if s.AgentCLIAutoUpdate == nil {
+		return true, nil
+	}
+	return *s.AgentCLIAutoUpdate, nil
+}
+
 func (a *App) UpdateStatus() (update.Status, error) {
 	status, err := a.updateService().Status()
 	if err != nil || a == nil {

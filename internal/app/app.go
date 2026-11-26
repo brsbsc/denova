@@ -123,9 +123,27 @@ type App struct {
 	conversationSelectionMu sync.Mutex
 }
 
+// Option customizes App construction.
+type Option func(*App)
+
+// WithAgentEngines supplies an explicit Engines registry instead of creating
+// the default host-detected instance.
+func WithAgentEngines(engines *agentruntime.Engines) Option {
+	return func(a *App) {
+		if engines != nil {
+			a.agentEngines = engines
+		}
+	}
+}
+
 // New creates the application runtime. When neither an explicit nor resumable
 // workspace exists, App stays unbound until the user selects or creates a Book.
 func New(ctx context.Context, cfg *config.Config) (_ *App, err error) {
+	return NewWithOptions(ctx, cfg)
+}
+
+// NewWithOptions creates the application runtime with optional service overrides.
+func NewWithOptions(ctx context.Context, cfg *config.Config, opts ...Option) (_ *App, err error) {
 	finishStage := observability.StartStartupStage(ctx, "data_directory_lock")
 	defer func() { finishStage(err) }()
 	dataDir := ""
@@ -216,6 +234,11 @@ func New(ctx context.Context, cfg *config.Config) (_ *App, err error) {
 		workspaceFiles:     filewatch.NewService(),
 		terminals:          terminal.NewManager(terminalConfigFromAppConfig(cfg)),
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(app)
+		}
+	}
 	app.automationApp = automationapp.NewService(automationHost{app: app})
 	canonicalSessions, err := canonicalstore.New(dataDir, registry)
 	if err != nil {
@@ -282,6 +305,7 @@ func New(ctx context.Context, cfg *config.Config) (_ *App, err error) {
 		app.Automation().StartScheduler(ctx)
 		app.startResourceUpdates(ctx)
 		app.startSoftwareUpdates(ctx)
+		app.startAgentCLIAutoUpdates(ctx)
 		return app, nil
 	}
 
@@ -314,6 +338,7 @@ func New(ctx context.Context, cfg *config.Config) (_ *App, err error) {
 	app.Automation().StartScheduler(ctx)
 	app.startResourceUpdates(ctx)
 	app.startSoftwareUpdates(ctx)
+	app.startAgentCLIAutoUpdates(ctx)
 	return app, nil
 }
 
@@ -347,7 +372,9 @@ var ErrAgentContextChanged = appagentruntime.ErrContextChanged
 func (a *App) ensureServices() {
 	a.servicesOnce.Do(func() {
 		a.updates = update.NewService()
-		a.agentEngines = agentruntime.NewEngines()
+		if a.agentEngines == nil {
+			a.agentEngines = agentruntime.NewEngines()
+		}
 		a.workspaceApp = &workspaceService{app: a}
 		a.chatApp = &ChatAppService{
 			app: a, starts: apptask.NewStartRegistry(apptask.StartRegistryOptions{Label: "Writing"}),

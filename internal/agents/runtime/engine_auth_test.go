@@ -645,6 +645,9 @@ func TestAuthLifecycleReplaceTTLCancelAndClose(t *testing.T) {
 			t.Fatalf("Start failed: %v", err)
 		}
 		waitForAuthStatus(t, mgr, config.RuntimeCodex, started.SessionID, AuthStatusAwaitingUser)
+		mgr.mu.Lock()
+		session := mgr.byID[started.SessionID]
+		mgr.mu.Unlock()
 
 		// Wait past TTL so timeout fires and expires the session.
 		time.Sleep(550 * time.Millisecond)
@@ -665,6 +668,9 @@ func TestAuthLifecycleReplaceTTLCancelAndClose(t *testing.T) {
 		case <-done:
 		case <-time.After(3 * time.Second):
 			t.Fatal("Close blocked waiting for expired session process")
+		}
+		if snap := session.snapshot(); snap.Status != AuthStatusFailed || snap.ErrorKey != "agentRuntime.auth.expired" {
+			t.Fatalf("expired session snapshot = %+v, want status=failed error_key=agentRuntime.auth.expired", snap)
 		}
 	})
 }
