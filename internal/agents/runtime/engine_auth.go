@@ -582,7 +582,7 @@ func (m *AuthManager) pumpSessionOutput(session *authSession, outputDone chan<- 
 				stopTimer()
 				m.logger.Info("[agent-runtime] auth session awaiting user",
 					"engine", session.engine, "session_id", session.id, "mode", session.mode)
-			} else if session.isStarting() {
+			} else if session.needsPartialFlush() {
 				stopTimer()
 				timerWG.Add(1)
 				flushMu.Lock()
@@ -623,6 +623,9 @@ func (m *AuthManager) watchSessionProcess(session *authSession, outputDone <-cha
 	})
 	waitErr := session.proc.Wait()
 	stopCancel()
+	session.mu.Lock()
+	session.processExited = true
+	session.mu.Unlock()
 
 	// Drain any trailing prompt output before releasing handles and tempDir.
 	select {
@@ -637,7 +640,6 @@ func (m *AuthManager) watchSessionProcess(session *authSession, outputDone <-cha
 	session.cancel()
 
 	session.mu.Lock()
-	session.processExited = true
 	if session.status == AuthStatusCancelled {
 		session.done = true
 		session.mu.Unlock()
@@ -772,10 +774,10 @@ func (s *authSession) parseLocked(includeTail bool) bool {
 	return false
 }
 
-func (s *authSession) isStarting() bool {
+func (s *authSession) needsPartialFlush() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.status == AuthStatusStarting
+	return s.status == AuthStatusStarting || (s.status == AuthStatusAwaitingUser && s.urlPriority < 2)
 }
 
 func (s *authSession) markCancelled() {

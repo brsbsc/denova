@@ -129,7 +129,8 @@ func TestAuthHelperProcess(t *testing.T) {
 	case "claude_banner_then_oauth":
 		fmt.Print("Welcome to Claude Code: https://claude.ai\n")
 		time.Sleep(220 * time.Millisecond)
-		fmt.Print("Open https://claude.com/cai/oauth/authorize?client_id=banner&redirect_uri=http%3A%2F%2Flocalhost%3A48777%2Fcallback&state=s2\nCode: ")
+		// Deliberately omit a trailing newline so chunk 2 relies on needsPartialFlush().
+		fmt.Print("Open https://claude.com/cai/oauth/authorize?client_id=banner&redirect_uri=http%3A%2F%2Flocalhost%3A48777%2Fcallback&state=s2")
 		line := readHelperInputLine(os.Stdin)
 		if line != os.Getenv("DENOVA_AUTH_EXPECT_CODE") {
 			os.Exit(4)
