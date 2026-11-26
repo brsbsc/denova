@@ -16,6 +16,11 @@ import (
 // every frame, so frames it cannot paint only cost main-thread time.
 const taskEventCoalesceWindow = 80 * time.Millisecond
 
+// Bound a single live coalesced delta frame so a fast burst cannot perform
+// megabyte-scale string copies or overshoot the 1 MiB UI live-message budget
+// before HandleLive gets a chance to re-anchor mid-segment.
+const taskEventCoalesceMaxBytes = 64 * 1024
+
 func coalesceTaskEvents(events []apptask.Event) []apptask.Event {
 	if len(events) < 2 {
 		return append([]apptask.Event(nil), events...)
@@ -80,6 +85,14 @@ func coalescedTaskEventField(eventType string) string {
 	}
 }
 
+func coalescedTaskEventBytes(event apptask.Event) int {
+	field := coalescedTaskEventField(event.Event.Type)
+	if field == "" {
+		return 0
+	}
+	return len(event.Event.DataString(field))
+}
+
 func taskEventDataMap(value any) (map[string]any, bool) {
 	switch data := value.(type) {
 	case map[string]any:
@@ -111,7 +124,7 @@ func writeCoalescedTaskEventStream(events <-chan apptask.Event, write func(appta
 			if !ok {
 				return apptask.Event{}, nil
 			}
-			if coalescedTaskEventField(item.Event.Type) == "" {
+			if coalescedTaskEventField(item.Event.Type) == "" || coalescedTaskEventBytes(item) >= taskEventCoalesceMaxBytes {
 				if err := write(item); err != nil {
 					return item, err
 				}
@@ -130,16 +143,18 @@ func writeCoalescedTaskEventStream(events <-chan apptask.Event, write func(appta
 				}
 				return apptask.Event{}, nil
 			}
-			if merged, ok := mergeTaskEvents(*pending, item); ok {
-				pending = &merged
-				continue
+			if coalescedTaskEventBytes(*pending)+coalescedTaskEventBytes(item) <= taskEventCoalesceMaxBytes {
+				if merged, ok := mergeTaskEvents(*pending, item); ok {
+					pending = &merged
+					continue
+				}
 			}
 			if err := write(*pending); err != nil {
 				return *pending, err
 			}
 			pending = nil
 			flush = nil
-			if coalescedTaskEventField(item.Event.Type) == "" {
+			if coalescedTaskEventField(item.Event.Type) == "" || coalescedTaskEventBytes(item) >= taskEventCoalesceMaxBytes {
 				if err := write(item); err != nil {
 					return item, err
 				}

@@ -1,6 +1,10 @@
 package sse
 
 import (
+	"context"
+	"errors"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,5 +108,39 @@ func TestCoalesceTaskEventsMergesDeltasStampedWithSegmentOffsets(t *testing.T) {
 	// The merged frame starts where its first delta started.
 	if data, _ := coalesced[0].Event.Data.(map[string]any); data[agentrun.DisplaySegmentOffsetKey] != 40 {
 		t.Fatalf("merged frame offset = %#v, want 40", coalesced[0].Event.Data)
+	}
+}
+
+func TestWriteCoalescedTaskEventStreamBoundsBurstBeforeReanchorBudget(t *testing.T) {
+	// Mirror a fast 1.6 MB burst arriving inside a single coalesce window:
+	// HandleLive must still re-anchor near the 1 MiB budget instead of letting
+	// one unbounded coalesced frame swallow the entire segment tail.
+	chunk := strings.Repeat("Budget reasoning with no tool boundary. ", 200) // 8000 bytes
+	events := make(chan apptask.Event, 200)
+	offset := 0
+	for index := 1; index <= 200; index++ {
+		events <- apptask.Event{
+			Cursor: uint64(index),
+			Event: novaApp.AgentEvent{
+				Type: "thinking",
+				Data: map[string]any{
+					"run_id":                         "run-1",
+					"display_segment_id":             "segment-1",
+					"content":                        chunk,
+					agentrun.DisplaySegmentOffsetKey: offset,
+				},
+			},
+		}
+		offset += len(chunk)
+	}
+	close(events)
+
+	handler := newUIWriteHandler(context.Background(), io.Discard)
+	item, err := writeCoalescedTaskEventStream(events, handler.HandleLive)
+	if !errors.Is(err, errUIStreamReanchor) {
+		t.Fatalf("writeCoalescedTaskEventStream() err = %v, want errUIStreamReanchor", err)
+	}
+	if item.Cursor >= 160 {
+		t.Fatalf("re-anchored too late at cursor=%d (written=%d bytes), want well before end of 200-frame burst", item.Cursor, handler.written.bytes)
 	}
 }
