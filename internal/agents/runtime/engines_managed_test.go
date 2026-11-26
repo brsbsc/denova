@@ -16,6 +16,7 @@ import (
 
 	"denova/config"
 	"denova/internal/agents/runtime/external"
+	"denova/internal/agents/runtime/external/antigravity"
 )
 
 type versionedTestConnection struct {
@@ -373,5 +374,48 @@ func TestEnginesManagedCloseReapsAuthSessions(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Engines.Close blocked waiting for auth subprocess")
+	}
+}
+
+func TestEnginesIncompatibleBinaryMarksInstalledAndUpdateAvailable(t *testing.T) {
+	engines := NewEnginesWithOptions(EnginesOptions{
+		CLIManager: &CLIManagerOptions{
+			Dir:    t.TempDir(),
+			GOOS:   "linux",
+			GOARCH: "amd64",
+			Sources: map[config.RuntimeID]CLISource{
+				config.RuntimeAntigravity: staticCLISource{
+					release: CLIRelease{
+						Version:     "1.5.20",
+						DownloadURL: "https://example.invalid/agy.tar.gz",
+						HashAlgo:    "sha512",
+						Digest:      make([]byte, 64),
+					},
+				},
+			},
+		},
+		AuthManager: &AuthManagerOptions{Enabled: func() bool { return false }},
+		Factories: map[config.RuntimeID]func(context.Context) (external.Connection, error){
+			config.RuntimeAntigravity: func(context.Context) (external.Connection, error) {
+				return nil, antigravity.ErrVersionUnsupported
+			},
+		},
+	})
+	defer engines.Close()
+
+	desc, err := engines.Check(context.Background(), config.RuntimeAntigravity)
+	if err != nil {
+		t.Fatalf("Check failed: %v", err)
+	}
+	if desc.Status != "incompatible" || desc.Managed == nil || !desc.Managed.Installed {
+		t.Fatalf("incompatible binary must sync Managed.Installed=true: %+v", desc)
+	}
+
+	checked, err := engines.CLI().CheckUpdate(context.Background(), config.RuntimeAntigravity)
+	if err != nil {
+		t.Fatalf("CheckUpdate failed: %v", err)
+	}
+	if !checked.UpdateAvailable || checked.LatestVersion != "1.5.20" {
+		t.Fatalf("expected UpdateAvailable=true for incompatible installed binary, got %+v", checked)
 	}
 }

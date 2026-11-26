@@ -27,6 +27,7 @@ type authLaunchSpec struct {
 
 type authPromptUpdate struct {
 	AuthURL      string
+	URLPriority  int
 	UserCode     string
 	RedirectPort int
 	Ready        bool
@@ -253,17 +254,19 @@ func parseAuthPromptWithExtraURLs(engine config.RuntimeID, cleaned string, extra
 		}
 	}
 
+	update.URLPriority = bestScore
+
 	switch engine {
 	case config.RuntimeCodex:
 		withoutURLs := httpsURLRe.ReplaceAllString(text, " ")
 		if matches := codexDeviceCodeRe.FindAllStringSubmatch(withoutURLs, -1); len(matches) > 0 {
 			update.UserCode = matches[len(matches)-1][1]
 		}
-		update.Ready = update.AuthURL != "" && update.UserCode != ""
+		update.Ready = update.UserCode != "" && (bestScore >= 2 || (includeIncompleteTail && bestScore >= 1))
 	case config.RuntimeAntigravity, config.RuntimeClaude:
 		if update.AuthURL != "" {
 			update.RedirectPort = extractRedirectLoopbackPort(update.AuthURL)
-			update.Ready = true
+			update.Ready = bestScore >= 2 || (includeIncompleteTail && bestScore >= 1)
 		}
 	}
 	return update

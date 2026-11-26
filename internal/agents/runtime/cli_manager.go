@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"denova/config"
@@ -73,12 +74,21 @@ type CLIManagerOptions struct {
 
 type managedCLIEntry struct {
 	status             ManagedCLIStatus
+	bytesDownloaded    atomic.Int64
 	busy               bool
 	pendingReloadSeq   uint64
 	lastChecked        time.Time
 	lastCheckFailedAt  time.Time
 	lastInstallAttempt time.Time
 	failedAutoVersion  string
+}
+
+func (e *managedCLIEntry) snapshotLocked() ManagedCLIStatus {
+	s := e.status
+	if s.State == "installing" || s.State == "updating" {
+		s.BytesDownloaded = e.bytesDownloaded.Load()
+	}
+	return s
 }
 
 // CLIManager owns download, checksum verification, safe extraction, atomic
@@ -275,7 +285,7 @@ func (m *CLIManager) Status(id config.RuntimeID) *ManagedCLIStatus {
 	if entry == nil {
 		return nil
 	}
-	snapshot := entry.status
+	snapshot := entry.snapshotLocked()
 	return &snapshot
 }
 
@@ -337,7 +347,7 @@ func (m *CLIManager) CheckUpdate(ctx context.Context, id config.RuntimeID) (Mana
 	}
 	entry := m.entries[id]
 	if entry.busy {
-		snapshot := entry.status
+		snapshot := entry.snapshotLocked()
 		m.mu.Unlock()
 		return snapshot, ErrCLIOperationBusy
 	}
@@ -403,7 +413,7 @@ func (m *CLIManager) StartInstall(id config.RuntimeID) (ManagedCLIStatus, error)
 	}
 	entry := m.entries[id]
 	if entry.busy {
-		snapshot := entry.status
+		snapshot := entry.snapshotLocked()
 		m.mu.Unlock()
 		return snapshot, ErrCLIOperationBusy
 	}
@@ -416,6 +426,7 @@ func (m *CLIManager) StartInstall(id config.RuntimeID) (ManagedCLIStatus, error)
 	entry.status.LastError = ""
 	entry.status.BytesDownloaded = 0
 	entry.status.TotalBytes = 0
+	entry.bytesDownloaded.Store(0)
 	// Explicit manual trigger clears any prior automatic failure suppression.
 	entry.failedAutoVersion = ""
 	entry.lastInstallAttempt = m.now().UTC()
@@ -519,6 +530,7 @@ func (m *CLIManager) runInstall(ctx context.Context, id config.RuntimeID, isAuto
 		}
 		entry.status.BytesDownloaded = 0
 		entry.status.TotalBytes = 0
+		entry.bytesDownloaded.Store(0)
 		entry.status.UpdateAvailable = computeUpdateAvailable(true, installedVersion, entry.status.LatestVersion)
 		if reloadErr != nil {
 			entry.status.State = "error"
@@ -547,6 +559,7 @@ func (m *CLIManager) recordInstallFailure(id config.RuntimeID, isAuto bool, atte
 	entry.status.State = "error"
 	entry.status.BytesDownloaded = 0
 	entry.status.TotalBytes = 0
+	entry.bytesDownloaded.Store(0)
 	entry.status.LastError = sanitizeCLIError(err)
 	if isAuto && attemptedVersion != "" {
 		entry.failedAutoVersion = attemptedVersion
@@ -651,11 +664,7 @@ func (m *CLIManager) downloadArtifact(ctx context.Context, id config.RuntimeID, 
 		_ = os.Remove(tmpPath)
 	}
 
-	progress := &downloadProgressWriter{
-		onProgress: func(downloaded int64) {
-			m.updateDownloadProgress(id, downloaded, totalBytes)
-		},
-	}
+	progress := &downloadProgressWriter{counter: &m.entries[id].bytesDownloaded}
 	writer := io.MultiWriter(tmpFile, hasher, progress)
 	written, copyErr := io.Copy(writer, io.LimitReader(resp.Body, m.maxDownloadBytes+1))
 	if copyErr != nil {
@@ -674,7 +683,7 @@ func (m *CLIManager) downloadArtifact(ctx context.Context, id config.RuntimeID, 
 		cleanup()
 		return "", fmt.Errorf("downloaded size %d does not match manifest size %d", written, release.ExpectedSize)
 	}
-	progress.flush(written)
+	m.updateDownloadProgress(id, written, totalBytes)
 
 	if err := tmpFile.Sync(); err != nil {
 		cleanup()
@@ -697,6 +706,7 @@ func (m *CLIManager) updateDownloadProgress(id config.RuntimeID, downloaded, tot
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if entry := m.entries[id]; entry != nil {
+		entry.bytesDownloaded.Store(downloaded)
 		entry.status.BytesDownloaded = downloaded
 		if total > 0 {
 			entry.status.TotalBytes = total
@@ -705,24 +715,15 @@ func (m *CLIManager) updateDownloadProgress(id config.RuntimeID, downloaded, tot
 }
 
 type downloadProgressWriter struct {
-	written    int64
-	onProgress func(downloaded int64)
+	counter *atomic.Int64
 }
 
 func (w *downloadProgressWriter) Write(p []byte) (int, error) {
 	n := len(p)
-	w.written += int64(n)
-	if n > 0 {
-		w.onProgress(w.written)
+	if n > 0 && w.counter != nil {
+		w.counter.Add(int64(n))
 	}
 	return n, nil
-}
-
-func (w *downloadProgressWriter) flush(total int64) {
-	if total != w.written {
-		w.written = total
-		w.onProgress(total)
-	}
 }
 
 func newReleaseHasher(algo string, digest []byte) (hash.Hash, error) {

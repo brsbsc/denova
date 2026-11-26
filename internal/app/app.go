@@ -138,12 +138,7 @@ func WithAgentEngines(engines *agentruntime.Engines) Option {
 
 // New creates the application runtime. When neither an explicit nor resumable
 // workspace exists, App stays unbound until the user selects or creates a Book.
-func New(ctx context.Context, cfg *config.Config) (_ *App, err error) {
-	return NewWithOptions(ctx, cfg)
-}
-
-// NewWithOptions creates the application runtime with optional service overrides.
-func NewWithOptions(ctx context.Context, cfg *config.Config, opts ...Option) (_ *App, err error) {
+func New(ctx context.Context, cfg *config.Config, opts ...Option) (_ *App, err error) {
 	finishStage := observability.StartStartupStage(ctx, "data_directory_lock")
 	defer func() { finishStage(err) }()
 	dataDir := ""

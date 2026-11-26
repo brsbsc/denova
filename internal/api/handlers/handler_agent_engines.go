@@ -204,12 +204,8 @@ func writeEngineError(ctx context.Context, c *app.RequestContext, err error) {
 	switch {
 	case errors.Is(err, agentruntime.ErrEngineNotFound):
 		status, key = consts.StatusNotFound, "agentRuntime.notFound"
-	case errors.Is(err, conversationconfig.ErrRuntimeCapabilityUnsupported),
-		errors.Is(err, agentruntime.ErrCLIManagementUnsupported),
-		errors.Is(err, agentruntime.ErrAuthUnsupported):
+	case errors.Is(err, conversationconfig.ErrRuntimeCapabilityUnsupported):
 		status, key = consts.StatusBadRequest, "agentRuntime.capabilityUnsupported"
-	case errors.Is(err, agentruntime.ErrCLIOperationBusy):
-		status, key = consts.StatusConflict, "agentRuntime.updateBusy"
 	case errors.Is(err, agentruntime.ErrOperationActive):
 		status, key = consts.StatusConflict, "agentRuntime.busy"
 	case errors.Is(err, agentruntime.ErrEngineModelUnavailable):

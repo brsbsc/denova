@@ -394,13 +394,20 @@ func validateReleaseVersion(id config.RuntimeID, raw string) (string, error) {
 }
 
 func computeUpdateAvailable(installed bool, installedVersion, latestVersion string) bool {
-	if !installed || strings.TrimSpace(installedVersion) == "" || strings.TrimSpace(latestVersion) == "" {
+	if !installed || strings.TrimSpace(latestVersion) == "" {
 		return false
 	}
-	inst, err1 := semver.StrictNewVersion(strings.TrimPrefix(strings.TrimSpace(installedVersion), "v"))
 	latest, err2 := semver.StrictNewVersion(strings.TrimPrefix(strings.TrimSpace(latestVersion), "v"))
-	if err1 != nil || err2 != nil {
+	if err2 != nil {
 		return false
+	}
+	if strings.TrimSpace(installedVersion) == "" {
+		// Installed binary has an unknown or incompatible version; allow updating to latest.
+		return true
+	}
+	inst, err1 := semver.StrictNewVersion(strings.TrimPrefix(strings.TrimSpace(installedVersion), "v"))
+	if err1 != nil {
+		return true
 	}
 	return latest.GreaterThan(inst)
 }

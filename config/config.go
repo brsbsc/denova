@@ -101,7 +101,6 @@ type Config struct {
 	InteractiveReplyTargetChars int                       `toml:"-"`
 	ResumeLastWorkspace         bool                      `toml:"-"`
 	UpdateCheckEnabled          bool                      `toml:"-"`
-	AgentCLIAutoUpdate          bool                      `toml:"-"`
 	StatisticsEnabled           bool                      `toml:"-"`
 }
 
@@ -191,7 +190,6 @@ func configFromLayered(novaDir, workspace string, layered LayeredSettings) *Conf
 		InteractiveReplyTargetChars: 2000,
 		ResumeLastWorkspace:         true,
 		UpdateCheckEnabled:          settingsBool(s.UpdateCheckEnabled, true),
-		AgentCLIAutoUpdate:          settingsBool(s.AgentCLIAutoUpdate, true),
 		StatisticsEnabled:           settingsBool(s.StatisticsEnabled, true),
 	}
 
@@ -457,7 +455,6 @@ func Load() *Config {
 			InteractiveReplyTargetChars: 2000,
 			ResumeLastWorkspace:         true,
 			UpdateCheckEnabled:          settingsBool(d.UpdateCheckEnabled, true),
-			AgentCLIAutoUpdate:          settingsBool(d.AgentCLIAutoUpdate, true),
 			StatisticsEnabled:           settingsBool(d.StatisticsEnabled, true),
 		}
 		overrideFromEnv(cfg)

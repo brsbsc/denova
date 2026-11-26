@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { Input } from '@/components/ui/input'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cancelEngineAuth, fetchEngineAuthSession, startEngineAuth, submitEngineAuth } from '@/features/agent-runtime/api'
+import { resolveAgentRuntimeError } from '@/features/agent-runtime/errors'
 import type { AgentEngineID, AuthSessionSnapshot, AuthSessionStatus, ClaudeAuthMethod, EngineDescriptor } from '@/features/agent-runtime/types'
 import { APIError } from '@/lib/api-client'
 
@@ -97,7 +98,7 @@ export function AgentEngineAuthDialog({ engineId, open, onOpenChange, onAuthenti
       if (!openRef.current || attempt !== attemptRef.current) return
       console.warn('[agent-runtime] failed to start auth session', { engine: engineId, cause })
       setStarting(false)
-      setError(resolveErrorMessage(cause, t, i18n, 'agentRuntime.auth.failed'))
+      setError(resolveAgentRuntimeError(cause, t, i18n, 'agentRuntime.auth.failed'))
     }
   }, [cancelIfActive, completeSession, engineId, i18n, method, resolveSnapshotFailure, t])
 
@@ -176,7 +177,7 @@ export function AgentEngineAuthDialog({ engineId, open, onOpenChange, onAuthenti
         consecutiveFailures += 1
         console.warn('[agent-runtime] failed to poll auth session', { engine: engineId, cause })
         if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
-          setError(resolveErrorMessage(cause, t, i18n, 'agentRuntime.auth.failed'))
+          setError(resolveAgentRuntimeError(cause, t, i18n, 'agentRuntime.auth.failed'))
           return
         }
       }
@@ -236,7 +237,7 @@ export function AgentEngineAuthDialog({ engineId, open, onOpenChange, onAuthenti
         setSession(null)
         setError(t('agentRuntime.auth.expired'))
       } else {
-        setSubmitError(resolveErrorMessage(cause, t, i18n, 'agentRuntime.auth.invalidInput'))
+        setSubmitError(resolveAgentRuntimeError(cause, t, i18n, 'agentRuntime.auth.invalidInput'))
       }
     } finally {
       if (attempt === attemptRef.current) {
@@ -418,15 +419,4 @@ function isActiveStatus(status: AuthSessionStatus): boolean {
 function isSafeExternalURL(value?: string): boolean {
   if (!value) return false
   return /^https?:\/\//i.test(value.trim())
-}
-
-function resolveErrorMessage(cause: unknown, t: (key: string) => string, i18n: { exists: (key: string) => boolean }, fallbackKey: string): string {
-  if (cause instanceof APIError && cause.code && i18n.exists(cause.code)) {
-    return t(cause.code)
-  }
-  if (cause instanceof Error && cause.message.trim()) {
-    const trimmed = cause.message.trim()
-    return i18n.exists(trimmed) ? t(trimmed) : trimmed
-  }
-  return t(fallbackKey)
 }

@@ -127,7 +127,7 @@ func startLANTestServer(t *testing.T, engines *agentruntime.Engines) *lanTestSer
 		RemoteAccessUsername:     "reader",
 		RemoteAccessPasswordHash: hash,
 	}
-	application, err := runtimeapp.NewWithOptions(context.Background(), cfg, runtimeapp.WithAgentEngines(engines))
+	application, err := runtimeapp.New(context.Background(), cfg, runtimeapp.WithAgentEngines(engines))
 	if err != nil {
 		t.Fatalf("create app: %v", err)
 	}

@@ -126,6 +126,16 @@ func TestAuthHelperProcess(t *testing.T) {
 		waitForMarkerOrSleep(os.Getenv("DENOVA_AUTH_RELEASE_FILE"), 10*time.Second)
 		os.Exit(0)
 
+	case "claude_banner_then_oauth":
+		fmt.Print("Welcome to Claude Code: https://claude.ai\n")
+		time.Sleep(220 * time.Millisecond)
+		fmt.Print("Open https://claude.com/cai/oauth/authorize?client_id=banner&redirect_uri=http%3A%2F%2Flocalhost%3A48777%2Fcallback&state=s2\nCode: ")
+		line := readHelperInputLine(os.Stdin)
+		if line != os.Getenv("DENOVA_AUTH_EXPECT_CODE") {
+			os.Exit(4)
+		}
+		os.Exit(0)
+
 	case "exit_fail":
 		fmt.Print("https://auth.openai.com/codex/device\nCode: FAIL-0001\n")
 		os.Exit(1)
@@ -997,6 +1007,120 @@ func TestAuthPromptParserPrefersClaudeComOAuthAndOSC8Target(t *testing.T) {
 	if !gotOSC8.Ready || gotOSC8.AuthURL != intactOSC8URL || gotOSC8.RedirectPort != 49222 {
 		t.Fatalf("wrapped OSC 8 parse = %+v, want intact url=%q port=49222", gotOSC8, intactOSC8URL)
 	}
+
+	// A low-priority banner link alone must not mark Ready before partial-flush.
+	bannerOnly := parseAuthPromptRaw(config.RuntimeClaude, "Welcome: https://claude.ai\n", false)
+	if bannerOnly.Ready || bannerOnly.URLPriority != 1 {
+		t.Fatalf("banner-only parse = %+v, want ready=false priority=1", bannerOnly)
+	}
+}
+
+func TestAuthStreamingBannerUpgradesToOAuthURL(t *testing.T) {
+	expectedCode := "BANNER_UPGRADE_CODE_77"
+	mgr := NewAuthManager(AuthManagerOptions{
+		Enabled:     func() bool { return true },
+		PreferPipes: true,
+		Discover:    helperDiscover(t, "claude_banner_then_oauth", "DENOVA_AUTH_EXPECT_CODE="+expectedCode),
+		Probe: func(_ context.Context, id config.RuntimeID) (EngineDescriptor, error) {
+			desc := engineDescriptor(id)
+			desc.Status = "ready"
+			return desc, nil
+		},
+	})
+	defer mgr.Close()
+
+	started, err := mgr.Start(context.Background(), config.RuntimeClaude, AuthStartOptions{})
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	wantURL := "https://claude.com/cai/oauth/authorize?client_id=banner&redirect_uri=http%3A%2F%2Flocalhost%3A48777%2Fcallback&state=s2"
+	deadline := time.Now().Add(5 * time.Second)
+	var snap AuthSessionSnapshot
+	for time.Now().Before(deadline) {
+		snap, err = mgr.Get(config.RuntimeClaude, started.SessionID)
+		if err == nil && snap.Status == AuthStatusAwaitingUser && snap.AuthURL == wantURL {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if snap.Status != AuthStatusAwaitingUser || snap.AuthURL != wantURL {
+		t.Fatalf("session did not upgrade from banner URL to OAuth URL: %+v (err=%v)", snap, err)
+	}
+	if _, err := mgr.Submit(context.Background(), config.RuntimeClaude, started.SessionID, expectedCode); err != nil {
+		t.Fatalf("Submit after upgrade failed: %v", err)
+	}
+	waitForAuthStatus(t, mgr, config.RuntimeClaude, started.SessionID, AuthStatusSucceeded)
+}
+
+func TestAuthSubmitDoesNotRollbackAfterProcessExit(t *testing.T) {
+	releaseFile := filepath.Join(t.TempDir(), "release-fast")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen loopback: %v", err)
+	}
+	defer ln.Close()
+	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+
+	probeStarted := make(chan struct{})
+	releaseProbe := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseProbe) }) }
+	defer release()
+
+	// Simulate a CLI callback listener that receives the request, lets the CLI
+	// exit 0 immediately, and closes the socket without writing an HTTP response
+	// once watchSessionProcess has observed exit 0 and entered Probe.
+	go func() {
+		conn, acceptErr := ln.Accept()
+		if acceptErr != nil {
+			return
+		}
+		buf := make([]byte, 1024)
+		_, _ = conn.Read(buf)
+		_ = os.WriteFile(releaseFile, []byte("done"), 0o600)
+		select {
+		case <-probeStarted:
+		case <-time.After(3 * time.Second):
+		}
+		_ = conn.Close()
+	}()
+
+	mgr := NewAuthManager(AuthManagerOptions{
+		Enabled:     func() bool { return true },
+		PreferPipes: true,
+		Discover: helperDiscover(
+			t,
+			"callback_wait",
+			"DENOVA_AUTH_REDIRECT_PORT="+port,
+			"DENOVA_AUTH_RELEASE_FILE="+releaseFile,
+		),
+		Probe: func(_ context.Context, id config.RuntimeID) (EngineDescriptor, error) {
+			close(probeStarted)
+			<-releaseProbe
+			desc := engineDescriptor(id)
+			desc.Status = "ready"
+			return desc, nil
+		},
+	})
+	defer mgr.Close()
+
+	started, err := mgr.Start(context.Background(), config.RuntimeAntigravity, AuthStartOptions{})
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	waitForAuthStatus(t, mgr, config.RuntimeAntigravity, started.SessionID, AuthStatusAwaitingUser)
+
+	callbackURL := fmt.Sprintf("http://localhost:%s/callback?code=fast-exit&state=ok", port)
+	submitted, err := mgr.Submit(context.Background(), config.RuntimeAntigravity, started.SessionID, callbackURL)
+	if err != nil {
+		t.Fatalf("Submit should not fail when process already exited during callback: %v", err)
+	}
+	if submitted.Status != AuthStatusCompleting {
+		t.Fatalf("expected completing status while probe is in flight, got %+v", submitted)
+	}
+	release()
+	waitForAuthStatus(t, mgr, config.RuntimeAntigravity, started.SessionID, AuthStatusSucceeded)
 }
 
 func TestAuthFailureOnNonZeroExitAndUnreadyProbe(t *testing.T) {

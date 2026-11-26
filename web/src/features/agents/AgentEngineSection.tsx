@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { checkAgentEngine, fetchAgentEngines, fetchEngineModels, logoutEngine } from '@/features/agent-runtime/api'
+import { resolveAgentRuntimeError } from '@/features/agent-runtime/errors'
 import { AGENT_ENGINE_IDS, resolveRuntimePreferences, runtimeModelKey, runtimeModelFromKey, type AgentEngineID, type EngineDescriptor, type EngineModels, type RuntimePreferences } from '@/features/agent-runtime/types'
 import { useRuntimeProfiles } from '@/features/agent-runtime/api-profiles'
 import { Field } from './agent-form-controls'
@@ -20,7 +21,7 @@ export function AgentEngineSection({ value, inherited, onChange, beforeSwitch, o
   beforeSwitch: () => Promise<unknown>
   onCatalog: (engines: EngineDescriptor[]) => void
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const resolved = resolveRuntimePreferences(inherited, value)
   const selected = resolved.selected ?? 'native'
   const { profiles, failed: profilesFailed } = useRuntimeProfiles(selected)
@@ -87,7 +88,7 @@ export function AgentEngineSection({ value, inherited, onChange, beforeSwitch, o
     setBusy(true); setError('')
     try { await action() } catch (cause) {
       console.warn('[agent-runtime] configuration action failed', cause)
-      setError(cause instanceof Error ? cause.message : t('agentRuntime.connectionFailed'))
+      setError(resolveAgentRuntimeError(cause, t, i18n, 'agentRuntime.connectionFailed'))
     } finally { setBusy(false) }
   }
   const refresh = async () => {

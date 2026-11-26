@@ -491,9 +491,13 @@ func (engines *Engines) catalogEntry(ctx context.Context, entry *engineEntry, fo
 		if err != nil {
 			failState := engineFailureState(entry.id, err)
 			entry.record(failState, nil)
-			if failState.Status == "not_installed" {
+			switch failState.Status {
+			case "not_installed":
 				entry.setVersion("")
 				engines.syncCLIInstalled(entry.id, false, "")
+			case "incompatible":
+				entry.setVersion("")
+				engines.syncCLIInstalled(entry.id, true, "")
 			}
 			return external.Models{}, err
 		}
@@ -516,7 +520,7 @@ func (engines *Engines) catalogEntry(ctx context.Context, entry *engineEntry, fo
 		entry.setVersion(version)
 	}
 	switch state.Status {
-	case "ready", "auth_required":
+	case "ready", "auth_required", "incompatible":
 		engines.syncCLIInstalled(entry.id, true, version)
 	case "not_installed":
 		entry.setVersion("")

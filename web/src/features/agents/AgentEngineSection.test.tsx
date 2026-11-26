@@ -308,4 +308,26 @@ describe('AgentEngineSection managed CLI and web OAuth', () => {
       expect(screen.queryByText('新版本已安装，当前回合结束后自动生效。')).not.toBeInTheDocument()
     })
   })
+
+  it('localizes APIError.code cleanly on sign-out failure without diagnostic suffix', async () => {
+    const user = userEvent.setup()
+    mocks.fetchAgentEngines.mockResolvedValue({
+      items: [{
+        id: 'codex',
+        name_key: 'agentRuntime.codex',
+        status: 'ready',
+        auth_supported: true,
+        managed: { managed: true, installed: true, installed_version: '0.135.0', update_available: false, state: 'idle' },
+      }],
+    })
+    mocks.fetchEngineModels.mockResolvedValue({ items: [{ id: 'cli-model', display_name: 'CLI model', efforts: ['high'] }], default_id: 'cli-model' })
+    mocks.logoutEngine.mockRejectedValueOnce(new APIError('raw server text', { status: 409, code: 'agentRuntime.auth.busy' }))
+
+    render(<Harness engine="codex" onChange={vi.fn()} />)
+    await user.click(await screen.findByRole('button', { name: '退出登录' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('当前有正在进行的对话，请稍后再退出登录。')
+    expect(alert.textContent).not.toContain('409')
+  })
 })

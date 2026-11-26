@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
 
+	"denova/internal/hostruntime"
 	"denova/internal/revisionfile"
 	"denova/internal/style"
 	workspacelayout "denova/internal/workspace"
@@ -607,32 +607,6 @@ type SettingsRuntime struct {
 	ManagedAgentCLIs bool   `json:"managed_agent_clis,omitempty"`
 }
 
-const managedAgentCLIDirEnv = "DENOVA_MANAGED_CLI_DIR"
-
-var (
-	managedAgentCLIGetGOOS   = func() string { return runtime.GOOS }
-	managedAgentCLIGetGOARCH = func() string { return runtime.GOARCH }
-)
-
-func managedAgentCLIsEnabled() bool {
-	return managedAgentCLIsEnabledFor(
-		managedAgentCLIGetGOOS(),
-		managedAgentCLIGetGOARCH(),
-		os.Getenv(managedAgentCLIDirEnv),
-	)
-}
-
-func managedAgentCLIsEnabledFor(goos, goarch, rawDir string) bool {
-	if goos != "linux" {
-		return false
-	}
-	if goarch != "amd64" && goarch != "arm64" {
-		return false
-	}
-	dir := strings.TrimSpace(rawDir)
-	return dir != "" && !strings.ContainsRune(dir, 0) && path.IsAbs(dir)
-}
-
 // ReadSettingsFile 读取 TOML，文件不存在时返回零值且无错误。
 func ReadSettingsFile(path string) (Settings, error) {
 	var settings Settings
@@ -947,7 +921,7 @@ func LoadLayeredWithGlobalAt(novaDir, workspace, projectConfigPath string, globa
 		},
 		Runtime: SettingsRuntime{
 			GOOS:             runtime.GOOS,
-			ManagedAgentCLIs: managedAgentCLIsEnabled(),
+			ManagedAgentCLIs: hostruntime.ManagedAgentCLIsEnabled(),
 		},
 		AgentContracts:             AgentContractDefinitions(),
 		AgentToolCapabilities:      AgentToolCapabilityCatalogForGOOS(runtime.GOOS),

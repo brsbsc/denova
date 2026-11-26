@@ -119,16 +119,18 @@ type authSession struct {
 	cancel context.CancelFunc
 	proc   *authProcess
 
-	mu           sync.Mutex
-	status       string
-	authURL      string
-	userCode     string
-	redirectPort int
-	errorKey     string
-	engineState  *EngineDescriptor
-	submitting   bool
-	done         bool
-	outputBuf    bytes.Buffer
+	mu            sync.Mutex
+	status        string
+	authURL       string
+	urlPriority   int
+	userCode      string
+	redirectPort  int
+	errorKey      string
+	engineState   *EngineDescriptor
+	submitting    bool
+	processExited bool
+	done          bool
+	outputBuf     bytes.Buffer
 }
 
 func NewAuthManager(options AuthManagerOptions) *AuthManager {
@@ -352,6 +354,14 @@ func (m *AuthManager) Submit(ctx context.Context, id config.RuntimeID, sessionID
 	session.mu.Lock()
 	session.submitting = false
 	if submitErr != nil {
+		if session.processExited {
+			// The CLI exited while handling the callback/code (e.g., closed its
+			// loopback server immediately after persisting credentials). Keep
+			// the completing/terminal state instead of rolling back onto a dead process.
+			snap := session.snapshotLocked()
+			session.mu.Unlock()
+			return snap, nil
+		}
 		if session.status == AuthStatusCompleting {
 			session.status = AuthStatusAwaitingUser
 		}
@@ -627,6 +637,7 @@ func (m *AuthManager) watchSessionProcess(session *authSession, outputDone <-cha
 	session.cancel()
 
 	session.mu.Lock()
+	session.processExited = true
 	if session.status == AuthStatusCancelled {
 		session.done = true
 		session.mu.Unlock()
@@ -725,12 +736,28 @@ func (s *authSession) parseBuffered(includeTail bool) bool {
 }
 
 func (s *authSession) parseLocked(includeTail bool) bool {
-	if s.status != AuthStatusStarting {
+	if s.status != AuthStatusStarting && s.status != AuthStatusAwaitingUser {
 		return false
 	}
 	update := parseAuthPromptRaw(s.engine, s.outputBuf.String(), includeTail)
-	if update.AuthURL != "" {
+	if s.status == AuthStatusAwaitingUser {
+		// Upgrade URL/redirect port if a higher-priority OAuth link arrives in a
+		// later chunk after a low-priority banner URL triggered partial-flush readiness.
+		if update.AuthURL != "" && update.URLPriority > s.urlPriority {
+			s.authURL = update.AuthURL
+			s.urlPriority = update.URLPriority
+			if update.RedirectPort > 0 {
+				s.redirectPort = update.RedirectPort
+			}
+			if update.UserCode != "" {
+				s.userCode = update.UserCode
+			}
+		}
+		return false
+	}
+	if update.AuthURL != "" && update.URLPriority >= s.urlPriority {
 		s.authURL = update.AuthURL
+		s.urlPriority = update.URLPriority
 	}
 	if update.UserCode != "" {
 		s.userCode = update.UserCode

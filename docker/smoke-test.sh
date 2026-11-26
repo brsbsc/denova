@@ -25,7 +25,7 @@ volume="$(docker volume create)"
 # Reproduce a reused/externally created volume inaccessible to UID 10001.
 docker run --rm --platform "${platform}" --user 0:0 \
   --entrypoint /bin/sh --volume "${volume}:/data" "${image}" -c \
-  'mkdir -p /data/.denova /data/.local/bin /data/.gemini; chown -R 0:0 /data/.denova /data/.local /data/.gemini; chmod 0700 /data/.denova /data/.local/bin /data/.gemini'
+  'mkdir -p /data/.denova /data/.local/bin /data/.gemini; printf "{}\n" > /data/.claude.json; printf "stale" > /data/.local/bin/.denova-cli-codex-download-stale; chown -R 0:0 /data/.denova /data/.local /data/.gemini /data/.claude.json; chmod 0700 /data/.denova /data/.local/bin /data/.gemini; chmod 0600 /data/.claude.json'
 container="$(docker run --detach --platform "${platform}" \
   --publish 127.0.0.1::8080 \
   --volume "${volume}:/data" \
@@ -73,8 +73,11 @@ docker exec --user 10001:10001 "${container}" sh -c '
   test -d /data/.local/bin &&
   test -w /data/.local/bin &&
   test "$(stat -c %u:%g /data/.local/bin)" = "10001:10001" &&
+  test ! -e /data/.local/bin/.denova-cli-codex-download-stale &&
   test -w /data/.gemini &&
-  test "$(stat -c %u:%g /data/.gemini)" = "10001:10001"
+  test "$(stat -c %u:%g /data/.gemini)" = "10001:10001" &&
+  test -w /data/.claude.json &&
+  test "$(stat -c %u:%g /data/.claude.json)" = "10001:10001"
 '
 before="$(docker exec "${container}" sha256sum /data/.denova/config.toml)"
 # Preserve the actual password hash and session data while reproducing the

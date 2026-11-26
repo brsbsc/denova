@@ -119,6 +119,7 @@ func (m *CLIManager) autoUpdateEngine(ctx context.Context, id config.RuntimeID) 
 	entry.status.LastError = ""
 	entry.status.BytesDownloaded = 0
 	entry.status.TotalBytes = 0
+	entry.bytesDownloaded.Store(0)
 	entry.lastInstallAttempt = now
 	m.mu.Unlock()
 

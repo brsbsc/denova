@@ -5,8 +5,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { checkEngineCLIUpdate, fetchEngineCLIStatus, installEngineCLI } from '@/features/agent-runtime/api'
+import { resolveAgentRuntimeError, resolveLocalizedRuntimeText } from '@/features/agent-runtime/errors'
 import type { AgentEngineID, EngineDescriptor, ManagedCLIStatus } from '@/features/agent-runtime/types'
-import { APIError } from '@/lib/api-client'
 import { Field } from './agent-form-controls'
 
 const CLI_POLL_INTERVAL_MS = 1500
@@ -93,7 +93,7 @@ export function AgentEngineCliActions({ engine, disabled, onEngineUpdated, onRef
         consecutiveFailures += 1
         console.warn('[agent-runtime] failed to poll managed CLI status', { engine: targetEngineId, cause })
         if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
-          setActionError(resolveErrorMessage(cause, t, i18n, 'agentRuntime.cli.actionFailed'))
+          setActionError(resolveAgentRuntimeError(cause, t, i18n, 'agentRuntime.cli.actionFailed'))
           setLive((current) => {
             const base = current && current.engineId === targetEngineId ? current.status : managedRef.current
             return base ? { engineId: targetEngineId, status: { ...base, state: 'error' } } : null
@@ -119,7 +119,7 @@ export function AgentEngineCliActions({ engine, disabled, onEngineUpdated, onRef
   const version = status.installed_version || engine.version
   const percent = computePercent(status.bytes_downloaded, status.total_bytes)
   const transferredLabel = formatTransferProgress(status.bytes_downloaded, status.total_bytes)
-  const errorText = actionError || (status.state === 'error' && status.last_error ? resolveLocalizedText(status.last_error, t, i18n) : '')
+  const errorText = actionError || (status.state === 'error' && status.last_error ? resolveLocalizedRuntimeText(status.last_error, t, i18n) : '')
 
   const handleCheckUpdate = async () => {
     const targetEngine = engineRef.current
@@ -138,7 +138,7 @@ export function AgentEngineCliActions({ engine, disabled, onEngineUpdated, onRef
     } catch (cause) {
       if (!mountedRef.current || engineRef.current.id !== targetEngine.id || actionSeqRef.current !== seq) return
       console.warn('[agent-runtime] managed CLI update check failed', { engine: targetEngine.id, cause })
-      setActionError(resolveErrorMessage(cause, t, i18n, 'agentRuntime.cli.actionFailed'))
+      setActionError(resolveAgentRuntimeError(cause, t, i18n, 'agentRuntime.cli.actionFailed'))
     } finally {
       if (mountedRef.current && engineRef.current.id === targetEngine.id && actionSeqRef.current === seq) {
         setChecking(false)
@@ -170,7 +170,7 @@ export function AgentEngineCliActions({ engine, disabled, onEngineUpdated, onRef
     } catch (cause) {
       if (!mountedRef.current || engineRef.current.id !== targetEngineId || actionSeqRef.current !== seq) return
       console.warn('[agent-runtime] managed CLI install failed', { engine: targetEngineId, cause })
-      setActionError(resolveErrorMessage(cause, t, i18n, 'agentRuntime.cli.actionFailed'))
+      setActionError(resolveAgentRuntimeError(cause, t, i18n, 'agentRuntime.cli.actionFailed'))
     } finally {
       if (mountedRef.current && engineRef.current.id === targetEngineId && actionSeqRef.current === seq) {
         setStartingInstall(false)
@@ -276,18 +276,4 @@ function formatBytes(value: number): string {
     index += 1
   }
   return `${size.toFixed(index === 0 ? 0 : 1)} ${units[index]}`
-}
-
-function resolveLocalizedText(value: string, t: (key: string) => string, i18n: { exists: (key: string) => boolean }): string {
-  return i18n.exists(value) ? t(value) : value
-}
-
-function resolveErrorMessage(cause: unknown, t: (key: string) => string, i18n: { exists: (key: string) => boolean }, fallbackKey: string): string {
-  if (cause instanceof APIError && cause.code && i18n.exists(cause.code)) {
-    return t(cause.code)
-  }
-  if (cause instanceof Error && cause.message.trim()) {
-    return resolveLocalizedText(cause.message.trim(), t, i18n)
-  }
-  return t(fallbackKey)
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"denova/internal/hostruntime"
 	"github.com/alfredxw/denova/agent/model/providers"
 	agenttool "github.com/alfredxw/denova/agent/tool"
 )
@@ -1077,15 +1078,15 @@ func TestAgentCLIAutoUpdateUserScopedAndConfigMapping(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg, layered, err := LoadWithProject(novaDir, workspace, "")
+	_, layered, err := LoadWithProject(novaDir, workspace, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if layered.Workspace.AgentCLIAutoUpdate != nil {
 		t.Fatalf("workspace agent_cli_auto_update must be filtered: %#v", layered.Workspace.AgentCLIAutoUpdate)
 	}
-	if layered.Effective.AgentCLIAutoUpdate == nil || !*layered.Effective.AgentCLIAutoUpdate || !cfg.AgentCLIAutoUpdate {
-		t.Fatalf("default AgentCLIAutoUpdate should stay enabled when only workspace sets false: effective=%v cfg=%v", layered.Effective.AgentCLIAutoUpdate, cfg.AgentCLIAutoUpdate)
+	if layered.Effective.AgentCLIAutoUpdate == nil || !*layered.Effective.AgentCLIAutoUpdate {
+		t.Fatalf("default AgentCLIAutoUpdate should stay enabled when only workspace sets false: effective=%v", layered.Effective.AgentCLIAutoUpdate)
 	}
 
 	if err := WriteSettingsFile(UserConfigPath(novaDir), Settings{AgentCLIAutoUpdate: boolPtr(false)}); err != nil {
@@ -1095,7 +1096,7 @@ func TestAgentCLIAutoUpdateUserScopedAndConfigMapping(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg, layered, err = LoadWithProject(novaDir, workspace, "")
+	_, layered, err = LoadWithProject(novaDir, workspace, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1105,8 +1106,8 @@ func TestAgentCLIAutoUpdateUserScopedAndConfigMapping(t *testing.T) {
 	if layered.Workspace.AgentCLIAutoUpdate != nil {
 		t.Fatalf("workspace agent_cli_auto_update must be filtered: %#v", layered.Workspace.AgentCLIAutoUpdate)
 	}
-	if layered.Effective.AgentCLIAutoUpdate == nil || *layered.Effective.AgentCLIAutoUpdate || cfg.AgentCLIAutoUpdate {
-		t.Fatalf("user AgentCLIAutoUpdate=false should win: effective=%v cfg=%v", layered.Effective.AgentCLIAutoUpdate, cfg.AgentCLIAutoUpdate)
+	if layered.Effective.AgentCLIAutoUpdate == nil || *layered.Effective.AgentCLIAutoUpdate {
+		t.Fatalf("user AgentCLIAutoUpdate=false should win: effective=%v", layered.Effective.AgentCLIAutoUpdate)
 	}
 }
 
@@ -1129,60 +1130,18 @@ func TestLoadLayeredPreservesCustomizedTerminalCommandsOverNewPresets(t *testing
 }
 
 func TestManagedAgentCLIsRuntimeFlag(t *testing.T) {
-	cases := []struct {
-		name   string
-		goos   string
-		goarch string
-		dir    string
-		want   bool
-	}{
-		{name: "linux amd64 absolute", goos: "linux", goarch: "amd64", dir: "/data/.local/bin", want: true},
-		{name: "linux arm64 trimmed absolute", goos: "linux", goarch: "arm64", dir: " /data/.local/bin ", want: true},
-		{name: "linux amd64 empty", goos: "linux", goarch: "amd64", dir: "", want: false},
-		{name: "linux amd64 whitespace", goos: "linux", goarch: "amd64", dir: "   ", want: false},
-		{name: "linux amd64 relative", goos: "linux", goarch: "amd64", dir: "data/.local/bin", want: false},
-		{name: "linux amd64 dot relative", goos: "linux", goarch: "amd64", dir: "./bin", want: false},
-		{name: "linux amd64 windows drive path", goos: "linux", goarch: "amd64", dir: `C:\data\bin`, want: false},
-		{name: "linux unsupported arch", goos: "linux", goarch: "386", dir: "/data/.local/bin", want: false},
-		{name: "windows amd64", goos: "windows", goarch: "amd64", dir: "/data/.local/bin", want: false},
-		{name: "darwin arm64", goos: "darwin", goarch: "arm64", dir: "/data/.local/bin", want: false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := managedAgentCLIsEnabledFor(tc.goos, tc.goarch, tc.dir); got != tc.want {
-				t.Fatalf("managedAgentCLIsEnabledFor(%q, %q, %q) = %v, want %v", tc.goos, tc.goarch, tc.dir, got, tc.want)
-			}
-		})
-	}
-
-	origGOOS := managedAgentCLIGetGOOS
-	origGOARCH := managedAgentCLIGetGOARCH
-	t.Cleanup(func() {
-		managedAgentCLIGetGOOS = origGOOS
-		managedAgentCLIGetGOARCH = origGOARCH
-	})
-
 	novaDir := t.TempDir()
-	managedAgentCLIGetGOOS = func() string { return "linux" }
-	managedAgentCLIGetGOARCH = func() string { return "amd64" }
-	t.Setenv(managedAgentCLIDirEnv, "/data/.local/bin")
-
+	t.Setenv(hostruntime.EnvManagedAgentCLIDir, "/data/.local/bin")
 	layered, err := LoadLayered(novaDir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !layered.Runtime.ManagedAgentCLIs {
-		t.Fatalf("LoadLayered should report Runtime.ManagedAgentCLIs=true on linux/amd64 with absolute dir")
-	}
-	payload, err := json.Marshal(layered.Runtime)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(payload), `"managed_agent_clis":true`) {
-		t.Fatalf("SettingsRuntime JSON missing managed_agent_clis: %s", string(payload))
+	want := hostruntime.ManagedAgentCLIsEnabled()
+	if layered.Runtime.ManagedAgentCLIs != want {
+		t.Fatalf("LoadLayered Runtime.ManagedAgentCLIs = %v, want %v", layered.Runtime.ManagedAgentCLIs, want)
 	}
 
-	t.Setenv(managedAgentCLIDirEnv, "relative/path")
+	t.Setenv(hostruntime.EnvManagedAgentCLIDir, "relative/path")
 	layered, err = LoadLayered(novaDir, "")
 	if err != nil {
 		t.Fatal(err)
@@ -1190,22 +1149,12 @@ func TestManagedAgentCLIsRuntimeFlag(t *testing.T) {
 	if layered.Runtime.ManagedAgentCLIs {
 		t.Fatalf("LoadLayered must reject relative DENOVA_MANAGED_CLI_DIR")
 	}
-	payload, err = json.Marshal(layered.Runtime)
+	payload, err := json.Marshal(layered.Runtime)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(payload), "managed_agent_clis") {
 		t.Fatalf("SettingsRuntime JSON should omit false managed_agent_clis: %s", string(payload))
-	}
-
-	managedAgentCLIGetGOOS = func() string { return "windows" }
-	t.Setenv(managedAgentCLIDirEnv, "/data/.local/bin")
-	layered, err = LoadLayered(novaDir, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if layered.Runtime.ManagedAgentCLIs {
-		t.Fatalf("LoadLayered must keep ManagedAgentCLIs=false off Linux")
 	}
 }
 
