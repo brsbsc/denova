@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -97,6 +98,9 @@ type Settings struct {
 	StatisticsEnabled     *bool  `toml:"statistics_enabled,omitempty" json:"statistics_enabled,omitempty"`
 	UpdateCheckEnabled    *bool  `toml:"update_check_enabled,omitempty" json:"update_check_enabled,omitempty"`
 	UpdateDownloadEnabled *bool  `toml:"update_download_enabled,omitempty" json:"update_download_enabled,omitempty"`
+	// AgentCLIAutoUpdate is user-scoped and controls background updates for
+	// installed managed external Agent CLIs.
+	AgentCLIAutoUpdate *bool `toml:"agent_cli_auto_update,omitempty" json:"agent_cli_auto_update,omitempty"`
 
 	// Agent
 	MaxIteration              *int                `toml:"max_iteration,omitempty" json:"max_iteration,omitempty"`
@@ -228,6 +232,7 @@ func DefaultSettings() Settings {
 		UpdateCheckEnabled:          boolPtr(true),
 		StatisticsEnabled:           boolPtr(true),
 		UpdateDownloadEnabled:       boolPtr(false),
+		AgentCLIAutoUpdate:          boolPtr(true),
 		ModelMaxRetries:             intPtr(5),
 		AgentIdleTimeoutSeconds:     intPtr(DefaultAgentIdleTimeoutSeconds),
 		AgentToolResultLimitKB:      intPtr(DefaultAgentToolResultLimitKB),
@@ -415,6 +420,9 @@ func Merge(parent, child Settings) Settings {
 	if child.UpdateDownloadEnabled != nil {
 		out.UpdateDownloadEnabled = child.UpdateDownloadEnabled
 	}
+	if child.AgentCLIAutoUpdate != nil {
+		out.AgentCLIAutoUpdate = child.AgentCLIAutoUpdate
+	}
 	if child.MaxIteration != nil {
 		out.MaxIteration = child.MaxIteration
 	}
@@ -594,8 +602,35 @@ type SettingsAccess struct {
 // SettingsRuntime exposes process-level platform details used by runtime-only
 // capability gates. These fields are not persisted to config files.
 type SettingsRuntime struct {
-	GOOS    string `json:"goos"`
-	DevMode bool   `json:"dev_mode"`
+	GOOS             string `json:"goos"`
+	DevMode          bool   `json:"dev_mode"`
+	ManagedAgentCLIs bool   `json:"managed_agent_clis,omitempty"`
+}
+
+const managedAgentCLIDirEnv = "DENOVA_MANAGED_CLI_DIR"
+
+var (
+	managedAgentCLIGetGOOS   = func() string { return runtime.GOOS }
+	managedAgentCLIGetGOARCH = func() string { return runtime.GOARCH }
+)
+
+func managedAgentCLIsEnabled() bool {
+	return managedAgentCLIsEnabledFor(
+		managedAgentCLIGetGOOS(),
+		managedAgentCLIGetGOARCH(),
+		os.Getenv(managedAgentCLIDirEnv),
+	)
+}
+
+func managedAgentCLIsEnabledFor(goos, goarch, rawDir string) bool {
+	if goos != "linux" {
+		return false
+	}
+	if goarch != "amd64" && goarch != "arm64" {
+		return false
+	}
+	dir := strings.TrimSpace(rawDir)
+	return dir != "" && path.IsAbs(dir)
 }
 
 // ReadSettingsFile 读取 TOML，文件不存在时返回零值且无错误。
@@ -910,7 +945,10 @@ func LoadLayeredWithGlobalAt(novaDir, workspace, projectConfigPath string, globa
 			LocalURL: LocalHTTPURL(backendPort),
 			LANURL:   LANHTTPURL(backendPort),
 		},
-		Runtime:                    SettingsRuntime{GOOS: runtime.GOOS},
+		Runtime: SettingsRuntime{
+			GOOS:             runtime.GOOS,
+			ManagedAgentCLIs: managedAgentCLIsEnabled(),
+		},
 		AgentContracts:             AgentContractDefinitions(),
 		AgentToolCapabilities:      AgentToolCapabilityCatalogForGOOS(runtime.GOOS),
 		ResolvedAgentToolManifests: resolvedToolManifests,

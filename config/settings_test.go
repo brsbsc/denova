@@ -42,9 +42,10 @@ func TestDefaultSettingsValues(t *testing.T) {
 	if s.AgentSubAgentParallelism == nil || *s.AgentSubAgentParallelism != DefaultAgentSubAgentParallelism {
 		t.Fatalf("AgentSubAgentParallelism default")
 	}
-	if len(s.TerminalCommands) != 2 ||
-		s.TerminalCommands[0] != (TerminalCommandSettings{ID: "codex", Name: "Codex CLI", Command: DefaultTerminalCodexCommand, Enabled: true}) ||
-		s.TerminalCommands[1] != (TerminalCommandSettings{ID: "claude", Name: "Claude Code", Command: DefaultTerminalClaudeCommand, Enabled: true}) {
+	if len(s.TerminalCommands) != 3 ||
+		s.TerminalCommands[0] != (TerminalCommandSettings{ID: TerminalCommandCodexID, Name: "Codex CLI", Command: DefaultTerminalCodexCommand, Enabled: true}) ||
+		s.TerminalCommands[1] != (TerminalCommandSettings{ID: TerminalCommandClaudeID, Name: "Claude Code", Command: DefaultTerminalClaudeCommand, Enabled: true}) ||
+		s.TerminalCommands[2] != (TerminalCommandSettings{ID: TerminalCommandAntigravityID, Name: "Antigravity CLI", Command: DefaultTerminalAntigravityCommand, Enabled: true}) {
 		t.Fatalf("terminal CLI defaults: %#v", s.TerminalCommands)
 	}
 	if s.TraceCaptureLevel != DefaultTraceCaptureLevel || s.TraceExporter != DefaultTraceExporter {
@@ -107,6 +108,9 @@ func TestDefaultSettingsValues(t *testing.T) {
 	if s.UpdateCheckEnabled == nil || *s.UpdateCheckEnabled != true {
 		t.Fatalf("UpdateCheckEnabled default")
 	}
+	if s.AgentCLIAutoUpdate == nil || !*s.AgentCLIAutoUpdate {
+		t.Fatalf("AgentCLIAutoUpdate should default on")
+	}
 	if s.BackendPort == nil || *s.BackendPort != 7789 {
 		t.Fatalf("BackendPort default")
 	}
@@ -155,6 +159,7 @@ func TestMergeOverridesNonZero(t *testing.T) {
 		Theme:                      "dark",
 		MotionIntensity:            "system",
 		UpdateCheckEnabled:         boolPtr(true),
+		AgentCLIAutoUpdate:         boolPtr(true),
 		ChapterFilenameFormat:      "old-chapter",
 		VolumeDirFormat:            "old-volume",
 		BackendPort:                intPtr(7789),
@@ -182,6 +187,7 @@ func TestMergeOverridesNonZero(t *testing.T) {
 		Theme:                      "light",
 		MotionIntensity:            "reduced",
 		UpdateCheckEnabled:         boolPtr(false),
+		AgentCLIAutoUpdate:         boolPtr(false),
 		ChapterFilenameFormat:      "new-chapter",
 		VolumeDirFormat:            "new-volume",
 		BackendPort:                intPtr(18080),
@@ -245,6 +251,9 @@ func TestMergeOverridesNonZero(t *testing.T) {
 	}
 	if out.UpdateCheckEnabled == nil || *out.UpdateCheckEnabled != false {
 		t.Fatalf("UpdateCheckEnabled should override parent")
+	}
+	if out.AgentCLIAutoUpdate == nil || *out.AgentCLIAutoUpdate != false {
+		t.Fatalf("AgentCLIAutoUpdate should override parent")
 	}
 	if out.ChapterFilenameFormat != "new-chapter" || out.VolumeDirFormat != "new-volume" {
 		t.Fatalf("filename formats should override parent: %#v", out)
@@ -1022,6 +1031,181 @@ func TestLoadLayeredIgnoresTraceDebugSettingsFromWorkspaceLayer(t *testing.T) {
 	}
 	if layered.Effective.TraceCaptureLevel != "debug" || layered.Effective.TraceExporter != "local" || layered.Effective.TraceRetentionRuns == nil || *layered.Effective.TraceRetentionRuns != 7 {
 		t.Fatalf("user trace debug settings should remain effective: %#v", layered.Effective)
+	}
+}
+
+func TestAgentCLIAutoUpdateUserScopedAndConfigMapping(t *testing.T) {
+	if inherited := Merge(Settings{AgentCLIAutoUpdate: boolPtr(false)}, Settings{}); inherited.AgentCLIAutoUpdate == nil || *inherited.AgentCLIAutoUpdate {
+		t.Fatalf("nil child should inherit AgentCLIAutoUpdate=false: %#v", inherited.AgentCLIAutoUpdate)
+	}
+	if overridden := Merge(Settings{AgentCLIAutoUpdate: boolPtr(false)}, Settings{AgentCLIAutoUpdate: boolPtr(true)}); overridden.AgentCLIAutoUpdate == nil || !*overridden.AgentCLIAutoUpdate {
+		t.Fatalf("explicit true child should override AgentCLIAutoUpdate=false: %#v", overridden.AgentCLIAutoUpdate)
+	}
+
+	if scoped := workspaceAgentSettings(Settings{AgentCLIAutoUpdate: boolPtr(false)}); scoped.AgentCLIAutoUpdate != nil {
+		t.Fatalf("workspaceAgentSettings must exclude AgentCLIAutoUpdate: %#v", scoped.AgentCLIAutoUpdate)
+	}
+	prepared := PrepareWorkspaceAgentSettingsForWrite(Settings{}, Settings{AgentCLIAutoUpdate: boolPtr(false)})
+	if prepared.AgentCLIAutoUpdate != nil {
+		t.Fatalf("PrepareWorkspaceAgentSettingsForWrite must exclude AgentCLIAutoUpdate: %#v", prepared.AgentCLIAutoUpdate)
+	}
+	if err := ValidateWorkspaceSettingsPatch(json.RawMessage(`{"agent_cli_auto_update":false}`)); !errors.Is(err, ErrInvalidSettingsPatch) {
+		t.Fatalf("workspace patch must reject agent_cli_auto_update, got %v", err)
+	}
+
+	patched, err := ApplySettingsMergePatch(Settings{}, json.RawMessage(`{"agent_cli_auto_update":false}`))
+	if err != nil {
+		t.Fatalf("user merge patch failed: %v", err)
+	}
+	if patched.AgentCLIAutoUpdate == nil || *patched.AgentCLIAutoUpdate {
+		t.Fatalf("user merge patch should set AgentCLIAutoUpdate=false: %#v", patched.AgentCLIAutoUpdate)
+	}
+	cleared, err := ApplySettingsMergePatch(patched, json.RawMessage(`{"agent_cli_auto_update":null}`))
+	if err != nil {
+		t.Fatalf("user merge patch clear failed: %v", err)
+	}
+	if cleared.AgentCLIAutoUpdate != nil {
+		t.Fatalf("null merge patch should clear AgentCLIAutoUpdate: %#v", cleared.AgentCLIAutoUpdate)
+	}
+
+	novaDir := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, ".denova"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".denova", "config.toml"), []byte("agent_cli_auto_update = false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, layered, err := LoadWithProject(novaDir, workspace, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layered.Workspace.AgentCLIAutoUpdate != nil {
+		t.Fatalf("workspace agent_cli_auto_update must be filtered: %#v", layered.Workspace.AgentCLIAutoUpdate)
+	}
+	if layered.Effective.AgentCLIAutoUpdate == nil || !*layered.Effective.AgentCLIAutoUpdate || !cfg.AgentCLIAutoUpdate {
+		t.Fatalf("default AgentCLIAutoUpdate should stay enabled when only workspace sets false: effective=%v cfg=%v", layered.Effective.AgentCLIAutoUpdate, cfg.AgentCLIAutoUpdate)
+	}
+
+	if err := WriteSettingsFile(UserConfigPath(novaDir), Settings{AgentCLIAutoUpdate: boolPtr(false)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".denova", "config.toml"), []byte("agent_cli_auto_update = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, layered, err = LoadWithProject(novaDir, workspace, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layered.User.AgentCLIAutoUpdate == nil || *layered.User.AgentCLIAutoUpdate {
+		t.Fatalf("user AgentCLIAutoUpdate=false was lost: %#v", layered.User.AgentCLIAutoUpdate)
+	}
+	if layered.Workspace.AgentCLIAutoUpdate != nil {
+		t.Fatalf("workspace agent_cli_auto_update must be filtered: %#v", layered.Workspace.AgentCLIAutoUpdate)
+	}
+	if layered.Effective.AgentCLIAutoUpdate == nil || *layered.Effective.AgentCLIAutoUpdate || cfg.AgentCLIAutoUpdate {
+		t.Fatalf("user AgentCLIAutoUpdate=false should win: effective=%v cfg=%v", layered.Effective.AgentCLIAutoUpdate, cfg.AgentCLIAutoUpdate)
+	}
+}
+
+func TestLoadLayeredPreservesCustomizedTerminalCommandsOverNewPresets(t *testing.T) {
+	novaDir := t.TempDir()
+	custom := []TerminalCommandSettings{
+		{ID: TerminalCommandCodexID, Name: "My Codex", Command: "codex --custom", Enabled: true},
+	}
+	if err := WriteSettingsFile(UserConfigPath(novaDir), Settings{TerminalCommands: custom}); err != nil {
+		t.Fatal(err)
+	}
+
+	layered, err := LoadLayered(novaDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(layered.Effective.TerminalCommands) != 1 || layered.Effective.TerminalCommands[0] != custom[0] {
+		t.Fatalf("customized terminal commands must not be overwritten by built-in presets: %#v", layered.Effective.TerminalCommands)
+	}
+}
+
+func TestManagedAgentCLIsRuntimeFlag(t *testing.T) {
+	cases := []struct {
+		name   string
+		goos   string
+		goarch string
+		dir    string
+		want   bool
+	}{
+		{name: "linux amd64 absolute", goos: "linux", goarch: "amd64", dir: "/data/.local/bin", want: true},
+		{name: "linux arm64 trimmed absolute", goos: "linux", goarch: "arm64", dir: " /data/.local/bin ", want: true},
+		{name: "linux amd64 empty", goos: "linux", goarch: "amd64", dir: "", want: false},
+		{name: "linux amd64 whitespace", goos: "linux", goarch: "amd64", dir: "   ", want: false},
+		{name: "linux amd64 relative", goos: "linux", goarch: "amd64", dir: "data/.local/bin", want: false},
+		{name: "linux amd64 dot relative", goos: "linux", goarch: "amd64", dir: "./bin", want: false},
+		{name: "linux amd64 windows drive path", goos: "linux", goarch: "amd64", dir: `C:\data\bin`, want: false},
+		{name: "linux unsupported arch", goos: "linux", goarch: "386", dir: "/data/.local/bin", want: false},
+		{name: "windows amd64", goos: "windows", goarch: "amd64", dir: "/data/.local/bin", want: false},
+		{name: "darwin arm64", goos: "darwin", goarch: "arm64", dir: "/data/.local/bin", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := managedAgentCLIsEnabledFor(tc.goos, tc.goarch, tc.dir); got != tc.want {
+				t.Fatalf("managedAgentCLIsEnabledFor(%q, %q, %q) = %v, want %v", tc.goos, tc.goarch, tc.dir, got, tc.want)
+			}
+		})
+	}
+
+	origGOOS := managedAgentCLIGetGOOS
+	origGOARCH := managedAgentCLIGetGOARCH
+	t.Cleanup(func() {
+		managedAgentCLIGetGOOS = origGOOS
+		managedAgentCLIGetGOARCH = origGOARCH
+	})
+
+	novaDir := t.TempDir()
+	managedAgentCLIGetGOOS = func() string { return "linux" }
+	managedAgentCLIGetGOARCH = func() string { return "amd64" }
+	t.Setenv(managedAgentCLIDirEnv, "/data/.local/bin")
+
+	layered, err := LoadLayered(novaDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !layered.Runtime.ManagedAgentCLIs {
+		t.Fatalf("LoadLayered should report Runtime.ManagedAgentCLIs=true on linux/amd64 with absolute dir")
+	}
+	payload, err := json.Marshal(layered.Runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(payload), `"managed_agent_clis":true`) {
+		t.Fatalf("SettingsRuntime JSON missing managed_agent_clis: %s", string(payload))
+	}
+
+	t.Setenv(managedAgentCLIDirEnv, "relative/path")
+	layered, err = LoadLayered(novaDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layered.Runtime.ManagedAgentCLIs {
+		t.Fatalf("LoadLayered must reject relative DENOVA_MANAGED_CLI_DIR")
+	}
+	payload, err = json.Marshal(layered.Runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(payload), "managed_agent_clis") {
+		t.Fatalf("SettingsRuntime JSON should omit false managed_agent_clis: %s", string(payload))
+	}
+
+	managedAgentCLIGetGOOS = func() string { return "windows" }
+	t.Setenv(managedAgentCLIDirEnv, "/data/.local/bin")
+	layered, err = LoadLayered(novaDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layered.Runtime.ManagedAgentCLIs {
+		t.Fatalf("LoadLayered must keep ManagedAgentCLIs=false off Linux")
 	}
 }
 

@@ -8,11 +8,13 @@ import (
 )
 
 const (
-	TerminalCommandCodexID  = "codex"
-	TerminalCommandClaudeID = "claude"
+	TerminalCommandCodexID       = "codex"
+	TerminalCommandClaudeID      = "claude"
+	TerminalCommandAntigravityID = "antigravity"
 
-	DefaultTerminalCodexCommand  = "codex"
-	DefaultTerminalClaudeCommand = "claude"
+	DefaultTerminalCodexCommand       = "codex"
+	DefaultTerminalClaudeCommand      = "claude"
+	DefaultTerminalAntigravityCommand = "agy"
 
 	maxTerminalCommandIDRunes   = 128
 	maxTerminalCommandNameRunes = 128
@@ -37,6 +39,7 @@ func DefaultTerminalCommands() []TerminalCommandSettings {
 	return []TerminalCommandSettings{
 		{ID: TerminalCommandCodexID, Name: "Codex CLI", Command: DefaultTerminalCodexCommand, Enabled: true},
 		{ID: TerminalCommandClaudeID, Name: "Claude Code", Command: DefaultTerminalClaudeCommand, Enabled: true},
+		{ID: TerminalCommandAntigravityID, Name: "Antigravity CLI", Command: DefaultTerminalAntigravityCommand, Enabled: true},
 	}
 }
 

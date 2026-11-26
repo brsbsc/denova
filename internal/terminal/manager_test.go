@@ -346,6 +346,37 @@ func TestManagerCloseProjectRejectsRunningProcessesAndCleansExitedSessions(t *te
 	}
 }
 
+func TestDefaultConfigIncludesAntigravityPreset(t *testing.T) {
+	cfg := DefaultConfig()
+	wantCommands := []CommandProfile{
+		{ID: "codex", Name: "Codex CLI", Command: "codex", Enabled: true},
+		{ID: "claude", Name: "Claude Code", Command: "claude", Enabled: true},
+		{ID: "antigravity", Name: "Antigravity CLI", Command: "agy", Enabled: true},
+	}
+	if len(cfg.Commands) != len(wantCommands) {
+		t.Fatalf("DefaultConfig().Commands = %#v, want %#v", cfg.Commands, wantCommands)
+	}
+	for index, want := range wantCommands {
+		if cfg.Commands[index] != want {
+			t.Fatalf("DefaultConfig().Commands[%d] = %#v, want %#v", index, cfg.Commands[index], want)
+		}
+	}
+
+	manager := NewManager(cfg)
+	command, err := manager.ResolveStartupCommand("antigravity")
+	if err != nil {
+		t.Fatalf("ResolveStartupCommand(antigravity) failed: %v", err)
+	}
+	if command != "agy" {
+		t.Fatalf("ResolveStartupCommand(antigravity) = %q, want %q", command, "agy")
+	}
+
+	available := manager.AvailableCommands()
+	if len(available) != 3 || available[2] != (CommandProfile{ID: "antigravity", Name: "Antigravity CLI"}) {
+		t.Fatalf("AvailableCommands() = %#v", available)
+	}
+}
+
 func TestManagerResolveStartupCommand(t *testing.T) {
 	manager := NewManager(Config{
 		Enabled: true,

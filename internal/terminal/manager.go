@@ -88,6 +88,7 @@ func DefaultConfig() Config {
 		Commands: []CommandProfile{
 			{ID: "codex", Name: "Codex CLI", Command: "codex", Enabled: true},
 			{ID: "claude", Name: "Claude Code", Command: "claude", Enabled: true},
+			{ID: "antigravity", Name: "Antigravity CLI", Command: "agy", Enabled: true},
 		},
 		MaxSessions:     DefaultMaxSessions,
 		ScrollbackBytes: DefaultScrollbackKB * 1024,
