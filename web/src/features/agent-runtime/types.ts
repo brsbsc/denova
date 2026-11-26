@@ -32,11 +32,47 @@ export interface ConfigurationSection {
   reason_key?: string
 }
 export interface AgentConfiguration { selected: AgentEngineID; sections: ConfigurationSection[]; tool_manifest?: import('@/features/settings/types').ResolvedAgentToolCapability[] }
+export type ManagedCLIState = 'idle' | 'checking' | 'installing' | 'updating' | 'error'
+export interface ManagedCLIStatus {
+  managed: boolean
+  installed: boolean
+  installed_version?: string
+  latest_version?: string
+  update_available: boolean
+  state: ManagedCLIState
+  bytes_downloaded?: number
+  total_bytes?: number
+  last_checked_at?: string
+  last_error?: string
+  pending_reload?: boolean
+}
+export interface ManagedCLIStatusResponse {
+  managed: ManagedCLIStatus
+  engine?: EngineDescriptor
+}
+export type AuthSessionMode = 'device_code' | 'code_paste'
+export type AuthSessionStatus = 'starting' | 'awaiting_user' | 'completing' | 'succeeded' | 'failed' | 'cancelled'
+export type ClaudeAuthMethod = 'claudeai' | 'console'
+export interface AuthSessionSnapshot {
+  session_id: string
+  engine: AgentEngineID
+  mode: AuthSessionMode
+  status: AuthSessionStatus
+  auth_url?: string
+  user_code?: string
+  hint_key?: string
+  error_key?: string
+  expires_at: string
+  engine_state?: EngineDescriptor
+}
 export interface EngineDescriptor {
   id: AgentEngineID
   name_key: string
   status: 'unchecked' | 'not_installed' | 'auth_required' | 'ready' | 'unavailable' | 'incompatible'
   reason_key?: string
+  version?: string
+  auth_supported?: boolean
+  managed?: ManagedCLIStatus
   capabilities: EngineCapabilities
   configuration_sections: ConfigurationSection[]
 }

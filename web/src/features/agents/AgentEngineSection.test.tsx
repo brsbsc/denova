@@ -1,16 +1,36 @@
 import { useState } from 'react'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { setConfiguredLocale } from '@/i18n'
 import type { AgentEngineID, RuntimePreferences } from '@/features/agent-runtime/types'
 import { AgentEngineSection } from './AgentEngineSection'
 
 const mocks = vi.hoisted(() => ({
-  fetchAgentEngines: vi.fn(), fetchEngineModels: vi.fn(),
+  fetchAgentEngines: vi.fn(),
+  fetchEngineModels: vi.fn(),
+  checkAgentEngine: vi.fn(),
+  checkEngineCLIUpdate: vi.fn(),
+  installEngineCLI: vi.fn(),
+  fetchEngineCLIStatus: vi.fn(),
+  startEngineAuth: vi.fn(),
+  fetchEngineAuthSession: vi.fn(),
+  submitEngineAuth: vi.fn(),
+  cancelEngineAuth: vi.fn(),
+  logoutEngine: vi.fn(),
   profiles: [] as { id: string; label: string; modelLabel: string }[],
 }))
-vi.mock('@/features/agent-runtime/api', () => ({ ...mocks, checkAgentEngine: vi.fn() }))
+vi.mock('@/features/agent-runtime/api', () => mocks)
 vi.mock('@/features/agent-runtime/api-profiles', () => ({ useRuntimeProfiles: () => ({ profiles: mocks.profiles, failed: false }) }))
+
+beforeEach(() => {
+  setConfiguredLocale('zh-CN')
+  vi.clearAllMocks()
+})
+
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 function Harness({ engine, onChange }: { engine: AgentEngineID; onChange: (value: RuntimePreferences) => void }) {
   const [value, setValue] = useState<RuntimePreferences>({ selected: engine })
@@ -64,4 +84,172 @@ describe('AgentEngineSection model source', () => {
       expect(onChange).toHaveBeenLastCalledWith({ selected: engine, [engine]: { model: 'second-model' } })
     })
   }
+})
+
+describe('AgentEngineSection managed CLI and web OAuth', () => {
+  it('hides managed CLI and web auth controls when engine is unmanaged', async () => {
+    mocks.fetchAgentEngines.mockResolvedValue({
+      items: [{ id: 'codex', name_key: 'agentRuntime.codex', status: 'auth_required', auth_supported: false }],
+    })
+    mocks.profiles = []
+    render(<Harness engine="codex" onChange={vi.fn()} />)
+    await screen.findByText('需要登录')
+    expect(screen.queryByRole('button', { name: '安装' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '检查更新' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '登录' })).not.toBeInTheDocument()
+    expect(screen.getByText(/打开终端，执行 codex login/)).toBeVisible()
+  })
+
+  it('installs a missing managed CLI, polls download progress, and refreshes into sign-in ready state', async () => {
+    vi.useFakeTimers()
+    const notInstalledEngine = {
+      id: 'codex' as const,
+      name_key: 'agentRuntime.codex',
+      status: 'not_installed' as const,
+      auth_supported: true,
+      managed: {
+        managed: true,
+        installed: false,
+        update_available: false,
+        state: 'idle' as const,
+      },
+    }
+    const installedEngine = {
+      ...notInstalledEngine,
+      status: 'auth_required' as const,
+      version: '0.132.0',
+      managed: {
+        managed: true,
+        installed: true,
+        installed_version: '0.132.0',
+        update_available: false,
+        state: 'idle' as const,
+      },
+    }
+    mocks.fetchAgentEngines
+      .mockResolvedValueOnce({ items: [notInstalledEngine] })
+      .mockResolvedValueOnce({ items: [installedEngine] })
+    mocks.installEngineCLI.mockResolvedValueOnce({
+      managed: true,
+      installed: false,
+      update_available: false,
+      state: 'installing',
+      bytes_downloaded: 0,
+      total_bytes: 100 * 1024 * 1024,
+    })
+    mocks.fetchEngineCLIStatus
+      .mockResolvedValueOnce({
+        managed: {
+          managed: true,
+          installed: false,
+          update_available: false,
+          state: 'installing',
+          bytes_downloaded: 45 * 1024 * 1024,
+          total_bytes: 100 * 1024 * 1024,
+        },
+      })
+      .mockResolvedValueOnce({
+        managed: installedEngine.managed,
+        engine: installedEngine,
+      })
+
+    render(<Harness engine="codex" onChange={vi.fn()} />)
+    await act(async () => { await Promise.resolve() })
+
+    expect(screen.queryByRole('button', { name: '登录' })).not.toBeInTheDocument()
+    const installButton = screen.getByRole('button', { name: '安装' })
+    await act(async () => {
+      fireEvent.click(installButton)
+      await Promise.resolve()
+    })
+
+    expect(mocks.installEngineCLI).toHaveBeenCalledWith('codex')
+    expect(screen.getByText('正在下载并安装…')).toBeVisible()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500)
+    })
+    expect(screen.getByText('45%')).toBeVisible()
+    expect(screen.getByText('45.0 MB / 100.0 MB')).toBeVisible()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500)
+    })
+    expect(mocks.fetchAgentEngines).toHaveBeenCalledTimes(2)
+    expect(screen.getByText('v0.132.0')).toBeVisible()
+    expect(screen.getByRole('button', { name: '登录' })).toBeVisible()
+  })
+
+  it('checks for updates, shows update button and pending reload hint', async () => {
+    const user = userEvent.setup()
+    mocks.fetchAgentEngines.mockResolvedValue({
+      items: [{
+        id: 'antigravity',
+        name_key: 'agentRuntime.antigravity',
+        status: 'ready',
+        version: '1.5.16',
+        auth_supported: true,
+        managed: {
+          managed: true,
+          installed: true,
+          installed_version: '1.5.16',
+          update_available: false,
+          state: 'idle',
+          pending_reload: true,
+        },
+      }],
+    })
+    mocks.fetchEngineModels.mockResolvedValue({ items: [{ id: 'cli-model', display_name: 'CLI model', efforts: [] }] })
+    mocks.checkEngineCLIUpdate.mockResolvedValueOnce({
+      managed: true,
+      installed: true,
+      installed_version: '1.5.16',
+      latest_version: '1.5.18',
+      update_available: true,
+      state: 'idle',
+      pending_reload: true,
+      last_checked_at: '2026-11-26T14:00:00Z',
+    })
+
+    render(<Harness engine="antigravity" onChange={vi.fn()} />)
+    expect(await screen.findByText('v1.5.16')).toBeVisible()
+    expect(screen.getByText('新版本已安装，当前回合结束后自动生效。')).toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: '检查更新' }))
+    expect(mocks.checkEngineCLIUpdate).toHaveBeenCalledWith('antigravity')
+    expect(await screen.findByRole('button', { name: '更新至 v1.5.18' })).toBeVisible()
+  })
+
+  it('shows sign-out when ready and sign-in when auth_required, hiding auth buttons for API profiles', async () => {
+    const user = userEvent.setup()
+    mocks.fetchAgentEngines.mockResolvedValue({
+      items: [{
+        id: 'claude',
+        name_key: 'agentRuntime.claude',
+        status: 'ready',
+        auth_supported: true,
+        managed: { managed: true, installed: true, installed_version: '2.1.320', update_available: false, state: 'idle' },
+      }],
+    })
+    mocks.fetchEngineModels.mockResolvedValue({ items: [{ id: 'cli-model', display_name: 'CLI model', efforts: [] }], default_id: 'cli-model' })
+    mocks.profiles = [{ id: 'profile:gateway', label: 'Gateway', modelLabel: 'Gateway' }]
+    mocks.logoutEngine.mockResolvedValueOnce({
+      id: 'claude',
+      name_key: 'agentRuntime.claude',
+      status: 'auth_required',
+      auth_supported: true,
+      managed: { managed: true, installed: true, installed_version: '2.1.320', update_available: false, state: 'idle' },
+    })
+
+    render(<Harness engine="claude" onChange={vi.fn()} />)
+    const signOutButton = await screen.findByRole('button', { name: '退出登录' })
+    await user.click(signOutButton)
+
+    expect(mocks.logoutEngine).toHaveBeenCalledWith('claude')
+    expect(await screen.findByRole('button', { name: '登录' })).toBeVisible()
+
+    // Switching to Denova API profile hides CLI web sign-in controls.
+    await user.click(screen.getByRole('radio', { name: 'Denova 模型' }))
+    expect(screen.queryByRole('button', { name: '登录' })).not.toBeInTheDocument()
+  })
 })

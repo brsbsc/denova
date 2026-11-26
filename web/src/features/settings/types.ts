@@ -90,6 +90,7 @@ export interface Settings {
   statistics_enabled?: boolean | null
   update_check_enabled?: boolean | null
   update_download_enabled?: boolean | null
+  agent_cli_auto_update?: boolean | null
   max_iteration?: number | null
   model_max_retries?: number | null
   agent_idle_timeout_seconds?: number | null
@@ -643,6 +644,7 @@ interface SettingsAccess {
 interface SettingsRuntime {
   goos: string
   dev_mode?: boolean
+  managed_agent_clis?: boolean
 }
 
 interface SettingsRevisions {

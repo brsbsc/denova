@@ -388,6 +388,17 @@ export const SettingsSections = memo(function SettingsSections({ layered, draft,
         <p className="text-xs text-[var(--nova-text-muted)]">{t('settings.updates.autoHint')}</p>
         </>}
         <UpdateSettings />
+        {layered?.runtime?.managed_agent_clis && (
+          <div className="flex flex-col gap-2 border-t border-[var(--nova-border)] pt-3">
+            <h3 className="px-2 text-sm font-medium">{t('settings.updates.agentCliTitle')}</h3>
+            <BoolTri
+              label={t('settings.updates.agentCliAutoUpdate')}
+              value={draft.agent_cli_auto_update ?? null}
+              inherited={inherited.agent_cli_auto_update}
+              onChange={(v) => setField('agent_cli_auto_update', v)}
+            />
+          </div>
+        )}
       </>
     ),
     'advanced': (

@@ -8,7 +8,7 @@ import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import type { Settings, TerminalCommandSettings } from './types'
 
-const TERMINAL_COMMAND_PRESET_IDS = new Set(['codex', 'claude'])
+const TERMINAL_COMMAND_PRESET_IDS = new Set(['codex', 'claude', 'antigravity'])
 
 /** Resolves the atomic user-owned registry shown by the editor. */
 export function terminalCommandsForEditor(draft: Settings, effective: Settings): TerminalCommandSettings[] {

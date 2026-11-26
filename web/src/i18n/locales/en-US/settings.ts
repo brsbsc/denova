@@ -214,6 +214,8 @@ const settings = {
   'settings.updates.stagedRestart': 'Update staged. Restart and install now, or wait for active tasks to finish before restarting.',
   'settings.updates.updateAvailableTitle': 'New version available',
   'settings.updates.upToDateTitle': 'Denova is up to date',
+  'settings.updates.agentCliTitle': 'External Agent CLIs',
+  'settings.updates.agentCliAutoUpdate': 'Auto-update installed CLIs',
   'settings.appearance.readingFont': 'Reading Font',
   'settings.appearance.readingFontSize': 'Reading Text Size',
   'settings.appearance.readingFontSizeDescription': 'Change the text size in writing, game stories, Agent replies, the source editor, and the terminal.',

@@ -214,6 +214,8 @@ const settings = {
   'settings.updates.stagedRestart': '更新已暂存。可立即重启安装，也可以等待活动任务完成后重启。',
   'settings.updates.updateAvailableTitle': '发现新版本',
   'settings.updates.upToDateTitle': '当前已是最新版本',
+  'settings.updates.agentCliTitle': '外部 Agent CLI',
+  'settings.updates.agentCliAutoUpdate': '自动更新已安装的 CLI',
   'settings.appearance.readingFont': '阅读字体',
   'settings.appearance.readingFontSize': '阅读内容大小',
   'settings.appearance.readingFontSizeDescription': '调整写作正文、游戏剧情、Agent 回复、源码编辑器和终端的文字大小。',

@@ -1,15 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, Cpu } from 'lucide-react'
+import { Check, Cpu, LogIn, LogOut } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { checkAgentEngine, fetchAgentEngines, fetchEngineModels } from '@/features/agent-runtime/api'
+import { checkAgentEngine, fetchAgentEngines, fetchEngineModels, logoutEngine } from '@/features/agent-runtime/api'
 import { AGENT_ENGINE_IDS, resolveRuntimePreferences, runtimeModelKey, runtimeModelFromKey, type AgentEngineID, type EngineDescriptor, type EngineModels, type RuntimePreferences } from '@/features/agent-runtime/types'
 import { useRuntimeProfiles } from '@/features/agent-runtime/api-profiles'
 import { Field } from './agent-form-controls'
 import { AgentConfigurationDisclosure } from './agent-configuration-disclosure'
+import { AgentEngineCliActions } from './AgentEngineCliActions'
+import { AgentEngineAuthDialog } from './AgentEngineAuthDialog'
 
 export function AgentEngineSection({ value, inherited, onChange, beforeSwitch, onCatalog }: {
   value: RuntimePreferences
@@ -26,10 +28,15 @@ export function AgentEngineSection({ value, inherited, onChange, beforeSwitch, o
   const [models, setModels] = useState<EngineModels>({ items: [] })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [authOpen, setAuthOpen] = useState(false)
   const engine = engines.find((item) => item.id === selected)
   const ready = engine?.status === 'ready'
   const settings = selected === 'native' ? undefined : resolved[selected]
   const ownSettings = selected === 'native' ? undefined : value[selected]
+  const cliInstalled = engine != null && engine.status !== 'not_installed' && (!engine.managed?.managed || engine.managed.installed)
+  const canWebAuth = Boolean(selected !== 'native' && engine?.auth_supported && !settings?.profile_id && cliInstalled)
+  const showSignIn = canWebAuth && engine?.status === 'auth_required'
+  const showSignOut = canWebAuth && engine?.status === 'ready'
   const executionSettings = selected === 'codex' && resolved.codex?.sandbox ? { sandbox: resolved.codex.sandbox } : {}
   // The context window is conversation-owned; every other edit must carry it or
   // selecting a model would silently drop the user's choice.
@@ -63,6 +70,19 @@ export function AgentEngineSection({ value, inherited, onChange, beforeSwitch, o
     return () => { active = false }
   }, [engine, ready, selected, t])
 
+  useEffect(() => { setAuthOpen(false) }, [selected])
+
+  const updateEngine = useCallback((updated: EngineDescriptor) => {
+    setEngines((items) => items.some((item) => item.id === updated.id)
+      ? items.map((item) => item.id === updated.id ? updated : item)
+      : [...items, updated])
+  }, [])
+
+  const reloadCatalog = useCallback(async () => {
+    const { items } = await fetchAgentEngines()
+    setEngines(items)
+  }, [])
+
   const act = async (action: () => Promise<unknown>) => {
     setBusy(true); setError('')
     try { await action() } catch (cause) {
@@ -72,8 +92,20 @@ export function AgentEngineSection({ value, inherited, onChange, beforeSwitch, o
   }
   const refresh = async () => {
     const checked = await checkAgentEngine(selected)
-    setEngines((items) => items.map((item) => item.id === checked.id ? checked : item))
+    updateEngine(checked)
   }
+  const handleLogout = async () => {
+    const updated = await logoutEngine(selected)
+    updateEngine(updated)
+  }
+  const handleAuthenticated = useCallback(async (updated?: EngineDescriptor) => {
+    if (updated) updateEngine(updated)
+    try {
+      await reloadCatalog()
+    } catch (cause) {
+      console.warn('[agent-runtime] failed to refresh engines after sign-in', cause)
+    }
+  }, [reloadCatalog, updateEngine])
 
   return <AgentConfigurationDisclosure id="runtime" icon={Cpu} title={t('agentRuntime.title')}
     summary={[t(`agentRuntime.${selected}`), selected !== 'native' && (selectedProfile?.label ?? model?.display_name ?? settings?.profile_id ?? settings?.model)].filter(Boolean).join(' · ')} defaultOpen>
@@ -93,9 +125,29 @@ export function AgentEngineSection({ value, inherited, onChange, beforeSwitch, o
           {t(`agentRuntime.status.${engine?.status ?? 'unchecked'}`)}
         </Badge>
         <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(refresh)}>{t('agentRuntime.check')}</Button>
+        {showSignIn && (
+          <Button type="button" size="sm" disabled={busy} onClick={() => setAuthOpen(true)}>
+            <LogIn data-icon="inline-start" />
+            {t('agentRuntime.auth.signIn')}
+          </Button>
+        )}
+        {showSignOut && (
+          <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void act(handleLogout)}>
+            <LogOut data-icon="inline-start" />
+            {t('agentRuntime.auth.signOut')}
+          </Button>
+        )}
       </Field>}
     </div>
     {selected !== 'native' && <>
+      {engine?.managed?.managed && (
+        <AgentEngineCliActions
+          engine={engine}
+          disabled={busy}
+          onEngineUpdated={updateEngine}
+          onRefresh={reloadCatalog}
+        />
+      )}
       {apiProfilesSupported && <Field label={t('agentRuntime.modelSource')}>
         <ToggleGroup type="single" variant="outline" size="sm" value={source} disabled={busy}
           aria-label={t('agentRuntime.modelSource')} className="max-w-full flex-wrap"
@@ -113,7 +165,7 @@ export function AgentEngineSection({ value, inherited, onChange, beforeSwitch, o
       {apiProfilesSupported && !profiles.length && <p className="text-xs text-muted-foreground">{t(selected === 'codex' ? 'agentRuntime.codexProfilesHint' : 'agentRuntime.claudeProfilesHint')}</p>}
       <p className="text-xs leading-relaxed text-[var(--nova-text-muted)]">{t(settings?.profile_id ? 'agentRuntime.apiProfileHint' : homeKey)}</p>
       {engine?.reason_key && <p className="text-xs leading-relaxed text-[var(--nova-text-muted)]">{t(engine.reason_key)}</p>}
-      {!settings?.profile_id && engine?.status === 'auth_required' && <p role="status" className="text-xs leading-relaxed text-[var(--nova-text-muted)]">{t(loginKey)}</p>}
+      {!settings?.profile_id && engine?.status === 'auth_required' && !showSignIn && <p role="status" className="text-xs leading-relaxed text-[var(--nova-text-muted)]">{t(loginKey)}</p>}
       <div className="grid min-w-0 gap-3 @xl/agent-settings:grid-cols-2">
         <Field label={t('agentRuntime.model')} inherited={ownSettings == null}
           onReset={ownSettings ? () => { const next = { ...value }; delete next[selected]; onChange(next) } : undefined}>
@@ -152,5 +204,13 @@ export function AgentEngineSection({ value, inherited, onChange, beforeSwitch, o
     </div>
     {profilesFailed && <p role="alert" className="text-xs text-destructive">{t('agentRuntime.profilesFailed')}</p>}
     {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+    {selected !== 'native' && (canWebAuth || authOpen) && (
+      <AgentEngineAuthDialog
+        engineId={selected}
+        open={authOpen}
+        onOpenChange={setAuthOpen}
+        onAuthenticated={handleAuthenticated}
+      />
+    )}
   </AgentConfigurationDisclosure>
 }
