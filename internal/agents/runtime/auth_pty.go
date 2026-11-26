@@ -68,7 +68,7 @@ func startAuthProcess(spec authProcessSpec) (*authProcess, error) {
 			cmd := exec.Command(spec.Executable, spec.Args...)
 			cmd.Dir = tempDir
 			cmd.Env = spec.Env
-			external.ConfigureProcess(cmd)
+			configureAuthPTYProcess(cmd)
 			if err := terminal.Start(cmd); err != nil {
 				_ = terminal.Close()
 				_ = os.RemoveAll(tempDir)

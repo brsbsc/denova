@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setConfiguredLocale } from '@/i18n'
+import { APIError } from '@/lib/api-client'
 import type { AgentEngineID, RuntimePreferences } from '@/features/agent-runtime/types'
 import { AgentEngineSection } from './AgentEngineSection'
 
@@ -251,5 +252,60 @@ describe('AgentEngineSection managed CLI and web OAuth', () => {
     // Switching to Denova API profile hides CLI web sign-in controls.
     await user.click(screen.getByRole('radio', { name: 'Denova 模型' }))
     expect(screen.queryByRole('button', { name: '登录' })).not.toBeInTheDocument()
+  })
+
+  it('localizes APIError.code on update check failure and clears stale live state on subsequent refresh', async () => {
+    const user = userEvent.setup()
+    const baseEngine = {
+      id: 'codex' as const,
+      name_key: 'agentRuntime.codex',
+      status: 'ready' as const,
+      version: '0.132.0',
+      auth_supported: true,
+      managed: {
+        managed: true,
+        installed: true,
+        installed_version: '0.132.0',
+        update_available: false,
+        pending_reload: true,
+        state: 'idle' as const,
+      },
+    }
+    mocks.fetchAgentEngines
+      .mockResolvedValueOnce({ items: [baseEngine] })
+      .mockResolvedValueOnce({
+        items: [{
+          ...baseEngine,
+          managed: { ...baseEngine.managed, pending_reload: false },
+        }],
+      })
+    mocks.fetchEngineModels.mockResolvedValue({ items: [{ id: 'cli-model', display_name: 'CLI model', efforts: ['high'] }], default_id: 'cli-model' })
+    mocks.checkEngineCLIUpdate
+      .mockRejectedValueOnce(new APIError('raw server text', { status: 409, code: 'agentRuntime.updateBusy' }))
+      .mockResolvedValueOnce({
+        ...baseEngine.managed,
+        last_checked_at: '2026-11-26T14:00:00Z',
+      })
+    mocks.checkAgentEngine.mockResolvedValueOnce({
+      ...baseEngine,
+      managed: { ...baseEngine.managed, pending_reload: false },
+    })
+
+    render(<Harness engine="codex" onChange={vi.fn()} />)
+    expect(await screen.findByText('新版本已安装，当前回合结束后自动生效。')).toBeVisible()
+
+    // Error code should resolve via i18n instead of showing raw fallback English.
+    await user.click(screen.getByRole('button', { name: '检查更新' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('CLI 安装或更新正在进行中，请稍候。')
+
+    // Successful check update must not leave sticky live state masking parent refreshes.
+    await user.click(screen.getByRole('button', { name: '检查更新' }))
+    expect(await screen.findByText('已是最新')).toBeVisible()
+
+    // Clicking runtime check updates parent engine.managed (pending_reload -> false).
+    await user.click(screen.getByRole('button', { name: '检查连接' }))
+    await waitFor(() => {
+      expect(screen.queryByText('新版本已安装，当前回合结束后自动生效。')).not.toBeInTheDocument()
+    })
   })
 })

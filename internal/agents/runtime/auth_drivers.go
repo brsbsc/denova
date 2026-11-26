@@ -34,6 +34,7 @@ type authPromptUpdate struct {
 
 var (
 	ansiCursorForwardRe = regexp.MustCompile(`\x1b\[\d*C`)
+	ansiOSC8URLRe       = regexp.MustCompile(`\x1b\]8;[^;\x07\x1b]*;(https://[^\x07\x1b\s]+)(?:\x07|\x1b\\)`)
 	ansiOSCRe           = regexp.MustCompile(`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
 	ansiCSIRe           = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
 	ansiTwoByteRe       = regexp.MustCompile(`\x1b[@-Z\\-_]`)
@@ -184,31 +185,71 @@ func stripANSI(raw string) string {
 	return b.String()
 }
 
+// extractOSC8URLs pulls intact hyperlink targets from OSC 8 terminal escape
+// sequences before stripANSI removes them, preventing soft-wrapped visible link
+// text from truncating long OAuth URLs.
+func extractOSC8URLs(raw string) []string {
+	matches := ansiOSC8URLRe.FindAllStringSubmatch(raw, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	urls := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if len(match) >= 2 {
+			urls = append(urls, match[1])
+		}
+	}
+	return urls
+}
+
+// parseAuthPromptRaw extracts the provider verification URL (including OSC 8
+// hyperlink targets before ANSI stripping), optional loopback redirect port,
+// and Codex one-time device code from raw CLI output.
+func parseAuthPromptRaw(engine config.RuntimeID, raw string, includeIncompleteTail bool) authPromptUpdate {
+	osc8URLs := extractOSC8URLs(raw)
+	cleaned := stripANSI(raw)
+	return parseAuthPromptWithExtraURLs(engine, cleaned, osc8URLs, includeIncompleteTail)
+}
+
 // parseAuthPrompt extracts the provider verification URL, optional loopback
 // redirect port, and Codex one-time device code from ANSI-stripped CLI output.
 // When includeIncompleteTail is false, text after the final line break is held
 // back so a URL split across read chunks is never captured truncated.
 func parseAuthPrompt(engine config.RuntimeID, cleaned string, includeIncompleteTail bool) authPromptUpdate {
+	return parseAuthPromptWithExtraURLs(engine, cleaned, nil, includeIncompleteTail)
+}
+
+func parseAuthPromptWithExtraURLs(engine config.RuntimeID, cleaned string, extraURLs []string, includeIncompleteTail bool) authPromptUpdate {
 	text := cleaned
 	if !includeIncompleteTail {
 		idx := strings.LastIndexByte(text, '\n')
 		if idx < 0 {
-			return authPromptUpdate{}
+			if len(extraURLs) == 0 {
+				return authPromptUpdate{}
+			}
+			text = ""
+		} else {
+			text = text[:idx+1]
 		}
-		text = text[:idx+1]
 	}
 
 	var update authPromptUpdate
-	urls := httpsURLRe.FindAllString(text, -1)
-	for _, candidate := range urls {
+	candidates := make([]string, 0, len(extraURLs)+4)
+	candidates = append(candidates, extraURLs...)
+	if text != "" {
+		candidates = append(candidates, httpsURLRe.FindAllString(text, -1)...)
+	}
+	bestScore := 0
+	for _, candidate := range candidates {
 		trimmed := strings.TrimRight(candidate, ".,;:!?)\"]>'")
 		parsed, err := url.Parse(trimmed)
 		if err != nil || !strings.EqualFold(parsed.Scheme, "https") {
 			continue
 		}
-		if matchesEngineAuthURL(engine, parsed) {
+		score := authURLPriority(engine, parsed)
+		if score > bestScore {
+			bestScore = score
 			update.AuthURL = trimmed
-			break
 		}
 	}
 
@@ -228,6 +269,37 @@ func parseAuthPrompt(engine config.RuntimeID, cleaned string, includeIncompleteT
 	return update
 }
 
+func authURLPriority(engine config.RuntimeID, parsed *url.URL) int {
+	if !matchesEngineAuthURL(engine, parsed) {
+		return 0
+	}
+	lowerPath := strings.ToLower(parsed.Path)
+	query := parsed.Query()
+	hasOAuthParams := query.Has("redirect_uri") || query.Has("client_id") || query.Has("code_challenge")
+	switch engine {
+	case config.RuntimeCodex:
+		if strings.Contains(lowerPath, "/device") || strings.Contains(lowerPath, "/oauth") || hasOAuthParams {
+			return 2
+		}
+		if strings.EqualFold(parsed.Hostname(), "auth.openai.com") && lowerPath != "" && lowerPath != "/" {
+			return 2
+		}
+		return 1
+	case config.RuntimeAntigravity:
+		if strings.Contains(lowerPath, "/oauth") || hasOAuthParams {
+			return 2
+		}
+		return 1
+	case config.RuntimeClaude:
+		if strings.Contains(lowerPath, "/oauth") || hasOAuthParams {
+			return 2
+		}
+		return 1
+	default:
+		return 0
+	}
+}
+
 func matchesEngineAuthURL(engine config.RuntimeID, parsed *url.URL) bool {
 	if parsed == nil {
 		return false
@@ -242,7 +314,7 @@ func matchesEngineAuthURL(engine config.RuntimeID, parsed *url.URL) bool {
 	case config.RuntimeAntigravity:
 		return h == "accounts.google.com"
 	case config.RuntimeClaude:
-		return h == "claude.ai" || h == "console.anthropic.com" || h == "platform.claude.com"
+		return h == "claude.ai" || h == "claude.com" || h == "console.anthropic.com" || h == "platform.claude.com"
 	default:
 		return false
 	}

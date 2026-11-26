@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { checkEngineCLIUpdate, fetchEngineCLIStatus, installEngineCLI } from '@/features/agent-runtime/api'
 import type { AgentEngineID, EngineDescriptor, ManagedCLIStatus } from '@/features/agent-runtime/types'
+import { APIError } from '@/lib/api-client'
 import { Field } from './agent-form-controls'
 
 const CLI_POLL_INTERVAL_MS = 1500
@@ -26,12 +27,26 @@ export function AgentEngineCliActions({ engine, disabled, onEngineUpdated, onRef
   const [checking, setChecking] = useState(false)
   const [startingInstall, setStartingInstall] = useState(false)
   const [actionError, setActionError] = useState('')
+  const mountedRef = useRef(true)
+  const engineRef = useRef(engine)
+  engineRef.current = engine
   const managedRef = useRef(managed)
   managedRef.current = managed
+  const actionSeqRef = useRef(0)
   const callbacksRef = useRef({ onEngineUpdated, onRefresh })
   callbacksRef.current = { onEngineUpdated, onRefresh }
 
   useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      actionSeqRef.current += 1
+    }
+  }, [])
+
+  useEffect(() => {
+    actionSeqRef.current += 1
+    setLive(null)
     setActionError('')
     setChecking(false)
     setStartingInstall(false)
@@ -42,40 +57,46 @@ export function AgentEngineCliActions({ engine, disabled, onEngineUpdated, onRef
 
   useEffect(() => {
     if (!isTransferring) return
+    const targetEngineId = engine.id
     let active = true
     let timer: ReturnType<typeof setTimeout> | undefined
     let consecutiveFailures = 0
 
     const poll = async () => {
       try {
-        const next = await fetchEngineCLIStatus(engine.id)
-        if (!active) return
+        const next = await fetchEngineCLIStatus(targetEngineId)
+        if (!active || !mountedRef.current || engineRef.current.id !== targetEngineId) return
         const nextStatus = next?.managed
         if (!nextStatus) throw new Error('invalid managed CLI status')
         consecutiveFailures = 0
         setActionError('')
-        setLive({ engineId: engine.id, status: nextStatus })
         if (nextStatus.state !== 'installing' && nextStatus.state !== 'updating') {
-          if (next.engine) callbacksRef.current.onEngineUpdated(next.engine)
+          const updatedEngine = next.engine ?? {
+            ...engineRef.current,
+            version: nextStatus.installed_version || engineRef.current.version,
+            managed: nextStatus,
+          }
+          callbacksRef.current.onEngineUpdated(updatedEngine)
+          setLive(null)
           if (nextStatus.state === 'idle') {
             try {
               await callbacksRef.current.onRefresh()
-              if (active) setLive(null)
             } catch (refreshCause) {
-              console.warn('[agent-runtime] failed to refresh engines after CLI operation', { engine: engine.id, cause: refreshCause })
+              console.warn('[agent-runtime] failed to refresh engines after CLI operation', { engine: targetEngineId, cause: refreshCause })
             }
           }
           return
         }
+        setLive({ engineId: targetEngineId, status: nextStatus })
       } catch (cause) {
-        if (!active) return
+        if (!active || !mountedRef.current || engineRef.current.id !== targetEngineId) return
         consecutiveFailures += 1
-        console.warn('[agent-runtime] failed to poll managed CLI status', { engine: engine.id, cause })
+        console.warn('[agent-runtime] failed to poll managed CLI status', { engine: targetEngineId, cause })
         if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
           setActionError(resolveErrorMessage(cause, t, i18n, 'agentRuntime.cli.actionFailed'))
           setLive((current) => {
-            const base = current && current.engineId === engine.id ? current.status : managedRef.current
-            return base ? { engineId: engine.id, status: { ...base, state: 'error' } } : null
+            const base = current && current.engineId === targetEngineId ? current.status : managedRef.current
+            return base ? { engineId: targetEngineId, status: { ...base, state: 'error' } } : null
           })
           return
         }
@@ -101,39 +122,59 @@ export function AgentEngineCliActions({ engine, disabled, onEngineUpdated, onRef
   const errorText = actionError || (status.state === 'error' && status.last_error ? resolveLocalizedText(status.last_error, t, i18n) : '')
 
   const handleCheckUpdate = async () => {
+    const targetEngine = engineRef.current
+    const seq = ++actionSeqRef.current
     setChecking(true)
     setActionError('')
     try {
-      const next = await checkEngineCLIUpdate(engine.id)
-      setLive({ engineId: engine.id, status: next })
-      onEngineUpdated({
-        ...engine,
-        version: next.installed_version || engine.version,
+      const next = await checkEngineCLIUpdate(targetEngine.id)
+      if (!mountedRef.current || engineRef.current.id !== targetEngine.id || actionSeqRef.current !== seq) return
+      setLive(null)
+      callbacksRef.current.onEngineUpdated({
+        ...engineRef.current,
+        version: next.installed_version || engineRef.current.version,
         managed: next,
       })
     } catch (cause) {
-      console.warn('[agent-runtime] managed CLI update check failed', { engine: engine.id, cause })
+      if (!mountedRef.current || engineRef.current.id !== targetEngine.id || actionSeqRef.current !== seq) return
+      console.warn('[agent-runtime] managed CLI update check failed', { engine: targetEngine.id, cause })
       setActionError(resolveErrorMessage(cause, t, i18n, 'agentRuntime.cli.actionFailed'))
     } finally {
-      setChecking(false)
+      if (mountedRef.current && engineRef.current.id === targetEngine.id && actionSeqRef.current === seq) {
+        setChecking(false)
+      }
     }
   }
 
   const handleInstall = async () => {
+    const targetEngineId = engineRef.current.id
+    const seq = ++actionSeqRef.current
     setStartingInstall(true)
     setActionError('')
     try {
-      const next = await installEngineCLI(engine.id)
-      setLive({ engineId: engine.id, status: next })
-      if (next.state === 'idle') {
-        await onRefresh()
+      const next = await installEngineCLI(targetEngineId)
+      if (!mountedRef.current || engineRef.current.id !== targetEngineId || actionSeqRef.current !== seq) return
+      if (next.state === 'installing' || next.state === 'updating') {
+        setLive({ engineId: targetEngineId, status: next })
+      } else {
         setLive(null)
+        callbacksRef.current.onEngineUpdated({
+          ...engineRef.current,
+          version: next.installed_version || engineRef.current.version,
+          managed: next,
+        })
+        if (next.state === 'idle') {
+          await callbacksRef.current.onRefresh()
+        }
       }
     } catch (cause) {
-      console.warn('[agent-runtime] managed CLI install failed', { engine: engine.id, cause })
+      if (!mountedRef.current || engineRef.current.id !== targetEngineId || actionSeqRef.current !== seq) return
+      console.warn('[agent-runtime] managed CLI install failed', { engine: targetEngineId, cause })
       setActionError(resolveErrorMessage(cause, t, i18n, 'agentRuntime.cli.actionFailed'))
     } finally {
-      setStartingInstall(false)
+      if (mountedRef.current && engineRef.current.id === targetEngineId && actionSeqRef.current === seq) {
+        setStartingInstall(false)
+      }
     }
   }
 
@@ -242,6 +283,9 @@ function resolveLocalizedText(value: string, t: (key: string) => string, i18n: {
 }
 
 function resolveErrorMessage(cause: unknown, t: (key: string) => string, i18n: { exists: (key: string) => boolean }, fallbackKey: string): string {
+  if (cause instanceof APIError && cause.code && i18n.exists(cause.code)) {
+    return t(cause.code)
+  }
   if (cause instanceof Error && cause.message.trim()) {
     return resolveLocalizedText(cause.message.trim(), t, i18n)
   }

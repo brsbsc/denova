@@ -28,5 +28,5 @@ func DiscoverAntigravity(environment []string) string {
 		}
 		return discoverExecutable(environment, candidates...)
 	}
-	return discoverExecutable(environment, "agy", "~/.local/bin/agy")
+	return discoverExecutable(environment, managedCLICandidates(environment, "agy", "agy", "~/.local/bin/agy")...)
 }

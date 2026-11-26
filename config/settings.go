@@ -630,7 +630,7 @@ func managedAgentCLIsEnabledFor(goos, goarch, rawDir string) bool {
 		return false
 	}
 	dir := strings.TrimSpace(rawDir)
-	return dir != "" && path.IsAbs(dir)
+	return dir != "" && !strings.ContainsRune(dir, 0) && path.IsAbs(dir)
 }
 
 // ReadSettingsFile 读取 TOML，文件不存在时返回零值且无错误。

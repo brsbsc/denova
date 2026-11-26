@@ -969,6 +969,36 @@ func TestAuthPromptParserIgnoresDocsURLsAndStripsOSC8(t *testing.T) {
 	}
 }
 
+func TestAuthPromptParserPrefersClaudeComOAuthAndOSC8Target(t *testing.T) {
+	// Claude Code 2.1.332+ emits https://claude.com/cai/oauth/authorize?... and
+	// may print a generic https://claude.ai link earlier in the banner.
+	claudeBanner := "Visit https://claude.ai for account info.\n" +
+		"Open https://claude.com/cai/oauth/authorize?client_id=cid&redirect_uri=http%3A%2F%2Flocalhost%3A48123%2Fcallback&state=st1\n"
+	gotClaude := parseAuthPromptRaw(config.RuntimeClaude, claudeBanner, false)
+	wantClaudeURL := "https://claude.com/cai/oauth/authorize?client_id=cid&redirect_uri=http%3A%2F%2Flocalhost%3A48123%2Fcallback&state=st1"
+	if !gotClaude.Ready || gotClaude.AuthURL != wantClaudeURL || gotClaude.RedirectPort != 48123 {
+		t.Fatalf("claude.com parse = %+v, want ready url=%q port=48123", gotClaude, wantClaudeURL)
+	}
+
+	// Codex prints a ChatGPT settings link before the actual device verification URL.
+	codexBanner := "Enable device code auth at https://chatgpt.com/#settings/Security\n" +
+		"Then open https://auth.openai.com/codex/device and enter QWER-5678\n"
+	gotCodex := parseAuthPromptRaw(config.RuntimeCodex, codexBanner, false)
+	if !gotCodex.Ready || gotCodex.AuthURL != "https://auth.openai.com/codex/device" || gotCodex.UserCode != "QWER-5678" {
+		t.Fatalf("codex priority parse = %+v, want auth.openai.com/codex/device and QWER-5678", gotCodex)
+	}
+
+	// Soft-wrapped OSC 8 hyperlink: visible text is split across lines, but the
+	// OSC 8 target sequence retains the complete OAuth URL and redirect_uri.
+	intactOSC8URL := "https://claude.com/cai/oauth/authorize?client_id=osc8&redirect_uri=http%3A%2F%2Flocalhost%3A49222%2Fcb&code_challenge=xyz"
+	wrappedOSC8 := "\x1b]8;;" + intactOSC8URL + "\x07" +
+		"https://claude.com/cai/oauth/auth\r\norize?client_id=osc8\x1b]8;;\x07\r\n"
+	gotOSC8 := parseAuthPromptRaw(config.RuntimeClaude, wrappedOSC8, false)
+	if !gotOSC8.Ready || gotOSC8.AuthURL != intactOSC8URL || gotOSC8.RedirectPort != 49222 {
+		t.Fatalf("wrapped OSC 8 parse = %+v, want intact url=%q port=49222", gotOSC8, intactOSC8URL)
+	}
+}
+
 func TestAuthFailureOnNonZeroExitAndUnreadyProbe(t *testing.T) {
 	t.Run("nonzero_exit_marks_failed", func(t *testing.T) {
 		mgr := NewAuthManager(AuthManagerOptions{

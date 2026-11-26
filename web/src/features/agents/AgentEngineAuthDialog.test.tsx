@@ -300,4 +300,65 @@ describe('AgentEngineAuthDialog', () => {
 
     expect(mocks.cancelEngineAuth).toHaveBeenCalledWith('codex', 'sess-late')
   })
+
+  it('ignores a stale awaiting_user poll once submission enters completing state', async () => {
+    vi.useFakeTimers()
+    const initial: AuthSessionSnapshot = {
+      session_id: 'sess-race',
+      engine: 'antigravity',
+      mode: 'code_paste',
+      status: 'awaiting_user',
+      auth_url: 'https://accounts.google.com/o/oauth2/v2/auth?redirect_uri=http%3A%2F%2Flocalhost%3A43210%2Fcallback',
+      expires_at: '2026-11-26T15:00:00Z',
+    }
+    let resolveStalePoll!: (snapshot: AuthSessionSnapshot) => void
+    mocks.startEngineAuth.mockResolvedValueOnce(initial)
+    mocks.fetchEngineAuthSession
+      .mockImplementationOnce(() => new Promise<AuthSessionSnapshot>((resolve) => {
+        resolveStalePoll = resolve
+      }))
+      .mockResolvedValueOnce({
+        ...initial,
+        status: 'succeeded',
+        engine_state: { ...READY_CODEX, id: 'antigravity', name_key: 'agentRuntime.antigravity' },
+      })
+    mocks.submitEngineAuth.mockResolvedValueOnce({
+      ...initial,
+      status: 'completing',
+    })
+
+    const onAuthenticated = vi.fn()
+    render(
+      <AgentEngineAuthDialog
+        engineId="antigravity"
+        open
+        onOpenChange={vi.fn()}
+        onAuthenticated={onAuthenticated}
+      />,
+    )
+
+    await act(async () => { await Promise.resolve() })
+    // Kick off first poll (remains in-flight while user submits).
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
+    expect(mocks.fetchEngineAuthSession).toHaveBeenCalledTimes(1)
+
+    const input = screen.getByLabelText('授权码或回调链接')
+    fireEvent.change(input, { target: { value: 'valid-code' } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '提交' }))
+      await Promise.resolve()
+    })
+    expect(screen.getByRole('button', { name: '正在完成验证…' })).toBeDisabled()
+
+    // Stale poll from before submit resolves with awaiting_user — must NOT revert button/state.
+    await act(async () => {
+      resolveStalePoll(initial)
+      await Promise.resolve()
+    })
+    expect(screen.getByRole('button', { name: '正在完成验证…' })).toBeDisabled()
+
+    // Next poll succeeds and completes sign-in.
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
+    expect(onAuthenticated).toHaveBeenCalledWith(expect.objectContaining({ id: 'antigravity', status: 'ready' }))
+  })
 })

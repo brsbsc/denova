@@ -93,9 +93,13 @@ func (c *fakeVersionedConn) Close() error {
 
 type fakeCLISource struct {
 	release agentruntime.CLIRelease
+	err     error
 }
 
 func (s fakeCLISource) Resolve(context.Context, *http.Client, string) (agentruntime.CLIRelease, error) {
+	if s.err != nil {
+		return agentruntime.CLIRelease{}, s.err
+	}
 	return s.release, nil
 }
 
@@ -615,5 +619,37 @@ func TestAgentEngineCLIAndAuthEndpointsOverAuthenticatedLAN(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(geminiDir, "oauth_creds.json")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("expected antigravity credential file removed, stat err = %v", statErr)
+	}
+}
+
+func TestAgentEngineCLICheckUpdateSanitizesUpstreamError(t *testing.T) {
+	engines := agentruntime.NewEnginesWithOptions(agentruntime.EnginesOptions{
+		CLIManager: &agentruntime.CLIManagerOptions{
+			Dir:    t.TempDir(),
+			GOOS:   "linux",
+			GOARCH: "amd64",
+			Sources: map[config.RuntimeID]agentruntime.CLISource{
+				config.RuntimeCodex: fakeCLISource{
+					err: errors.New("GET https://internal-mirror.secret.local/token=abc: dial tcp 10.0.0.1:443: i/o timeout"),
+				},
+			},
+			AutoUpdateDelay: time.Hour,
+		},
+		AuthManager: &agentruntime.AuthManagerOptions{Enabled: func() bool { return false }},
+	})
+	srv := startLANTestServer(t, engines)
+
+	code, raw := srv.doLAN(t, http.MethodPost, "/api/agent-runtimes/codex/cli/check-update", "{}", true)
+	obj := decodeErrBody(t, raw)
+	if code != http.StatusServiceUnavailable || obj["code"] != "agentRuntime.connectionFailed" {
+		t.Fatalf("failed check-update = (%d, %v), want 503 agentRuntime.connectionFailed", code, obj)
+	}
+	if bytes.Contains(raw, []byte("internal-mirror.secret.local")) || bytes.Contains(raw, []byte("10.0.0.1")) {
+		t.Fatalf("CLI check-update leaked upstream network detail: %s", string(raw))
+	}
+	if details, ok := obj["details"].(map[string]any); ok {
+		if _, hasRawDetail := details["detail"]; hasRawDetail {
+			t.Fatalf("CLI check-update must not expose raw detail: %s", string(raw))
+		}
 	}
 }

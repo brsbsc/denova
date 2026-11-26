@@ -50,12 +50,12 @@ func (h *Handlers) HandleAgentEngineCLICheckUpdate(ctx context.Context, c *app.R
 	id := config.RuntimeID(c.Param("id"))
 	engines := h.app.AgentEngines()
 	if _, err := engines.Descriptor(id); err != nil {
-		writeEngineError(ctx, c, err)
+		writeEngineCLIError(ctx, c, err)
 		return
 	}
 	result, err := engines.CLI().CheckUpdate(ctx, id)
 	if err != nil {
-		writeEngineError(ctx, c, err)
+		writeEngineCLIError(ctx, c, err)
 		return
 	}
 	writeJSON(c, consts.StatusOK, result)
@@ -70,12 +70,12 @@ func (h *Handlers) HandleAgentEngineCLIInstall(ctx context.Context, c *app.Reque
 	id := config.RuntimeID(c.Param("id"))
 	engines := h.app.AgentEngines()
 	if _, err := engines.Descriptor(id); err != nil {
-		writeEngineError(ctx, c, err)
+		writeEngineCLIError(ctx, c, err)
 		return
 	}
 	result, err := engines.CLI().StartInstall(id)
 	if err != nil {
-		writeEngineError(ctx, c, err)
+		writeEngineCLIError(ctx, c, err)
 		return
 	}
 	writeJSON(c, consts.StatusAccepted, result)
@@ -86,12 +86,12 @@ func (h *Handlers) HandleAgentEngineCLIStatus(ctx context.Context, c *app.Reques
 	engines := h.app.AgentEngines()
 	desc, err := engines.Descriptor(id)
 	if err != nil {
-		writeEngineError(ctx, c, err)
+		writeEngineCLIError(ctx, c, err)
 		return
 	}
 	managed := engines.CLI().Status(id)
 	if managed == nil {
-		writeEngineError(ctx, c, agentruntime.ErrCLIManagementUnsupported)
+		writeEngineCLIError(ctx, c, agentruntime.ErrCLIManagementUnsupported)
 		return
 	}
 	writeJSON(c, consts.StatusOK, map[string]any{
@@ -224,6 +224,24 @@ func writeEngineError(ctx context.Context, c *app.RequestContext, err error) {
 	// Do not log raw authentication errors or URLs, which can contain secrets.
 	slog.WarnContext(ctx, "Agent runtime API operation failed", "runtime", c.Param("id"), "reason", key)
 	writeErrorKey(c, status, key, "detail", err.Error())
+}
+
+func writeEngineCLIError(ctx context.Context, c *app.RequestContext, err error) {
+	status, key := consts.StatusServiceUnavailable, "agentRuntime.connectionFailed"
+	switch {
+	case errors.Is(err, agentruntime.ErrEngineNotFound):
+		status, key = consts.StatusNotFound, "agentRuntime.notFound"
+	case errors.Is(err, conversationconfig.ErrRuntimeCapabilityUnsupported),
+		errors.Is(err, agentruntime.ErrCLIManagementUnsupported):
+		status, key = consts.StatusBadRequest, "agentRuntime.capabilityUnsupported"
+	case errors.Is(err, agentruntime.ErrCLIOperationBusy):
+		status, key = consts.StatusConflict, "agentRuntime.updateBusy"
+	case errors.Is(err, agentruntime.ErrOperationActive):
+		status, key = consts.StatusConflict, "agentRuntime.busy"
+	}
+	// Omit raw upstream network/URL diagnostics from the HTTP response body.
+	slog.WarnContext(ctx, "Agent runtime CLI operation failed", "runtime", c.Param("id"), "reason", key)
+	writeErrorKey(c, status, key)
 }
 
 func writeEngineAuthError(ctx context.Context, c *app.RequestContext, err error) {

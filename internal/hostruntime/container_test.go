@@ -1,6 +1,12 @@
 package hostruntime
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"reflect"
+	"runtime"
+	"testing"
+)
 
 func withHostPlatform(t *testing.T, goos, goarch string) {
 	t.Helper()
@@ -105,6 +111,63 @@ func TestWebAuthEnabled(t *testing.T) {
 			t.Setenv(EnvManagedAgentCLIDir, tc.cliDirEnv)
 			if got := WebAuthEnabled(); got != tc.want {
 				t.Fatalf("WebAuthEnabled() = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestManagedCLICandidatesPrecedence(t *testing.T) {
+	t.Run("linux prepends custom managed dir ahead of PATH", func(t *testing.T) {
+		withHostPlatform(t, "linux", "amd64")
+		t.Setenv(EnvManagedAgentCLIDir, "/data/.local/bin")
+
+		got := managedCLICandidates([]string{EnvManagedAgentCLIDir + "=/opt/custom/bin"}, "codex", "codex")
+		want := []string{"/opt/custom/bin/codex", "codex"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("managedCLICandidates = %v, want %v", got, want)
+		}
+
+		// Falls back to process env when environment slice omits the variable.
+		gotFallback := managedCLICandidates([]string{"PATH=/usr/bin"}, "agy", "agy", "~/.local/bin/agy")
+		wantFallback := []string{"/data/.local/bin/agy", "agy", "~/.local/bin/agy"}
+		if !reflect.DeepEqual(gotFallback, wantFallback) {
+			t.Fatalf("managedCLICandidates fallback = %v, want %v", gotFallback, wantFallback)
+		}
+
+		// Explicit empty override in environment disables prepending.
+		gotDisabled := managedCLICandidates([]string{EnvManagedAgentCLIDir + "="}, "claude", "claude", "~/.local/bin/claude")
+		wantDisabled := []string{"claude", "~/.local/bin/claude"}
+		if !reflect.DeepEqual(gotDisabled, wantDisabled) {
+			t.Fatalf("managedCLICandidates disabled = %v, want %v", gotDisabled, wantDisabled)
+		}
+	})
+
+	t.Run("non-linux never prepends managed dir", func(t *testing.T) {
+		withHostPlatform(t, "windows", "amd64")
+		got := managedCLICandidates([]string{EnvManagedAgentCLIDir + "=/data/.local/bin"}, "codex", "codex")
+		if !reflect.DeepEqual(got, []string{"codex"}) {
+			t.Fatalf("windows managedCLICandidates = %v, want [codex]", got)
+		}
+	})
+
+	if runtime.GOOS == "linux" && (runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64") {
+		t.Run("linux discovers custom non-PATH managed binaries", func(t *testing.T) {
+			managedDir := t.TempDir()
+			for _, name := range []string{"codex", "claude", "agy"} {
+				p := filepath.Join(managedDir, name)
+				if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+					t.Fatalf("write %s: %v", p, err)
+				}
+			}
+			env := []string{"PATH=", EnvManagedAgentCLIDir + "=" + managedDir}
+			if got := DiscoverCodex(env); got != filepath.Join(managedDir, "codex") {
+				t.Fatalf("DiscoverCodex = %q, want %q", got, filepath.Join(managedDir, "codex"))
+			}
+			if got := DiscoverClaude(env); got.Executable != filepath.Join(managedDir, "claude") {
+				t.Fatalf("DiscoverClaude = %q, want %q", got.Executable, filepath.Join(managedDir, "claude"))
+			}
+			if got := DiscoverAntigravity(env); got != filepath.Join(managedDir, "agy") {
+				t.Fatalf("DiscoverAntigravity = %q, want %q", got, filepath.Join(managedDir, "agy"))
 			}
 		})
 	}

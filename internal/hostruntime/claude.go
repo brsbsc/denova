@@ -16,7 +16,7 @@ type ClaudeLaunch struct {
 
 func DiscoverClaude(environment []string) ClaudeLaunch {
 	if runtime.GOOS != "windows" {
-		return ClaudeLaunch{Executable: discoverExecutable(environment, "claude", "~/.local/bin/claude")}
+		return ClaudeLaunch{Executable: discoverExecutable(environment, managedCLICandidates(environment, "claude", "claude", "~/.local/bin/claude")...)}
 	}
 	if native := discoverExecutable(environment, "claude.exe", "~/.local/bin/claude.exe"); native != "" {
 		return ClaudeLaunch{Executable: native}

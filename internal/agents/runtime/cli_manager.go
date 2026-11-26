@@ -74,6 +74,7 @@ type CLIManagerOptions struct {
 type managedCLIEntry struct {
 	status             ManagedCLIStatus
 	busy               bool
+	pendingReloadSeq   uint64
 	lastChecked        time.Time
 	lastCheckFailedAt  time.Time
 	lastInstallAttempt time.Time
@@ -207,7 +208,7 @@ func NewCLIManager(options CLIManagerOptions) *CLIManager {
 }
 
 func isManagedDirValid(dir, goos string) bool {
-	if dir == "" {
+	if dir == "" || strings.ContainsRune(dir, 0) {
 		return false
 	}
 	if filepath.IsAbs(dir) {
@@ -313,6 +314,7 @@ func (m *CLIManager) SetPendingReload(id config.RuntimeID, pending bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if entry := m.entries[id]; entry != nil {
+		entry.pendingReloadSeq++
 		entry.status.PendingReload = pending
 	}
 }
@@ -481,7 +483,13 @@ func (m *CLIManager) runInstall(ctx context.Context, id config.RuntimeID, isAuto
 		pendingReload    bool
 		installedVersion = verifiedVersion
 		reloadErr        error
+		seqBeforeReload  uint64
 	)
+	m.mu.Lock()
+	if entry := m.entries[id]; entry != nil {
+		seqBeforeReload = entry.pendingReloadSeq
+	}
+	m.mu.Unlock()
 	if m.onReload != nil {
 		var reloadedVersion string
 		pendingReload, reloadedVersion, reloadErr = m.onReload(ctx, id)
@@ -502,7 +510,13 @@ func (m *CLIManager) runInstall(ctx context.Context, id config.RuntimeID, isAuto
 		entry.busy = false
 		entry.status.Installed = true
 		entry.status.InstalledVersion = installedVersion
-		entry.status.PendingReload = pendingReload
+		// Preserve concurrent SetPendingReload transitions (e.g., an active
+		// lease releasing and flushing pending reload right after onReload).
+		if entry.pendingReloadSeq == seqBeforeReload {
+			entry.status.PendingReload = pendingReload
+		} else {
+			pendingReload = entry.status.PendingReload
+		}
 		entry.status.BytesDownloaded = 0
 		entry.status.TotalBytes = 0
 		entry.status.UpdateAvailable = computeUpdateAvailable(true, installedVersion, entry.status.LatestVersion)

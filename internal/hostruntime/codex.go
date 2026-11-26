@@ -28,7 +28,7 @@ func CodexHome(environment []string) (string, error) {
 // installed optional binary package instead. No discovery starts a process.
 func DiscoverCodex(environment []string) string {
 	if runtime.GOOS != "windows" {
-		return discoverExecutable(environment, "codex")
+		return discoverExecutable(environment, managedCLICandidates(environment, "codex", "codex")...)
 	}
 	if native := discoverExecutable(environment, "codex.exe"); native != "" {
 		return native

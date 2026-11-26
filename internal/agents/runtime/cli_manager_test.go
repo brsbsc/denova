@@ -958,6 +958,64 @@ func TestCLIInstallProgressBusyLockAndPendingReload(t *testing.T) {
 	}
 }
 
+func TestCLIPendingReloadNotOverwrittenByConcurrentLeaseRelease(t *testing.T) {
+	dir := t.TempDir()
+	payload := []byte("CLAUDE-CONCURRENT-RELOAD-2.1.335")
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/latest":
+			_, _ = w.Write([]byte("2.1.335"))
+		case "/2.1.335/manifest.json":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"version": "2.1.335",
+				"platforms": map[string]any{
+					"linux-x64": map[string]any{
+						"checksum": sha256Hex(payload),
+						"size":     len(payload),
+					},
+				},
+			})
+		case "/2.1.335/linux-x64/claude":
+			_, _ = w.Write(payload)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	var mgr *CLIManager
+	mgr = NewCLIManager(CLIManagerOptions{
+		Dir:            dir,
+		GOOS:           "linux",
+		GOARCH:         "amd64",
+		HTTPClient:     srv.Client(),
+		SourceBaseURLs: map[config.RuntimeID]string{config.RuntimeClaude: srv.URL},
+		VerifyBinary: func(_ context.Context, _ config.RuntimeID, _ string) (string, error) {
+			return "2.1.335", nil
+		},
+		OnReload: func(_ context.Context, id config.RuntimeID) (bool, string, error) {
+			// Simulate an active lease releasing and clearing pending reload
+			// before runInstall reacquires mgr.mu to persist the callback result.
+			mgr.SetPendingReload(id, false)
+			return true, "2.1.335", nil
+		},
+	})
+	defer mgr.Close()
+
+	if _, err := mgr.StartInstall(config.RuntimeClaude); err != nil {
+		t.Fatalf("StartInstall: %v", err)
+	}
+	done := waitForCLIStatus(t, mgr, config.RuntimeClaude, func(s ManagedCLIStatus) bool {
+		return s.State == "idle" || s.State == "error"
+	})
+	if done.State != "idle" || done.InstalledVersion != "2.1.335" {
+		t.Fatalf("unexpected status: %+v", done)
+	}
+	if done.PendingReload {
+		t.Fatalf("stale onReload result overwrote concurrent SetPendingReload(false): %+v", done)
+	}
+}
+
 func TestCLICloseCancelsActiveDownloadAndRecoversPanic(t *testing.T) {
 	t.Run("Close cancels in-flight install and cleans temp files", func(t *testing.T) {
 		dir := t.TempDir()

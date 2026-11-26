@@ -74,6 +74,7 @@ export function AgentEngineAuthDialog({ engineId, open, onOpenChange, onAuthenti
     setSubmitError('')
     setCopyError('')
     setCodeInput('')
+    setSubmitting(false)
     setStarting(true)
     try {
       const next = await startEngineAuth(
@@ -146,13 +147,16 @@ export function AgentEngineAuthDialog({ engineId, open, onOpenChange, onAuthenti
     const poll = async () => {
       try {
         const next = await fetchEngineAuthSession(engineId, activeSessionID)
-        if (!active || !openRef.current) return
+        if (!active || !openRef.current || sessionRef.current?.session_id !== activeSessionID) return
         if (!next || typeof next.status !== 'string') {
           throw new Error('invalid auth session snapshot')
         }
         consecutiveFailures = 0
-        sessionRef.current = next
-        setSession(next)
+        const currentStatus = sessionRef.current?.status
+        if (!(currentStatus === 'completing' && (next.status === 'awaiting_user' || next.status === 'starting'))) {
+          sessionRef.current = next
+          setSession(next)
+        }
         if (next.status === 'succeeded') {
           void completeSession(next)
           return
@@ -210,11 +214,13 @@ export function AgentEngineAuthDialog({ engineId, open, onOpenChange, onAuthenti
   const handleSubmit = async () => {
     const trimmed = codeInput.trim()
     if (!trimmed || !session || submitting) return
+    const attempt = attemptRef.current
+    const targetSessionId = session.session_id
     setSubmitting(true)
     setSubmitError('')
     try {
-      const next = await submitEngineAuth(engineId, session.session_id, trimmed)
-      if (!openRef.current) return
+      const next = await submitEngineAuth(engineId, targetSessionId, trimmed)
+      if (!openRef.current || attempt !== attemptRef.current || sessionRef.current?.session_id !== targetSessionId) return
       sessionRef.current = next
       setSession(next)
       if (next.status === 'succeeded') {
@@ -223,7 +229,7 @@ export function AgentEngineAuthDialog({ engineId, open, onOpenChange, onAuthenti
         setError(resolveSnapshotFailure(next))
       }
     } catch (cause) {
-      if (!openRef.current) return
+      if (!openRef.current || attempt !== attemptRef.current || sessionRef.current?.session_id !== targetSessionId) return
       console.warn('[agent-runtime] failed to submit auth input', { engine: engineId, cause })
       if (cause instanceof APIError && cause.status === 404) {
         sessionRef.current = null
@@ -233,7 +239,9 @@ export function AgentEngineAuthDialog({ engineId, open, onOpenChange, onAuthenti
         setSubmitError(resolveErrorMessage(cause, t, i18n, 'agentRuntime.auth.invalidInput'))
       }
     } finally {
-      setSubmitting(false)
+      if (attempt === attemptRef.current) {
+        setSubmitting(false)
+      }
     }
   }
 

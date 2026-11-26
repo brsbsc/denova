@@ -69,3 +69,28 @@ func ManagedAgentCLIsEnabled() bool {
 func WebAuthEnabled() bool {
 	return ManagedAgentCLIsEnabled() || ContainerSandboxEnabled()
 }
+
+// managedCLICandidates prepends the managed Linux CLI binary path when
+// DENOVA_MANAGED_CLI_DIR is active so custom non-PATH managed directories take
+// precedence over ambient host binaries.
+func managedCLICandidates(environment []string, binaryName string, fallback ...string) []string {
+	candidates := make([]string, 0, len(fallback)+1)
+	raw, ok := lookupEnvironmentValue(environment, EnvManagedAgentCLIDir)
+	if !ok {
+		raw = os.Getenv(EnvManagedAgentCLIDir)
+	}
+	if dir := managedAgentCLIDir(hostGOOS(), hostGOARCH(), raw); dir != "" {
+		candidates = append(candidates, path.Join(dir, binaryName))
+	}
+	return append(candidates, fallback...)
+}
+
+func lookupEnvironmentValue(environment []string, name string) (string, bool) {
+	for index := len(environment) - 1; index >= 0; index-- {
+		key, value, ok := strings.Cut(environment[index], "=")
+		if ok && strings.EqualFold(key, name) {
+			return value, true
+		}
+	}
+	return "", false
+}
