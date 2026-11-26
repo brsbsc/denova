@@ -4,11 +4,46 @@ Denova 仅在此记录用户可感知的重大功能、重要不兼容或数据�
 
 Denova records only major user-visible features, important compatibility or data changes, security updates, and fixes affecting core workflows. Internal refactors, test changes, copy edits, and minor UI polish are omitted; see the [Git history](https://github.com/alfredxw/denova/commits/master) for full details.
 
-`Unreleased` 以最近一个已发布版本（当前为 v0.8.0fix1）为比较基线，只描述升级用户最终可感知的净变化；内部接口、实现重构和 v0.5.1 后从未发布的中间格式不计入。
+`Unreleased` 以最近一个已发布版本（当前为 v0.8.0fix2）为比较基线，只描述升级用户最终可感知的净变化；内部接口、实现重构和 v0.5.1 后从未发布的中间格式不计入。
 
-`Unreleased` compares against the latest release (currently v0.8.0fix1) and describes only the final user-visible delta. Internal APIs, implementation refactors, and intermediate formats never released after v0.5.1 are excluded.
+`Unreleased` compares against the latest release (currently v0.8.0fix2) and describes only the final user-visible delta. Internal APIs, implementation refactors, and intermediate formats never released after v0.5.1 are excluded.
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)。
+
+## [v0.8.0fix2] - 2026-11-27
+
+### Brief / 简要说明
+
+#### 中文
+
+- 容器镜像新增外部 Agent CLI（Antigravity CLI、Claude Code、Codex）按需安装/更新、统一网页 OAuth 登录/退出、已安装 CLI 定时自动更新与非特权容器沙箱适配，并新增内置终端 `agy` 预设。
+- 全面加固 Agent 运行时恢复、工作区与版本恢复、聊天流滚动定位与并发安全，修复 Linux 下超长可移植文件名原子写触发 `file name too long` 的问题。
+- 本 fork 工作流与文档收敛为纯 Linux / Docker 多架构（`linux/amd64`、`linux/arm64`）镜像发布模式。
+
+#### English
+
+- Adds on-demand managed installation and updates, unified web OAuth sign-in/sign-out, optional background auto-updates for installed CLIs, and unprivileged container sandbox adaptation for Antigravity CLI (`agy`), Claude Code (`claude`), and Codex (`codex`), plus an `agy` terminal command preset.
+- Hardens agent runtime recovery, workspace storage and version restore, chat streaming scroll stability, and caps atomic replacement temp filenames within Linux's 255-byte `NAME_MAX`.
+- Focuses fork CI and release workflows strictly on Linux and multi-arch Docker (`linux/amd64`, `linux/arm64`) publishing to GHCR.
+
+### Added / 新增
+
+- Docker 镜像默认开启非特权容器沙箱适配（`DENOVA_CONTAINER_SANDBOX=1`）与持久化托管 CLI 目录（`/data/.local/bin`），可在 **设置 → Agents → 运行时** 中按需校验安装/更新 Antigravity CLI、Claude Code 与 Codex，并通过统一网页 OAuth 登录与退出（凭据持久保存在 `/data` 下）。
+- Enables unprivileged container sandbox adaptation (`DENOVA_CONTAINER_SANDBOX=1`) and managed CLI persistence (`/data/.local/bin`) in Docker images, letting users install/update verified Antigravity CLI, Claude Code, and Codex binaries on demand and sign in/out via unified web OAuth from **Settings → Agents → Runtime** with credentials persisted under `/data`.
+- 新增已安装托管 CLI 的 24 小时后台自动更新开关（**设置 → 更新**），并在内置终端命令预设中新增 `agy`（Antigravity CLI）。
+- Adds a 24-hour background auto-update toggle for already-installed managed CLIs (**Settings → Updates**) and an `agy` (Antigravity CLI) preset in built-in terminal commands.
+
+### Fixed / 修复
+
+- 修复原子文件替换在 Linux 下对接近 240 字节的 UTF-8 可移植文件名附加临时后缀后超过 255 字节上限的问题。
+- Caps atomic file replacement temporary filename prefixes so maximum-length 240-byte UTF-8 portable filenames do not exceed Linux's 255-byte `NAME_MAX`.
+- 加固 Agent 运行时恢复与协议流、工作区文件与版本恢复、扩展重装边界，以及聊天流式输出与上拉加载时的滚动定位稳定性。
+- Hardens agent runtime recovery and protocol streams, workspace storage and version restore, extension reinstall boundaries, and chat streaming/prepend scroll stability.
+
+### Changed / 变更
+
+- 本 fork 的 CI 与发布工作流收敛为纯 Linux / Docker 多架构镜像流程，仅向 GHCR 发布 `linux/amd64` 与 `linux/arm64` 镜像，不再构建桌面端或创建 GitHub Releases。
+- Streamlines fork CI and release workflows to Linux-only checks and multi-arch (`linux/amd64`, `linux/arm64`) GHCR Docker image publishing without desktop builds or GitHub Releases.
 
 ## [v0.8.0fix1] - 2026-11-25
 
