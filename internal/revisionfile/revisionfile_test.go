@@ -7,8 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestReplaceIfRevisionAllowsOnlyOneConcurrentWriter(t *testing.T) {
@@ -102,5 +104,30 @@ func TestReplaceIfRevisionAtomicallyReplacesAndPreservesMode(t *testing.T) {
 	}
 	if len(temps) != 0 {
 		t.Fatalf("temporary files leaked: %v", temps)
+	}
+}
+
+func TestReplaceIfRevisionHandlesMaxPortableFilenameBytes(t *testing.T) {
+	dir := t.TempDir()
+	// 79 3-byte runes (237 bytes) + ".md" (3 bytes) = 240 bytes (portablepath.MaxComponentBytes).
+	name := strings.Repeat("长", 79) + ".md"
+	pattern := tempPatternFor(name)
+	if !utf8.ValidString(pattern) {
+		t.Fatalf("temp pattern is not valid UTF-8: %q", pattern)
+	}
+	// os.CreateTemp replaces "*" with up to 10 decimal digits.
+	if maxLen := len(pattern) - 1 + 10; maxLen > 255 {
+		t.Fatalf("temp filename max length = %d, want <= 255 (%q)", maxLen, pattern)
+	}
+	path := filepath.Join(dir, name)
+	if _, err := ReplaceIfRevision(context.Background(), path, MissingRevision, []byte("hello"), Options{FileMode: 0o644, DirectoryMode: 0o755}); err != nil {
+		t.Fatalf("ReplaceIfRevision(%q) failed: %v", name, err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "hello" {
+		t.Fatalf("content = %q, want hello", got)
 	}
 }
