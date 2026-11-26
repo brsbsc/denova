@@ -15,9 +15,9 @@
 ## 发布与失败处理
 
 - 下载上游 Release 的全部附件，校验 `checksums.txt` 覆盖的所有 Denova 安装包；Linux 两种架构缺失、校验失败或归档路径不安全时停止。
-- 使用已发布的 Linux 安装包构建镜像，保留前端、Skills、updater 和许可证，不重新编译应用源码。容器额外安装 Bash、Git、curl、Python、ripgrep；其他语言工具链及外部 Agent CLI 需按需扩展镜像。
+- 使用已发布的 Linux 安装包构建镜像，保留前端、Skills、updater 和许可证，不重新编译应用源码。容器额外安装 Bash、Git、curl、Python、ripgrep；镜像保持轻量，不预装外部 Agent CLI（Antigravity CLI、Claude Code、Codex），可在运行后于网页设置中按需安装到数据卷；其他语言工具链可按需扩展镜像。
 - 应用源码修复必须先进入镜像所使用的 Linux 安装包。只推送本 fork 的应用源码补丁或对原版本执行 `force` 重建，不会将补丁编译进镜像；应同步包含修复的上游 Release，或另行构建并验证包含补丁的安装包与镜像。
-- 分别构建和测试两种架构：版本号、HTTP 页面、未登录访问拒绝、登录、设置读取，以及重启后的配置与登录会话保留。测试通过后推送版本镜像。
+- 分别构建和测试两种架构：版本号、HTTP 页面、未登录访问拒绝、登录、设置读取、外部 Agent 运行时托管与网页 OAuth 能力及 `/data/.local/bin` 权限，以及重启后的配置与登录会话保留。测试通过后推送版本镜像。
 - fork Release 的标题保留上游版本号，tag 使用 `upstream-v版本号` 并指向本次工作流提交；镜像标签仍为 `v版本号`。这避免导入上游工作流所需的额外权限，也避免触发现有 `v*` 源码发布流程。Release 自动附带的 Source code 压缩包对应 fork 的构建配置，原始应用源码请查看说明中的上游链接。不会覆盖没有本流程来源标记的已有 Release。
 - 同步不移动 `latest` 镜像标签，也不把同步的 Release 标为 Latest：两者属于本 fork 的源码修复版，上游构建不含这些修复。最后发布 Release 并写入完成标记；失败不会写入成功标记，后续定时任务可重试。首次失败可能留下 draft Release 或已推送的版本镜像。
 - 镜像与 Release 属于不同服务，无法进行跨服务原子提交；若最终发布 Release 失败，版本镜像可能已经推送，重试会补齐 Release。
@@ -44,7 +44,9 @@ docker compose --env-file docker/.env -f docker/compose.yml up -d
 
 打开 `http://localhost:8080`，使用上述账号登录。Compose 默认只发布宿主机回环地址；需要局域网访问时，将端口映射改为 `8080:8080`，需要互联网访问时配合 HTTPS 反向代理。
 
-容器启动时先准备数据卷权限，再以 UID/GID `10001:10001` 运行应用。命名卷 `denova-data` 保存 `/data`，其中 `/data/.denova` 是应用数据、`/data/log` 是日志。初始化会调整这两个目录内文件的属主，保留文件内容和原有权限位，并且不会递归修改 `/data` 下其他目录或跟随符号链接。`DENOVA_DIR` 必须位于 `/data` 内。手动绑定宿主目录时，需要允许初始化修改文件属主；只读挂载或限制 chown 的 NFS/NAS 文件系统需要在宿主机预先设置该 UID 的读写权限，再通过 Compose `user: "10001:10001"` 跳过权限初始化。外部 Project 如需使用，应另外挂载其目录；命名卷不包含未挂载的宿主文件。
+容器启动时先准备数据卷权限，再以 UID/GID `10001:10001` 运行应用。命名卷 `denova-data` 保存 `/data`，其中 `/data/.denova` 是应用数据、`/data/log` 是日志、`/data/.local/bin` 保存按需安装的外部 Agent CLI 二进制，`/data/.gemini`、`/data/.claude`、`/data/.codex`（及已存在时的 `/data/.local/share/keyrings`）保存对应 CLI 凭据。初始化会拒绝上述受管路径为符号链接，确保 `/data/.local/bin` 存在，并仅调整受管目录内文件的属主，保留文件内容和原有权限位，不会递归修改 `/data` 下其他用户目录或跟随符号链接。`DENOVA_DIR` 必须位于 `/data` 内。手动绑定宿主目录时，需要允许初始化修改文件属主；只读挂载或限制 chown 的 NFS/NAS 文件系统需要在宿主机预先设置该 UID 的读写权限，再通过 Compose `user: "10001:10001"` 跳过权限初始化。外部 Project 如需使用，应另外挂载其目录；命名卷不包含未挂载的宿主文件。
+
+镜像默认开启容器沙箱适配（`DENOVA_CONTAINER_SANDBOX=1`）与托管 CLI 目录（`DENOVA_MANAGED_CLI_DIR=/data/.local/bin`），在标准 `docker compose up`（非特权 UID `10001` 与默认 seccomp）下即可运行 Antigravity CLI（`agy`）、Claude Code（`claude`）和 Codex（`codex`），无需 `--privileged`。如需使用外部引擎，可在 **设置 → Agents → 运行时** 中按需从官方源校验下载安装到 `/data/.local/bin`、检查更新或一键更新，并直接通过网页 OAuth 完成登录与退出登录（凭据保存在 `/data` 下，重建容器不丢失），也可在内置终端中使用 `codex`、`claude`、`agy` 快捷预设。后台自动更新仅覆盖已安装的托管 CLI，可在 **设置 → 更新** 中开关；容器已禁用各 CLI 自身后台自更新（`AGY_CLI_DISABLE_AUTO_UPDATE=true`、`DISABLE_AUTOUPDATER=1`），避免与 Denova 托管更新器冲突。
 
 首次启动仅在数据目录没有 `config.toml` 时写入网络监听设置和 bcrypt 密码摘要；已有配置不会被覆盖。账号环境变量只用于首次初始化，之后更改密码应使用应用设置。导入旧数据时，需要确保其用户配置已启用 `allow_lan_access`，并设置 `remote_access_username` 与 `remote_access_password_hash`。不要在容器设置中关闭局域网访问，否则容器端口不可达。
 

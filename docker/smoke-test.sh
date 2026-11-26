@@ -25,7 +25,7 @@ volume="$(docker volume create)"
 # Reproduce a reused/externally created volume inaccessible to UID 10001.
 docker run --rm --platform "${platform}" --user 0:0 \
   --entrypoint /bin/sh --volume "${volume}:/data" "${image}" -c \
-  'mkdir -p /data/.denova; chown 0:0 /data/.denova; chmod 0700 /data/.denova'
+  'mkdir -p /data/.denova /data/.local/bin /data/.gemini; chown -R 0:0 /data/.denova /data/.local /data/.gemini; chmod 0700 /data/.denova /data/.local/bin /data/.gemini'
 container="$(docker run --detach --platform "${platform}" \
   --publish 127.0.0.1::8080 \
   --volume "${volume}:/data" \
@@ -58,6 +58,24 @@ curl --fail --silent --cookie-jar "${scratch}/cookies" \
   "${base_url}/api/auth/login" > "${scratch}/login.json"
 python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["authenticated"]' "${scratch}/login.json"
 curl --fail --silent --cookie "${scratch}/cookies" "${base_url}/api/settings" > /dev/null
+curl --fail --silent --cookie "${scratch}/cookies" "${base_url}/api/agent-runtimes" > "${scratch}/runtimes.json"
+python3 -c '
+import json, sys
+items = {item["id"]: item for item in json.load(open(sys.argv[1]))["items"]}
+for engine_id in ("antigravity", "claude", "codex"):
+    item = items.get(engine_id)
+    assert item is not None, (engine_id, items)
+    assert item.get("auth_supported") is True, (engine_id, item)
+    managed = item.get("managed") or {}
+    assert managed.get("managed") is True, (engine_id, item)
+' "${scratch}/runtimes.json"
+docker exec --user 10001:10001 "${container}" sh -c '
+  test -d /data/.local/bin &&
+  test -w /data/.local/bin &&
+  test "$(stat -c %u:%g /data/.local/bin)" = "10001:10001" &&
+  test -w /data/.gemini &&
+  test "$(stat -c %u:%g /data/.gemini)" = "10001:10001"
+'
 before="$(docker exec "${container}" sha256sum /data/.denova/config.toml)"
 # Preserve the actual password hash and session data while reproducing the
 # reported read failure on an existing private configuration.

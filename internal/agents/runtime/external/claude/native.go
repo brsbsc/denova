@@ -10,10 +10,15 @@ import (
 
 	"denova/config"
 	"denova/internal/agents/runtime/external"
+	"denova/internal/hostruntime"
 	interaction "github.com/alfredxw/denova/agent/lifecycle/interaction"
 )
 
 func nativeArguments(input external.Input) ([]string, []string) {
+	return nativeArgumentsForHost(input, runtime.GOOS, hostruntime.ContainerSandboxEnabled())
+}
+
+func nativeArgumentsForHost(input external.Input, goos string, containerSandbox bool) ([]string, []string) {
 	if input.Mode != external.OperationTurn {
 		return streamArguments(""), nil
 	}
@@ -22,8 +27,10 @@ func nativeArguments(input external.Input) ([]string, []string) {
 	if input.AgentKind != config.AgentKindInteractiveStory {
 		names = append(names, "AskUserQuestion")
 		// Native Bash is admitted only with an enforced OS sandbox. Native
-		// Windows has no supported sandbox; WSL uses the Linux build/launcher.
-		if runtime.GOOS != "windows" {
+		// Windows has no supported sandbox (WSL uses the Linux build/launcher),
+		// and standard Linux containers block nested userns/bubblewrap under
+		// default seccomp.
+		if goos != "windows" && !containerSandbox {
 			names = append(names, "Bash")
 			protected := []string{}
 			for _, path := range []string{input.Workspace, input.StoreRoot, input.DataRoot} {

@@ -37,6 +37,26 @@ const catalogTimeout = 40 * time.Second
 var ErrVersionUnsupported = errors.New("unsupported Antigravity CLI version")
 var errAuthenticationRequired = errors.New("Antigravity authentication required")
 
+var containerSandboxEnabled = hostruntime.ContainerSandboxEnabled
+
+func validateMinimumVersion(raw string) (*semver.Version, error) {
+	return validateMinimumVersionFor(raw, runtime.GOOS, containerSandboxEnabled())
+}
+
+func validateMinimumVersionFor(raw, goos string, containerSandbox bool) (*semver.Version, error) {
+	version, err := semver.StrictNewVersion(strings.TrimSpace(raw))
+	if err != nil || version.LessThan(semver.MustParse(MinimumVersion)) {
+		return nil, ErrVersionUnsupported
+	}
+	// Windows requires CLI >= 1.4.4 for AppContainer terminal sandboxing;
+	// Linux container mode requires CLI >= 1.4.4 so --sandbox degrades safely
+	// when default container seccomp blocks unprivileged user namespaces.
+	if (goos == "windows" || containerSandbox) && version.LessThan(semver.MustParse(MinimumWindowsVersion)) {
+		return nil, ErrVersionUnsupported
+	}
+	return version, nil
+}
+
 // ProcessOptions identifies an already discovered host-local CLI invocation.
 type ProcessOptions struct {
 	Executable string
@@ -65,12 +85,9 @@ func Connect(ctx context.Context, options ProcessOptions) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read Antigravity CLI version: %w", err)
 	}
-	version, err := semver.StrictNewVersion(strings.TrimSpace(string(body)))
-	if err != nil || version.LessThan(semver.MustParse(MinimumVersion)) {
-		return nil, ErrVersionUnsupported
-	}
-	if runtime.GOOS == "windows" && version.LessThan(semver.MustParse(MinimumWindowsVersion)) {
-		return nil, ErrVersionUnsupported
+	version, err := validateMinimumVersion(string(body))
+	if err != nil {
+		return nil, err
 	}
 	helpCmd := c.command(ctx, "--help")
 	helpCmd.Stderr = nil

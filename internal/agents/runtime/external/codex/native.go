@@ -8,12 +8,23 @@ import (
 
 	"denova/config"
 	"denova/internal/agents/runtime/external"
+	"denova/internal/hostruntime"
 	interaction "github.com/alfredxw/denova/agent/lifecycle/interaction"
 )
 
 func (c *Client) nativeConfig(ctx context.Context, input external.Input) (map[string]any, error) {
+	return c.nativeConfigForContainer(ctx, input, hostruntime.ContainerSandboxEnabled())
+}
+
+func (c *Client) nativeConfigForContainer(ctx context.Context, input external.Input, containerSandbox bool) (map[string]any, error) {
 	settings := map[string]any{"features.default_mode_request_user_input": input.Interactive()}
 	if input.Mode == external.OperationTurn && input.AgentKind != config.AgentKindInteractiveStory {
+		if containerSandbox {
+			// Standard Linux containers block bubblewrap/CLONE_NEWUSER under
+			// default seccomp, so disable Codex's native shell tool while
+			// preserving Denova MCP tools, web search, and read-only sandbox.
+			settings["features.shell_tool"] = false
+		}
 		return settings, nil
 	}
 	// Noninteractive product turns cannot approve ambient integrations. Disable

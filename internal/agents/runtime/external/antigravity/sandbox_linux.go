@@ -8,9 +8,17 @@ import (
 	"os/exec"
 	"strings"
 	"syscall"
+
+	"denova/internal/hostruntime"
 )
 
 func detectOSSandbox() error {
+	// Default Docker seccomp blocks CLONE_NEWUSER. Antigravity CLI >= 1.4.4
+	// safely degrades --sandbox in Linux containers without userns while keeping
+	// request-review and explicit deny rules enforced.
+	if hostruntime.ContainerSandboxEnabled() {
+		return nil
+	}
 	if raw, err := os.ReadFile("/proc/sys/kernel/unprivileged_userns_clone"); err == nil {
 		if strings.TrimSpace(string(raw)) == "0" {
 			return errors.New("Linux unprivileged user namespaces are disabled (unprivileged_userns_clone=0)")
