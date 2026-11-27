@@ -236,6 +236,9 @@ test('Docker-managed CLI install/update and browser OAuth flows render cleanly a
   // Switch to Claude Code: verify update button + pending reload + Claude OAuth dialog across light & narrow viewports.
   const engineSelect = page.getByRole('combobox', { name: '执行引擎', exact: true })
   await engineSelect.click()
+  const claudeSettingsSaved = page.waitForResponse(
+    (res) => /\/api\/(?:projects\/[^/]+\/)?settings$/.test(new URL(res.url()).pathname) && res.request().method() === 'PATCH',
+  )
   await page.getByRole('option', { name: 'Claude Code', exact: true }).click()
   await expect(runtime.getByRole('button', { name: '更新至 v2.1.332', exact: true })).toBeVisible()
   await expect(runtime.getByText('新版本已安装，当前回合结束后自动生效。', { exact: true })).toBeVisible()
@@ -252,6 +255,10 @@ test('Docker-managed CLI install/update and browser OAuth flows render cleanly a
   await page.screenshot({ path: testInfo.outputPath('claude-auth-dialog-dark-narrow.png'), animations: 'disabled' })
   await dialog.getByRole('button', { name: '取消', exact: true }).click()
   await expect(dialog).toBeHidden()
+
+  // Wait for the debounced Claude Code engine autosave to commit before issuing
+  // an out-of-band PATCH /api/settings, avoiding a 409 revision conflict race.
+  expect((await claudeSettingsSaved).ok()).toBe(true)
 
   // Switch theme to light and verify Antigravity runtime controls + sign-out in both wide and narrow viewports.
   const latest = await (await request.get('/api/settings')).json()

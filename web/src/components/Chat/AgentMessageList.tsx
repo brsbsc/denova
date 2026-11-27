@@ -194,7 +194,9 @@ function MessageListContent({ projectId, attachmentScope, messages, projection, 
   const hasFinalResponse = replyViews.some(view => view.kind === 'assistant' &&
     !view.metadata.subagent && (!activeRunId || view.metadata.run_id === activeRunId) &&
     view.metadata.display_phase === 'final' && agentViewContent(view).trim())
-  const visibleActivityContent = hasActiveResponse
+  // Drop transient activity status rows whenever a persistently mounted surface
+  // hides so RetainedVirtuoso never freezes stale aria-live/status text in DOM.
+  const visibleActivityContent = !visible || hasActiveResponse
     ? ''
     : activityContent || (isStreaming && !hasFinalResponse ? t('chat.activity.thinking') : '')
   const listItems = useMemo(
