@@ -4,11 +4,28 @@ Denova 仅在此记录用户可感知的重大功能、重要不兼容或数据�
 
 Denova records only major user-visible features, important compatibility or data changes, security updates, and fixes affecting core workflows. Internal refactors, test changes, copy edits, and minor UI polish are omitted; see the [Git history](https://github.com/alfredxw/denova/commits/master) for full details.
 
-`Unreleased` 以最近一个已发布版本（当前为 v0.8.0fix3）为比较基线，只描述升级用户最终可感知的净变化；内部接口、实现重构和 v0.5.1 后从未发布的中间格式不计入。
+`Unreleased` 以最近一个已发布版本（当前为 v0.8.0fix4）为比较基线，只描述升级用户最终可感知的净变化；内部接口、实现重构和 v0.5.1 后从未发布的中间格式不计入。
 
-`Unreleased` compares against the latest release (currently v0.8.0fix3) and describes only the final user-visible delta. Internal APIs, implementation refactors, and intermediate formats never released after v0.5.1 are excluded.
+`Unreleased` compares against the latest release (currently v0.8.0fix4) and describes only the final user-visible delta. Internal APIs, implementation refactors, and intermediate formats never released after v0.5.1 are excluded.
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)。
+
+## [v0.8.0fix4] - 2026-11-27
+
+### Brief / 简要说明
+
+#### 中文
+
+- 修复 Antigravity CLI（`agy`）在同一会话后续轮次恢复时丢失 Denova MCP 工作区工具（报错 `unknown tool: "call_mcp_tool"`）的问题，并支持旧会话与端口冲突时自动从会话记录无缝重建。
+
+#### English
+
+- Fixes Antigravity CLI (`agy`) losing Denova MCP workspace tools (`unknown tool: "call_mcp_tool"`) on resumed conversation turns, with automatic canonical-history session rebuilds for legacy caches or occupied ports.
+
+### Fixed / 修复
+
+- 修复 Antigravity CLI 外部运行时在 `--conversation` 恢复已有会话时因重连首轮已关闭的随机本地端口而丢失全部 Denova MCP 工具的问题：按会话持久化重绑本地 MCP 桥接端点与令牌，并在旧版缓存缺失或端口占用时自动通过规范会话日志透明重建会话。
+- Fixes Antigravity CLI external runtime losing all Denova MCP tools on `--conversation` resumption when reconnecting to the closed first-turn ephemeral port: persists and rebinds the session-scoped loopback MCP bridge endpoint and token across turns and restarts, and transparently rebuilds from canonical history when legacy metadata is missing or the port is occupied.
 
 ## [v0.8.0fix3] - 2026-11-27
 

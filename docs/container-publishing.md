@@ -60,7 +60,7 @@ docker compose --env-file docker/.env -f docker/compose.yml up -d
 
 `Release` 工作流按 `v*` 标签构建当前标签源码，不使用上游安装包。先验证相同提交的完整 Linux CI，再仅生成 `linux-amd64` 与 `linux-arm64` 安装包用于容器打包，完成双架构镜像构建与冒烟测试后推送版本标签和 `latest`（不再构建 Windows/macOS 安装包或桌面端）。镜像的 revision 标签记录实际源码提交。
 
-`v0.8.0fix3` 对应镜像为 `ghcr.io/brsbsc/denova:v0.8.0fix3`。在 `docker/.env` 中将 `DENOVA_IMAGE_TAG` 设置为 `v0.8.0fix3`，再执行上文更新命令。`latest` 始终指向最近一次源码发布，不受上游同步影响；需要运行未修改的上游构建时，将 `DENOVA_IMAGE_TAG` 设为上游版本号（例如 `v0.5.1`）。本 fork 自己发布过的版本号（例如 `v0.8.0`）始终是本 fork 的源码构建，上游同步会跳过同名版本。
+`v0.8.0fix4` 对应镜像为 `ghcr.io/brsbsc/denova:v0.8.0fix4`。在 `docker/.env` 中将 `DENOVA_IMAGE_TAG` 设置为 `v0.8.0fix4`，再执行上文更新命令。`latest` 始终指向最近一次源码发布，不受上游同步影响；需要运行未修改的上游构建时，将 `DENOVA_IMAGE_TAG` 设为上游版本号（例如 `v0.5.1`）。本 fork 自己发布过的版本号（例如 `v0.8.0`）始终是本 fork 的源码构建，上游同步会跳过同名版本。
 
 上游同步仍只处理上游正式版；后续发现新上游版本时，会继续发布其版本镜像，但不改变 `latest`，也不创建 GitHub Releases。
 

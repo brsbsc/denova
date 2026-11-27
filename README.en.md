@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  Current image baseline: <strong>v0.8.0fix3</strong> · Docker only · <a href="https://github.com/brsbsc/denova/pkgs/container/denova">View GHCR Package</a>
+  Current image baseline: <strong>v0.8.0fix4</strong> · Docker only · <a href="https://github.com/brsbsc/denova/pkgs/container/denova">View GHCR Package</a>
 </p>
 
 > [!NOTE]
@@ -56,7 +56,7 @@ Supports LAN/remote access, responsive mobile layouts, and PWA home-screen insta
 
 ## Docker Edition Highlights
 
-- **Multi-arch GHCR images**: `ghcr.io/brsbsc/denova:latest` (and pinned version tags such as `v0.8.0fix3`) built for `linux/amd64` and `linux/arm64`.
+- **Multi-arch GHCR images**: `ghcr.io/brsbsc/denova:latest` (and pinned version tags such as `v0.8.0fix4`) built for `linux/amd64` and `linux/arm64`.
 - **Non-root runtime**: The entrypoint prepares ownership on managed data directories and drops privileges to `UID/GID 10001:10001`, with remote-access authentication enabled out of the box.
 - **Managed External Agent CLIs & Web OAuth in Containers**:
   - The base image stays lightweight (Bash, Git, curl, Python, ripgrep) without preinstalling heavy external Agent CLIs.
@@ -115,7 +115,7 @@ Open `http://localhost:8080` and sign in with the configured credentials.
 | --- | --- | --- |
 | `DENOVA_USERNAME` | Initial login username (ignored once `config.toml` exists) | Required on first run |
 | `DENOVA_PASSWORD` | Initial login password, 1–72 UTF-8 bytes (ignored once `config.toml` exists) | Required on first run |
-| `DENOVA_IMAGE_TAG` | Image tag used by Compose (e.g. `latest`, `v0.8.0fix3`) | `latest` |
+| `DENOVA_IMAGE_TAG` | Image tag used by Compose (e.g. `latest`, `v0.8.0fix4`) | `latest` |
 | `DENOVA_CONTAINER_SANDBOX` | Container unprivileged sandbox adaptation | `1` (image default) |
 | `DENOVA_MANAGED_CLI_DIR` | Persistent directory for on-demand managed Agent CLIs | `/data/.local/bin` (image default) |
 
