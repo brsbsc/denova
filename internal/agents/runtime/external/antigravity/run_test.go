@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -105,6 +107,161 @@ func TestRunNativeNDJSONMCPAndResume(t *testing.T) {
 	if err != nil || !second.Settled || second.Usage.TotalTokens != 30 || second.CumulativeUsage.TotalTokens != 60 {
 		t.Fatalf("resumed result: %#v %v", second, err)
 	}
+	if len(host.calls) != 2 || host.calls[1].Name != "record" || string(host.calls[1].Arguments) != `{"value":"fixture"}` {
+		t.Fatalf("resumed host calls: %#v", host.calls)
+	}
+}
+
+// Antigravity CLI persists the MCP server URL and Bearer header inside its
+// conversation store on creation and reconnects to that exact endpoint on every
+// "--conversation" resume, ignoring the new transient agent's mcpServers.
+// Runtime sessions must rebind the original loopback endpoint across turns and
+// continuations, and fall back via ErrSessionUnavailable when a legacy cache
+// lacks endpoint metadata or another process occupies the port.
+func TestRuntimeSessionRebindsEndpointAndRebuildsWhenUnavailable(t *testing.T) {
+	client := fixtureClient(t, "tool")
+	selection := config.RuntimeSelection{
+		Kind:        config.RuntimeAntigravity,
+		Antigravity: &config.AntigravityRuntimeSettings{Model: "gemini-fixture-high"},
+	}
+	cacheRoot := t.TempDir()
+	newRuntime := func() *external.Runtime {
+		return &external.Runtime{
+			Selection: selection,
+			CacheRoot: cacheRoot,
+			Acquire: func(context.Context) (external.Adapter, func(), error) {
+				return client, func() {}, nil
+			},
+		}
+	}
+	baseInput := func(text string, history ...external.Message) external.Input {
+		in := fixtureInput(t)
+		in.Directory = ""
+		in.Text = text
+		in.History = history
+		return in
+	}
+
+	// 1. Fresh turn + same-lease Continue + committed next-turn resume (even across new Runtime instances).
+	host1 := &testHost{}
+	res1, err := newRuntime().Run(t.Context(), external.SessionRequest{
+		Key:      "project-1/session-1",
+		Boundary: "b1",
+		Input:    baseInput("Turn 1"),
+	}, host1)
+	if err != nil || !res1.Settled {
+		t.Fatalf("turn 1 failed: %#v %v", res1, err)
+	}
+	contRes, err := res1.Session.Continue(t.Context(), external.Input{
+		Text:  "Continue in same lease",
+		Tools: baseInput("").Tools,
+	}, host1)
+	if err != nil || !contRes.Settled {
+		t.Fatalf("continue failed: %#v %v", contRes, err)
+	}
+	if err := res1.Session.Accept(t.Context(), "b2"); err != nil {
+		t.Fatal(err)
+	}
+	_ = res1.Session.Close()
+	if len(host1.calls) != 2 {
+		t.Fatalf("expected 2 host tool calls across turn 1 and continue, got %#v", host1.calls)
+	}
+
+	prepared := 0
+	host2 := &testHost{}
+	res2, err := newRuntime().Run(t.Context(), external.SessionRequest{
+		Key:      "project-1/session-1",
+		Boundary: "b2",
+		Input:    baseInput("Turn 2", external.Message{Role: "user", Text: "Prior"}),
+		Prepare: func(_ context.Context, in external.Input, _ external.Adapter) (external.Input, error) {
+			prepared++
+			if len(in.History) != 0 {
+				t.Fatalf("aligned resume unexpectedly replayed history: %#v", in.History)
+			}
+			return in, nil
+		},
+	}, host2)
+	if err != nil || !res2.Settled || prepared != 1 || len(host2.calls) != 1 {
+		t.Fatalf("turn 2 aligned resume failed: res=%#v prepared=%d calls=%#v err=%v", res2, prepared, host2.calls, err)
+	}
+	if err := res2.Session.Accept(t.Context(), "b3"); err != nil {
+		t.Fatal(err)
+	}
+	_ = res2.Session.Close()
+
+	// 2. Port occupied after restart: falls back via ErrSessionUnavailable and rebuilds from canonical history.
+	persistedMCP, err := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".gemini", "antigravity-cli", "conversations", "conversation-1.mcp.json"))
+	if err != nil {
+		t.Fatalf("read provider-persisted MCP metadata: %v", err)
+	}
+	var savedMCP struct {
+		ServerURL string `json:"serverUrl"`
+	}
+	if err := json.Unmarshal(persistedMCP, &savedMCP); err != nil {
+		t.Fatalf("parse provider-persisted MCP metadata: %v", err)
+	}
+	parsedURL, err := url.Parse(savedMCP.ServerURL)
+	if err != nil || parsedURL.Host == "" {
+		t.Fatalf("invalid persisted serverUrl %q: %v", savedMCP.ServerURL, err)
+	}
+	occupier, err := net.Listen("tcp", parsedURL.Host)
+	if err != nil {
+		t.Fatalf("occupy saved bridge address %s: %v", parsedURL.Host, err)
+	}
+	defer occupier.Close()
+
+	var prepareHistories []int
+	host3 := &testHost{}
+	res3, err := newRuntime().Run(t.Context(), external.SessionRequest{
+		Key:      "project-1/session-1",
+		Boundary: "b3",
+		Input:    baseInput("Turn 3", external.Message{Role: "user", Text: "Canonical history"}),
+		Prepare: func(_ context.Context, in external.Input, _ external.Adapter) (external.Input, error) {
+			prepareHistories = append(prepareHistories, len(in.History))
+			return in, nil
+		},
+	}, host3)
+	if err != nil || !res3.Settled || !slices.Equal(prepareHistories, []int{0, 1}) || len(host3.calls) != 1 {
+		t.Fatalf("occupied port rebuild failed: res=%#v histories=%v calls=%#v err=%v", res3, prepareHistories, host3.calls, err)
+	}
+	if err := res3.Session.Accept(t.Context(), "b4"); err != nil {
+		t.Fatal(err)
+	}
+	_ = res3.Session.Close()
+	_ = occupier.Close()
+
+	// 3. Legacy pre-fix session directory containing only external/runtime's binding.json rebuilds cleanly on upgrade.
+	entries, err := os.ReadDir(cacheRoot)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("expected one runtime session dir, got %#v %v", entries, err)
+	}
+	sessionDir := filepath.Join(cacheRoot, entries[0].Name())
+	dirFiles, err := os.ReadDir(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range dirFiles {
+		if f.Name() != "binding.json" {
+			if err := os.RemoveAll(filepath.Join(sessionDir, f.Name())); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	prepareHistories = nil
+	host4 := &testHost{}
+	res4, err := newRuntime().Run(t.Context(), external.SessionRequest{
+		Key:      "project-1/session-1",
+		Boundary: "b4",
+		Input:    baseInput("Turn 4", external.Message{Role: "user", Text: "Legacy history"}),
+		Prepare: func(_ context.Context, in external.Input, _ external.Adapter) (external.Input, error) {
+			prepareHistories = append(prepareHistories, len(in.History))
+			return in, nil
+		},
+	}, host4)
+	if err != nil || !res4.Settled || !slices.Equal(prepareHistories, []int{0, 1}) || len(host4.calls) != 1 {
+		t.Fatalf("legacy cache rebuild failed: res=%#v histories=%v calls=%#v err=%v", res4, prepareHistories, host4.calls, err)
+	}
+	_ = res4.Session.Close()
 }
 
 // A terminal result is authoritative for the product task. CLI 1.4.7 was
@@ -204,8 +361,12 @@ func TestRunRemovesDisposableConversation(t *testing.T) {
 // instead of silently appending to a fresh conversation.
 func TestRunRejectsResumeUnderAnotherConversation(t *testing.T) {
 	input := fixtureInput(t)
-	input.SessionID = "conversation-1"
-	if _, err := fixtureClient(t, "resume-mismatch").Run(t.Context(), input, &testHost{}); !errors.Is(err, external.ErrSessionUnavailable) {
+	first, err := fixtureClient(t, "tool").Run(t.Context(), input, &testHost{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.SessionID = first.SessionID
+	if _, err := fixtureClient(t, "resume-mismatch").Run(t.Context(), input, &testHost{}); !errors.Is(err, external.ErrSessionUnavailable) || !strings.Contains(err.Error(), "conversation-other") {
 		t.Fatalf("resume mismatch was accepted: %v", err)
 	}
 }
@@ -498,6 +659,28 @@ func TestAntigravityFixtureProcess(t *testing.T) {
 	}
 	if mode == "tool" || mode == "unsafe" || mode == "concurrent" || mode == "approval" || mode == "browser" {
 		server := agent.MCPServers[0]
+		storeDir := filepath.Join(home, ".gemini", "antigravity-cli", "conversations")
+		if err := os.MkdirAll(storeDir, 0o700); err != nil {
+			panic(err)
+		}
+		if resumeIndex := slices.Index(args, "--conversation"); resumeIndex >= 0 {
+			persisted, err := os.ReadFile(filepath.Join(storeDir, args[resumeIndex+1]+".mcp.json"))
+			if err != nil {
+				panic("resumed conversation lacks persisted MCP server metadata: " + err.Error())
+			}
+			server = nil
+			if err := json.Unmarshal(persisted, &server); err != nil {
+				panic(err)
+			}
+		} else {
+			persisted, err := json.Marshal(server)
+			if err != nil {
+				panic(err)
+			}
+			if err := os.WriteFile(filepath.Join(storeDir, "conversation-1.mcp.json"), persisted, 0o600); err != nil {
+				panic(err)
+			}
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		client := mcp.NewClient(&mcp.Implementation{Name: "agy-fixture", Version: "1"}, nil)

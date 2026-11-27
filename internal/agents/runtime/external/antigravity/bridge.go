@@ -7,11 +7,13 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"denova/internal/agents/runtime/external"
 
@@ -31,19 +33,26 @@ type toolResult struct {
 // provider tool-use ID in MCP metadata. Session + JSON-RPC request ID identify a
 // delivery here; repeated HTTP deliveries return the already settled outcome.
 type toolBridge struct {
-	url, token string
-	server     *http.Server
-	mcp        *mcp.Server
-	ready      chan struct{}
-	mu         sync.Mutex
-	closed     bool
-	workers    sync.WaitGroup
-	results    map[string]*toolResult
-	err        error
+	address, url, token string
+	server              *http.Server
+	mcp                 *mcp.Server
+	ready               chan struct{}
+	mu                  sync.Mutex
+	closed              bool
+	workers             sync.WaitGroup
+	results             map[string]*toolResult
+	err                 error
 }
 
 func startBridge(ctx context.Context, tools []external.Tool, host external.Host, cancel context.CancelFunc) (*toolBridge, error) {
-	b := &toolBridge{token: rand.Text(), mcp: mcp.NewServer(&mcp.Implementation{Name: "denova", Version: "1"}, nil), ready: make(chan struct{}), results: map[string]*toolResult{}}
+	return startBridgeAt(ctx, "", "", tools, host, cancel)
+}
+
+func startBridgeAt(ctx context.Context, address, token string, tools []external.Tool, host external.Host, cancel context.CancelFunc) (*toolBridge, error) {
+	if token == "" {
+		token = rand.Text()
+	}
+	b := &toolBridge{token: token, mcp: mcp.NewServer(&mcp.Implementation{Name: "denova", Version: "1"}, nil), ready: make(chan struct{}), results: map[string]*toolResult{}}
 	names := map[string]bool{}
 	for _, tool := range tools {
 		if tool.Name == "" || names[tool.Name] || !json.Valid(tool.Schema) {
@@ -117,11 +126,12 @@ func startBridge(ctx context.Context, tools []external.Tool, host external.Host,
 			return result, nil
 		})
 	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := listenBridge(ctx, address)
 	if err != nil {
 		return nil, err
 	}
-	b.url = "http://" + listener.Addr().String() + "/mcp"
+	b.address = listener.Addr().String()
+	b.url = "http://" + b.address + "/mcp"
 	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return b.mcp }, nil)
 	b.server = &http.Server{ReadHeaderTimeout: infrastructureTimeout, BaseContext: func(net.Listener) context.Context { return ctx }, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/mcp" || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+b.token)) != 1 {
@@ -159,6 +169,29 @@ func startBridge(ctx context.Context, tools []external.Tool, host external.Host,
 		}
 	}()
 	return b, nil
+}
+
+func listenBridge(ctx context.Context, address string) (net.Listener, error) {
+	if address == "" {
+		return net.Listen("tcp", "127.0.0.1:0")
+	}
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || host != "127.0.0.1" || port == "" || port == "0" {
+		return nil, fmt.Errorf("invalid Antigravity MCP loopback address %q", address)
+	}
+	listener, err := net.Listen("tcp", address)
+	for _, delay := range []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 40 * time.Millisecond, 60 * time.Millisecond, 80 * time.Millisecond} {
+		if err == nil {
+			return listener, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
+		listener, err = net.Listen("tcp", address)
+	}
+	return listener, err
 }
 
 func (b *toolBridge) close() error {

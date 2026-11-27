@@ -201,6 +201,18 @@ func TestInstalledAntigravityPermissionsEnforced(t *testing.T) {
 	if len(host.calls) == 0 || host.calls[0].Name != "record" {
 		t.Fatalf("expected scoped denova MCP host tool call, got %#v (response=%q)", host.calls, result.Text)
 	}
+
+	// Verify "--conversation" resumption keeps the scoped Denova MCP bridge reachable.
+	input.SessionID = result.SessionID
+	input.CumulativeUsage = result.CumulativeUsage
+	input.Text = "Call the record tool on MCP server denova again with {\"value\":\"resumed\"} and reply briefly."
+	resumed, err := client.Run(ctx, input, host)
+	if err != nil || !resumed.Settled {
+		t.Fatalf("real CLI resumed run failed: result=%#v err=%v", resumed, err)
+	}
+	if len(host.calls) < 2 || host.calls[1].Name != "record" {
+		t.Fatalf("expected resumed denova MCP host tool call, got %#v (response=%q)", host.calls, resumed.Text)
+	}
 }
 
 func TestInstalledAntigravitySandboxUnavailable(t *testing.T) {

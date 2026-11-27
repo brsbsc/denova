@@ -35,7 +35,7 @@ func (c *Client) Run(ctx context.Context, input external.Input, host external.Ho
 	switch input.Mode {
 	case external.OperationTurn:
 	case external.OperationSummarize:
-		input.SessionID, input.CumulativeUsage, input.Tools = "", nil, nil
+		input.SessionID, input.Directory, input.CumulativeUsage, input.Tools = "", "", nil, nil
 	case external.OperationCompact, external.OperationEvaluate:
 		return result, errors.New("Antigravity CLI does not support isolated evaluation or manual compaction")
 	default:
@@ -93,11 +93,13 @@ func (c *Client) Run(ctx context.Context, input external.Input, host external.Ho
 			}()
 		}
 	}
-	// Verified on CLI 1.4.7/1.4.8: neither the random agent directory nor a
-	// per-attempt scratch cwd affects "--conversation" resumption — only the
-	// resolved conversation identity and the product binding do. Scratch cwds stay
-	// per attempt on purpose: they also stage "@ref" image copies, so a shared cwd
-	// would let concurrent turns overwrite each other's references.
+	// Verified on CLI 1.4.7-1.5.18: "--conversation" resumption ignores the new
+	// transient "--agent" directory and reconnects to the loopback MCP serverUrl
+	// and Bearer header frozen into the conversation's trajectory metadata when it
+	// was created. Bound sessions persist that endpoint in input.Directory so
+	// later turns (and host restarts) rebind it; if missing or occupied, failing
+	// before admission with ErrSessionUnavailable lets external.Runtime rebuild a
+	// fresh conversation from canonical product history.
 	dir := input.Directory
 	// A disposable attempt (summary or unbound conversation) leaves no reusable
 	// provider session behind, so its CLI conversation store is removed on exit.
@@ -118,8 +120,22 @@ func (c *Client) Run(ctx context.Context, input external.Input, host external.Ho
 	if err != nil {
 		return result, err
 	}
-	bridge, err := startBridge(runCtx, input.Tools, host, cancel)
+	var bridgeAddr, bridgeToken string
+	if input.SessionID != "" {
+		if disposable {
+			return result, fmt.Errorf("%w: Antigravity resume %s lacks a runtime session directory", external.ErrSessionUnavailable, input.SessionID)
+		}
+		binding, loadErr := readBridgeBinding(dir)
+		if loadErr != nil || binding.SessionID != input.SessionID {
+			return result, fmt.Errorf("%w: Antigravity session %s lacks matching MCP bridge metadata", external.ErrSessionUnavailable, input.SessionID)
+		}
+		bridgeAddr, bridgeToken = binding.Address, binding.Token
+	}
+	bridge, err := startBridgeAt(runCtx, bridgeAddr, bridgeToken, input.Tools, host, cancel)
 	if err != nil {
+		if input.SessionID != "" && ctx.Err() == nil {
+			return result, fmt.Errorf("%w: rebind Antigravity MCP bridge %s: %w", external.ErrSessionUnavailable, bridgeAddr, err)
+		}
 		return result, err
 	}
 	var cleanupAgent func() error
@@ -251,6 +267,15 @@ func (c *Client) Run(ctx context.Context, input external.Input, host external.Ho
 	waitErr, forced := reap(exited, cancel, killProcess)
 	result = output.complete(input.CumulativeUsage)
 	result.Settled = output.terminal && err == nil && scanner.Err() == nil
+	if !disposable && result.Settled && result.SessionID != "" {
+		if saveErr := writeBridgeBinding(dir, bridgeBinding{
+			SessionID: result.SessionID,
+			Address:   bridge.address,
+			Token:     bridge.token,
+		}); saveErr != nil {
+			return result, saveErr
+		}
+	}
 	if ctx.Err() != nil {
 		return result, ctx.Err()
 	}
@@ -279,6 +304,46 @@ func (c *Client) Run(ctx context.Context, input external.Input, host external.Ho
 		"operation", operation, "session_id", result.SessionID,
 		"resumed", input.SessionID != "" && input.SessionID == result.SessionID)
 	return result, nil
+}
+
+const bridgeBindingName = "antigravity-bridge.json"
+
+type bridgeBinding struct {
+	SessionID string `json:"session_id"`
+	Address   string `json:"address"`
+	Token     string `json:"token"`
+}
+
+func readBridgeBinding(dir string) (bridgeBinding, error) {
+	data, err := os.ReadFile(filepath.Join(dir, bridgeBindingName))
+	if err != nil {
+		return bridgeBinding{}, err
+	}
+	var binding bridgeBinding
+	if err := json.Unmarshal(data, &binding); err != nil {
+		return bridgeBinding{}, err
+	}
+	if binding.SessionID == "" || binding.Address == "" || binding.Token == "" {
+		return bridgeBinding{}, errors.New("incomplete Antigravity MCP bridge binding")
+	}
+	return binding, nil
+}
+
+func writeBridgeBinding(dir string, binding bridgeBinding) error {
+	data, err := json.Marshal(binding)
+	if err != nil {
+		return err
+	}
+	target := filepath.Join(dir, bridgeBindingName)
+	temporary := target + ".tmp"
+	if err := os.WriteFile(temporary, data, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(temporary, target); err != nil {
+		_ = os.Remove(temporary)
+		return err
+	}
+	return nil
 }
 
 // releaseTransientConversation removes the CLI-owned conversation a disposable
