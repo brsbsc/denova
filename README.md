@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  当前镜像基线：<strong>v0.8.0fix2</strong> · 仅发布 Docker 镜像 · <a href="https://github.com/brsbsc/denova/pkgs/container/denova">查看 GHCR 镜像</a>
+  当前镜像基线：<strong>v0.8.0fix3</strong> · 仅发布 Docker 镜像 · <a href="https://github.com/brsbsc/denova/pkgs/container/denova">查看 GHCR 镜像</a>
 </p>
 
 > [!NOTE]
@@ -56,7 +56,7 @@
 
 ## Docker 版特性
 
-- **开箱即用的多架构镜像**：提供 `ghcr.io/brsbsc/denova:latest`（以及固定版本标签如 `v0.8.0fix2`），同时支持 `linux/amd64` 与 `linux/arm64`。
+- **开箱即用的多架构镜像**：提供 `ghcr.io/brsbsc/denova:latest`（以及固定版本标签如 `v0.8.0fix3`），同时支持 `linux/amd64` 与 `linux/arm64`。
 - **非 root 安全运行**：启动脚本自动修复受管数据目录属主后降权至 `UID/GID 10001:10001` 运行，默认启用远程访问密码保护。
 - **容器内外部 Agent CLI 托管与网页 OAuth**：
   - 镜像保持轻量（内置 Bash、Git、curl、Python、ripgrep），不预装体积庞大的外部 Agent CLI。
@@ -115,7 +115,7 @@ docker run -d --name denova \
 | --- | --- | --- |
 | `DENOVA_USERNAME` | 首次启动初始化登录用户名（已有 `config.toml` 时忽略） | 无（首次必填） |
 | `DENOVA_PASSWORD` | 首次启动初始化登录密码，1–72 UTF-8 字节（已有 `config.toml` 时忽略） | 无（首次必填） |
-| `DENOVA_IMAGE_TAG` | Compose 使用的镜像标签（如 `latest`、`v0.8.0fix2`） | `latest` |
+| `DENOVA_IMAGE_TAG` | Compose 使用的镜像标签（如 `latest`、`v0.8.0fix3`） | `latest` |
 | `DENOVA_CONTAINER_SANDBOX` | 容器非特权沙箱适配开关 | `1`（镜像内置） |
 | `DENOVA_MANAGED_CLI_DIR` | 按需安装的外部 Agent CLI 持久化目录 | `/data/.local/bin`（镜像内置） |
 

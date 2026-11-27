@@ -4,11 +4,32 @@ Denova 仅在此记录用户可感知的重大功能、重要不兼容或数据�
 
 Denova records only major user-visible features, important compatibility or data changes, security updates, and fixes affecting core workflows. Internal refactors, test changes, copy edits, and minor UI polish are omitted; see the [Git history](https://github.com/alfredxw/denova/commits/master) for full details.
 
-`Unreleased` 以最近一个已发布版本（当前为 v0.8.0fix2）为比较基线，只描述升级用户最终可感知的净变化；内部接口、实现重构和 v0.5.1 后从未发布的中间格式不计入。
+`Unreleased` 以最近一个已发布版本（当前为 v0.8.0fix3）为比较基线，只描述升级用户最终可感知的净变化；内部接口、实现重构和 v0.5.1 后从未发布的中间格式不计入。
 
-`Unreleased` compares against the latest release (currently v0.8.0fix2) and describes only the final user-visible delta. Internal APIs, implementation refactors, and intermediate formats never released after v0.5.1 are excluded.
+`Unreleased` compares against the latest release (currently v0.8.0fix3) and describes only the final user-visible delta. Internal APIs, implementation refactors, and intermediate formats never released after v0.5.1 are excluded.
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)。
+
+## [v0.8.0fix3] - 2026-11-27
+
+### Brief / 简要说明
+
+#### 中文
+
+- 修复打开「资料库」时在 Chrome 中触发页面假死及 `STATUS_ACCESS_VIOLATION` 崩溃的布局循环问题。
+- 修复前端长期使用下的多处内存持续增长隐患：移除根组件重复的聊天实例、为常驻 Agent 标签与写作会话加入 LRU 上限与缓存清理、防止隐藏列表/后台标签流式队列无限积压、修复终端 WebGL2 上下文泄漏与设置页隐藏态轮询，并限制实时 SSE 帧合并大小。
+
+#### English
+
+- Fixes the Lore Library layout storm that caused page freezes and Chrome `STATUS_ACCESS_VIOLATION` crashes when opening the library.
+- Fixes frontend memory growth across long sessions by removing the duplicate root chat hook, capping idle keep-alive agent tabs/sessions with LRU cleanup, guarding hidden `Virtuoso` loops and background streaming queues, releasing terminal WebGL2 contexts properly, pausing idle update polling when Settings is hidden, and capping live coalesced SSE delta frames.
+
+### Fixed / 修复
+
+- 修复「资料库」页面在可见挂载时因 `AdaptiveResizablePanes` 布局循环、`LoreIndexSortableCard` 重复重绑引用以及 `content-visibility: auto` 组合触发的渲染进程假死与 Chrome `STATUS_ACCESS_VIOLATION` 崩溃。
+- Fixes Lore Library renderer freezes and Chrome `STATUS_ACCESS_VIOLATION` crashes caused by `AdaptiveResizablePanes` layout loops, unstable `LoreIndexSortableCard` refs, and `content-visibility: auto` ResizeObserver feedback.
+- 修复前端内存与渲染性能问题：移除 `App.tsx` 重复挂载的 `useAgentChat`、限制常驻空闲 Agent 标签和写作会话并释放已关闭/淘汰会话状态、阻止隐藏聊天列表循环更新、为后台标签页流式批处理增加定时兜底与 `O(N)` 增量合并、显式释放终端 WebGL2 上下文、暂停隐藏设置页的空闲更新轮询，并限制实时 SSE 合并帧大小。
+- Resolves frontend memory leaks and long-session bloat: removes the duplicate root `useAgentChat`, caps idle keep-alive agent tabs/sessions and prunes evicted/closed conversation state, guards hidden `Virtuoso` re-renders, adds background-tab streaming flush fallback and `O(N)` delta coalescing, explicitly releases terminal WebGL2 contexts, pauses idle Settings update polling when hidden, and caps live coalesced SSE delta frames.
 
 ## [v0.8.0fix2] - 2026-11-27
 
