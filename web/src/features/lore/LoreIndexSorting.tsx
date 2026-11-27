@@ -1,4 +1,4 @@
-import type { KeyboardEvent, MouseEvent, ReactNode, TouchEvent } from 'react'
+import { useCallback, type KeyboardEvent, type MouseEvent, type ReactNode, type TouchEvent } from 'react'
 import { DndContext, KeyboardSensor, MouseSensor, TouchSensor, closestCenter, pointerWithin, useSensor, useSensors } from '@dnd-kit/core'
 import { SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -94,10 +94,14 @@ export function LoreIndexSortableCard({ id, name, disabled, children }: { id: st
   const { t } = useTranslation()
   const { containerProps, activatorProps } = useIndexSortable(id, disabled)
   const { ref: activatorRef, onMouseDown, onTouchStart, onKeyDown, ...attributes } = activatorProps
+  const setCombinedRef = useCallback((node: HTMLDivElement | null) => {
+    containerProps.ref(node)
+    activatorRef(node)
+  }, [activatorRef, containerProps.ref])
   // Disabling sorting must not mark the card's selection and loading controls
   // disabled through their ancestor. Each control owns its busy state.
   return <div {...containerProps} {...attributes}
-    ref={node => { containerProps.ref(node); activatorRef(node) }}
+    ref={setCombinedRef}
     role={disabled ? undefined : attributes.role}
     tabIndex={disabled ? undefined : attributes.tabIndex}
     aria-disabled={undefined}

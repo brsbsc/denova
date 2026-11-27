@@ -1,6 +1,6 @@
 import { ToolInspectorHost, type InspectableToolMessage } from './ToolInspector'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, ReactNode, UIEvent } from 'react'
+import type { ComponentProps, CSSProperties, ReactNode, UIEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso } from 'react-virtuoso'
 import type { Components, ContextProp, ListItem } from 'react-virtuoso'
@@ -115,7 +115,27 @@ const MESSAGE_LIST_INCREASE_VIEWPORT_BY = { top: 420, bottom: 900 }
 const MESSAGE_LIST_INITIAL_END_INDEX = { index: 'LAST', align: 'end' } as const
 const EMPTY_TIMELINE_ATTACHMENTS: AgentTimelineAttachment[] = []
 const EMPTY_CHAT_LIST_ITEMS: AgentChatListItem[] = []
-const MemoizedVirtuoso = memo(Virtuoso) as typeof Virtuoso
+type MessageListVirtuosoProps = ComponentProps<typeof Virtuoso<AgentChatListItem, MessageListVirtuosoContext>> & {
+  visible: boolean
+}
+
+/**
+ * Skips Virtuoso prop commits while a persistently mounted chat surface is hidden
+ * or detached (0x0 viewport). react-virtuoso 4.18 does not deduplicate `data`
+ * emissions when empty or hidden, which can trigger React 19 store re-render loops.
+ */
+const RetainedVirtuoso = memo(
+  function RetainedVirtuoso({ visible: _visible, ...virtuosoProps }: MessageListVirtuosoProps) {
+    return <Virtuoso {...virtuosoProps} />
+  },
+  (previous, next) => {
+    if (!previous.visible && !next.visible) return true
+    const prevKeys = Object.keys(previous) as Array<keyof MessageListVirtuosoProps>
+    const nextKeys = Object.keys(next) as Array<keyof MessageListVirtuosoProps>
+    if (prevKeys.length !== nextKeys.length) return false
+    return prevKeys.every((key) => Object.is(previous[key], next[key]))
+  },
+)
 const MESSAGE_LIST_COMPONENTS: Components<AgentChatListItem, MessageListVirtuosoContext> = {
   Header: MessageListHeader,
   Footer: MessageListFooter,
@@ -476,8 +496,9 @@ function MessageListContent({ projectId, attachmentScope, messages, projection, 
     <ToolInspectorHost projectId={projectId} resolveMessage={resolveInspectedMessage} restoreFocus={resolveMessageScroller}>
     <AttachmentPreviewScopeProvider projectId={projectId} scope={attachmentScope}>
       <div ref={containerRef} className="relative flex min-h-0 flex-1 flex-col">
-      <MemoizedVirtuoso
+      <RetainedVirtuoso
         key={scrollResetKey || 'default'}
+        visible={visible}
         ref={scrollLock.virtuosoRef}
         scrollerRef={setScroller}
         onScroll={handleMessageScroll}

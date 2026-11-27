@@ -188,12 +188,10 @@ export function ConfigManagerChat({
         loreReferences={EMPTY_STRINGS}
         loreReferenceLabels={EMPTY_LABELS}
         loreSuggestions={EMPTY_LORE_SUGGESTIONS}
-        styleScenes={EMPTY_STRINGS}
         textSelections={EMPTY_TEXT_SELECTIONS}
         fileSuggestions={EMPTY_STRINGS}
         onReferenceRemove={noop}
         onLoreReferenceRemove={noop}
-        onStyleSceneRemove={noop}
         onTextSelectionRemove={noop}
         sessionRailVisible={sessionRailVisible}
         onSessionRailVisibleChange={setSessionRailVisible}

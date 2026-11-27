@@ -118,6 +118,7 @@ export function TerminalTabView({ tab, active, onSessionEstablished, onTitleChan
     observer.observe(container)
     return () => {
       observer.disconnect()
+      disposeRenderer(webglRef)
       terminal.dispose()
       terminalRef.current = null
       fitRef.current = null
@@ -303,6 +304,25 @@ export function TerminalTabView({ tab, active, onSessionEstablished, onTitleChan
   )
 }
 
+function webglContextForAddon(webgl: WebglAddon | null): WebGL2RenderingContext | null {
+  const candidate = (webgl as unknown as { _renderer?: { _gl?: WebGL2RenderingContext } } | null)?._renderer?._gl
+  return candidate ?? null
+}
+
+function disposeRenderer(webglRef: MutableRefObject<WebglAddon | null>) {
+  const webgl = webglRef.current
+  if (!webgl) return
+  const gl = webglContextForAddon(webgl)
+  webglRef.current = null
+  try {
+    webgl.dispose()
+  } finally {
+    if (gl && !gl.isContextLost()) {
+      gl.getExtension('WEBGL_lose_context')?.loseContext()
+    }
+  }
+}
+
 /**
  * Interactive CLIs draw their frames out of box-drawing and block characters, and the DOM
  * renderer paints those from the font, whose glyphs are narrower than the cell — every border
@@ -310,16 +330,21 @@ export function TerminalTabView({ tab, active, onSessionEstablished, onTitleChan
  * which the DOM renderer ignores) so the segments join into continuous lines. A missing or lost
  * context degrades back to the DOM renderer rather than leaving the tab blank.
  *
- * Idempotent: disposing any previously loaded addon first lets the renderer be reloaded when a
- * tab regains focus (its WebGL context is dropped while the tab is `display:none`).
+ * Idempotent: keeps a healthy context across tab activations and only reloads after the browser
+ * drops the context (e.g. while hidden), explicitly releasing the previous WebGL2 context so
+ * repeated switches do not exhaust Chromium's WebGL context pool.
  */
 function loadRenderer(terminal: Terminal, webglRef: MutableRefObject<WebglAddon | null>) {
+  const current = webglRef.current
+  if (current) {
+    const gl = webglContextForAddon(current)
+    if (!gl || !gl.isContextLost()) return
+  }
   try {
-    webglRef.current?.dispose()
+    disposeRenderer(webglRef)
     const webgl = new WebglAddon()
     webgl.onContextLoss(() => {
-      webglRef.current = null
-      webgl.dispose()
+      if (webglRef.current === webgl) disposeRenderer(webglRef)
     })
     terminal.loadAddon(webgl)
     webglRef.current = webgl

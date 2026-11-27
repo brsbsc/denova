@@ -89,13 +89,20 @@ export function useAgentStream(options: StreamOptions) {
         setStatus('streaming')
       }
       let completion: AgentStreamCompletion = 'disconnected'
+      let drainScheduled = false
       while (connection.current === active) {
         const { done, value } = await active.reader.read()
         if (done || connection.current !== active) break
         setStatus('streaming')
         active.projection.consume(value)
         if (value.type === 'finish' || value.type === 'abort') completion = 'terminal'
-        batcher.enqueue(current => applyAgentStreamUpdates(current, active.projection.takeUpdates()))
+        if (!drainScheduled) {
+          drainScheduled = true
+          batcher.enqueue(current => {
+            drainScheduled = false
+            return applyAgentStreamUpdates(current, active.projection.takeUpdates())
+          })
+        }
         if (isAgentDataChunk(value)) callbacks.current.onData(value as DataPart)
       }
       if (connection.current === active) {

@@ -26,6 +26,7 @@ import { draftSessionTitle } from './tab-state'
 import { WritingSessionRail } from './WritingSessionRail'
 
 export const WRITING_SESSION_RAIL_STORAGE_KEY = 'nova.writingAgent.sessionRailVisible.v1'
+export const MAX_MOUNTED_IDLE_WRITING_SESSIONS = 4
 
 /**
  * Project-scoped Writing Agent host. Every mounted conversation owns an immutable transport,
@@ -41,12 +42,10 @@ type RequiredWorkspaceProps = Pick<AgentPanelProps,
   | 'loreReferences'
   | 'loreReferenceLabels'
   | 'loreSuggestions'
-  | 'styleScenes'
   | 'textSelections'
   | 'fileSuggestions'
   | 'onReferenceRemove'
   | 'onLoreReferenceRemove'
-  | 'onStyleSceneRemove'
   | 'onTextSelectionRemove'
 >
 
@@ -99,9 +98,19 @@ export function WritingAgentWorkspace(props: WritingAgentWorkspaceProps) {
   }, [activeSessionId, loading, props.active, props.projectId])
   const sessionsRef = useRef(sessions)
   sessionsRef.current = sessions
+  const activeSessionIdRef = useRef(activeSessionId)
+  activeSessionIdRef.current = activeSessionId
   const activeProjectIdRef = useRef(props.projectId)
   activeProjectIdRef.current = props.projectId
   const refreshGenerationRef = useRef(0)
+  const sessionTouchOrderRef = useRef(new Map<string, number>())
+  const sessionTouchCounterRef = useRef(0)
+
+  const touchSession = useCallback((sessionId: string) => {
+    if (!sessionId) return
+    sessionTouchCounterRef.current += 1
+    sessionTouchOrderRef.current.set(sessionId, sessionTouchCounterRef.current)
+  }, [])
 
   const storeActiveSession = useCallback((sessionId: string, projectId = props.projectId) => {
     writeAgentChatActiveSession(projectId, sessionId, activeSessionPreferenceScope)
@@ -109,11 +118,18 @@ export function WritingAgentWorkspace(props: WritingAgentWorkspaceProps) {
 
   const selectSession = useCallback((sessionId: string) => {
     if (!sessionId || !sessionsRef.current.some((session) => session.id === sessionId)) return
+    touchSession(sessionId)
+    activeSessionIdRef.current = sessionId
     setActiveSessionId(sessionId)
-    setMountedSessionIds((current) => current.includes(sessionId) ? current : [...current, sessionId])
+    setMountedSessionIds((current) => pruneMountedSessionIds(
+      uniqueStrings([...current, sessionId]),
+      sessionsRef.current,
+      sessionId,
+      sessionTouchOrderRef.current,
+    ))
     setView('chat')
     storeActiveSession(sessionId)
-  }, [storeActiveSession])
+  }, [storeActiveSession, touchSession])
 
   const refreshSessions = useCallback(async () => {
     const targetProjectId = props.projectId.trim()
@@ -130,25 +146,31 @@ export function WritingAgentWorkspace(props: WritingAgentWorkspaceProps) {
     const nextSessions = sortSessions([...pending, ...project.sessions])
     sessionsRef.current = nextSessions
     setSessions(nextSessions)
-    setActiveSessionId((current) => {
-      const stored = readAgentChatActiveSession(targetProjectId, activeSessionPreferenceScope)
-      const next = firstAvailableSession(nextSessions, current, stored, props.activeSessionId)
-      if (next) storeActiveSession(next, targetProjectId)
-      return next
-    })
+    const stored = readAgentChatActiveSession(targetProjectId, activeSessionPreferenceScope)
+    const selected = firstAvailableSession(nextSessions, activeSessionIdRef.current, stored, props.activeSessionId)
+    if (selected) {
+      touchSession(selected)
+      storeActiveSession(selected, targetProjectId)
+    }
+    activeSessionIdRef.current = selected
+    setActiveSessionId(selected)
     setMountedSessionIds((current) => {
       const available = new Set(nextSessions.map((session) => session.id))
       const retained = current.filter((sessionId) => available.has(sessionId))
-      const selected = firstAvailableSession(nextSessions, activeSessionId, readAgentChatActiveSession(targetProjectId, activeSessionPreferenceScope), props.activeSessionId)
-      return uniqueStrings([
-        ...retained,
-        ...nextSessions.filter((session) => session.running).map((session) => session.id),
+      return pruneMountedSessionIds(
+        uniqueStrings([
+          ...retained,
+          ...nextSessions.filter((session) => session.running).map((session) => session.id),
+          selected,
+        ]),
+        nextSessions,
         selected,
-      ])
+        sessionTouchOrderRef.current,
+      )
     })
     setError('')
     return nextSessions
-  }, [activeSessionId, activeSessionPreferenceScope, props.activeSessionId, props.projectId, storeActiveSession])
+  }, [activeSessionPreferenceScope, props.activeSessionId, props.projectId, storeActiveSession, touchSession])
 
   const createDraftSession = useCallback((title = '') => {
     const existing = sessionsRef.current.find((session) => session.draft)
@@ -169,17 +191,27 @@ export function WritingAgentWorkspace(props: WritingAgentWorkspaceProps) {
     }
     const next = sortSessions([draft, ...sessionsRef.current])
     sessionsRef.current = next
+    touchSession(draft.id)
+    activeSessionIdRef.current = draft.id
     setSessions(next)
     setActiveSessionId(draft.id)
-    setMountedSessionIds((current) => current.includes(draft.id) ? current : [...current, draft.id])
+    setMountedSessionIds((current) => pruneMountedSessionIds(
+      uniqueStrings([...current, draft.id]),
+      next,
+      draft.id,
+      sessionTouchOrderRef.current,
+    ))
     setView('chat')
     storeActiveSession(draft.id)
     return draft
-  }, [selectSession, storeActiveSession, t])
+  }, [selectSession, storeActiveSession, t, touchSession])
 
   useEffect(() => {
     let cancelled = false
     refreshGenerationRef.current += 1
+    sessionTouchOrderRef.current.clear()
+    sessionTouchCounterRef.current = 0
+    activeSessionIdRef.current = ''
     setError('')
     setSessions([])
     sessionsRef.current = []
@@ -247,9 +279,16 @@ export function WritingAgentWorkspace(props: WritingAgentWorkspaceProps) {
         )),
       ])
       sessionsRef.current = next
+      touchSession(created.id)
+      activeSessionIdRef.current = created.id
       setSessions(next)
       setActiveSessionId(created.id)
-      setMountedSessionIds((current) => current.includes(created.id) ? current : [...current, created.id])
+      setMountedSessionIds((current) => pruneMountedSessionIds(
+        uniqueStrings([...current, created.id]),
+        next,
+        created.id,
+        sessionTouchOrderRef.current,
+      ))
       setView('chat')
       storeActiveSession(created.id)
     } catch (createError) {
@@ -289,6 +328,7 @@ export function WritingAgentWorkspace(props: WritingAgentWorkspaceProps) {
     setMountedSessionIds((current) => current.filter((id) => id !== sessionId))
     if (activeSessionId === sessionId) {
       const next = remaining[0]?.id || ''
+      activeSessionIdRef.current = next
       setActiveSessionId(next)
       if (next) storeActiveSession(next)
     }
@@ -322,6 +362,12 @@ export function WritingAgentWorkspace(props: WritingAgentWorkspaceProps) {
     sessionsRef.current = nextSessions
     setSessions(nextSessions)
     if (settled) {
+      setMountedSessionIds((current) => pruneMountedSessionIds(
+        current,
+        nextSessions,
+        activeSessionIdRef.current,
+        sessionTouchOrderRef.current,
+      ))
       props.onSettled?.()
       void refreshSessions().catch((refreshError) => {
         console.error(
@@ -523,6 +569,29 @@ function sortSessions(sessions: WorkspaceSession[]) {
 
 function uniqueStrings(values: string[]) {
   return [...new Set(values.filter(Boolean))]
+}
+
+function pruneMountedSessionIds(
+  mountedIds: string[],
+  sessions: WorkspaceSession[],
+  activeSessionId: string,
+  touchOrder: ReadonlyMap<string, number>,
+  maxIdle = MAX_MOUNTED_IDLE_WRITING_SESSIONS,
+) {
+  const sessionById = new Map(sessions.map((session) => [session.id, session]))
+  const availableIds = mountedIds.filter((id) => sessionById.has(id))
+  const evictableIdleIds = availableIds.filter((id) => {
+    const session = sessionById.get(id)
+    if (!session) return false
+    return id !== activeSessionId && !session.running && !session.draft
+  })
+  if (evictableIdleIds.length <= maxIdle) return availableIds
+  const toEvict = new Set(
+    [...evictableIdleIds]
+      .sort((left, right) => (touchOrder.get(left) ?? 0) - (touchOrder.get(right) ?? 0))
+      .slice(0, evictableIdleIds.length - maxIdle),
+  )
+  return availableIds.filter((id) => !toEvict.has(id))
 }
 
 export function readWritingSessionRailVisibility() {

@@ -1,22 +1,15 @@
 import type { EditorFlushHandler } from '@/components/Editor/useEditorDraftPersistence'
 import type { WorkbenchNotice } from '@/features/notices/use-workbench-notice'
 import type { FileNode } from '@/hooks/useWorkspace'
-import type { ChatSendOptions } from '@/hooks/useAgentChat'
 import type {
-  ActiveChatTask,
-  AgentRuntimeQueuedCommand,
   BookRecord,
   BookSortMode,
   ChapterSummary,
-  ContextAnalysis,
   LoreItem,
-  SessionSummary,
   TextSelection,
   WorkspaceSearchResult,
   WorkspaceSummary,
 } from '@/lib/api'
-import type { AgentPartRef } from '@/lib/agent-message-view'
-import type { AgentUIMessage } from '@/lib/agent-ui'
 import type { RightPanel, WorkspaceMode } from '@/stores/workspace-store'
 import type { Tab } from './TabController'
 import type { WorkspaceChangeMetadata } from '@/features/changes/types'
@@ -34,12 +27,6 @@ export interface ModeRouterProps {
   summary: WorkspaceSummary | null
   currentChapter?: ChapterSummary
   isStreaming: boolean
-  sessionTransitionPending?: boolean
-  isExecutionActive: boolean
-  runtimeProjection?: ActiveChatTask | null
-  abortPending?: boolean
-  commandSubmitting?: boolean
-  queueActionPendingCommandID?: string
   projectVisible: boolean
   activityBarExpanded: boolean
   rightPanel: RightPanel
@@ -63,21 +50,13 @@ export interface ModeRouterProps {
   editorAutoSaveDelayMs: number
   projectExplorerRefreshSignal: number
   versionRefreshSignal: number
-  messages: AgentUIMessage[]
-  sessions: SessionSummary[]
-  activeSessionId: string
-  activityContent: string
   references: string[]
   loreReferences: string[]
   loreItems: LoreItem[]
-  styleScenes: string[]
   textSelections: TextSelection[]
   writingAgentConversation: AgentChatConversationState
   onWritingAgentConversationStateChange?: (state: AgentChatConversationState) => void
   onOpenWritingSubAgentSession: (target: AgentSubAgentSessionTarget) => void | Promise<void>
-  chatPlanMode: boolean
-  hasEarlierMessages: boolean
-  isLoadingEarlierHistory: boolean
   notice?: WorkbenchNotice | null
   onSetMode: (mode: WorkspaceMode) => void
   onToggleActivityBarExpanded: () => void
@@ -113,31 +92,9 @@ export interface ModeRouterProps {
   onEditorFlushHandlerChange: (handler: EditorFlushHandler | null) => void
   onWorkspaceChanged: (paths: string[], metadata: WorkspaceChangeMetadata) => void | Promise<void>
   onQuoteSelection: (selection: TextSelection) => void
-  onCreateChatSession: (title?: string) => void | Promise<void>
-  onSwitchChatSession: (id: string) => void | Promise<void>
-  onRenameChatSession: (id: string, title: string) => void | Promise<void>
-  onDeleteChatSession: (id: string) => void | Promise<void>
-  onLoadEarlierHistory: () => void | Promise<void>
-  onRefreshChatHistory: (sessionId?: string) => void | Promise<void>
-  onSend: (message: string, options?: ChatSendOptions) => boolean | Promise<boolean>
-  onAnalyzeContext: (message: string, options?: { writingSkill?: string; ideContext?: { currentFile?: string; openFiles?: string[] }; imagePresetId?: string; tellerId?: string }) => Promise<ContextAnalysis>
-  onStop: () => void
-  onSuspend?: () => void
-  onResumeTask?: () => void
-  recoveryFailed?: boolean
-  onRetryRecovery?: () => void
-  onSteerQueuedCommand?: (item: AgentRuntimeQueuedCommand) => boolean | Promise<boolean>
-  onDeleteQueuedCommand?: (item: AgentRuntimeQueuedCommand) => boolean | Promise<boolean>
-  onEditQueuedCommand?: (item: AgentRuntimeQueuedCommand) => string | null | Promise<string | null>
   onReferenceRemove: (path: string) => void
   onLoreReferenceAdd: (id: string) => void
   onLoreReferenceRemove: (id: string) => void
-  onStyleSceneAdd: (scene: string) => void
-  onStyleSceneRemove: (scene: string) => void
   onTextSelectionRemove: (index: number) => void
-  onChatPlanModeChange: (value: boolean) => void
-  onChatPlanModeToggle: () => void
-  onApproveProposedPlan: (ref: AgentPartRef) => void
-  onExitChatPlanMode: () => void
   onDismissNotice?: () => void
 }

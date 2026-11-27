@@ -75,6 +75,8 @@ import {
 } from './types'
 import type { ToolNavigationIntent, ToolNavigationTarget } from '@/components/Chat/tool-navigation'
 
+const MAX_MOUNTED_IDLE_AGENT_TABS = 4
+
 interface AgentChatViewProps {
   composerSettings: WritingComposerSettingsController
   tellers: Teller[]
@@ -144,9 +146,19 @@ export function AgentChatView({
   const [projectDirectoryBusy, setProjectDirectoryBusy] = useState(false)
   const projectDirectoryBusyRef = useRef(false)
   const [archiveTarget, setArchiveTarget] = useState<AgentChatProject | null>(null)
-  /** Once mounted, a tab stays mounted so hidden conversations keep receiving their own stream. */
+  /** Once mounted, active, running, draft, and recent idle tabs stay mounted. */
   const [mountedTabKeys, setMountedTabKeys] = useState<ReadonlySet<string>>(() => new Set())
+  const mountedTabKeysRef = useRef<ReadonlySet<string>>(mountedTabKeys)
+  mountedTabKeysRef.current = mountedTabKeys
   const [conversationStates, setConversationStates] = useState<Record<string, AgentChatConversationState>>({})
+  const latestConversationStatesRef = useRef(new Map<string, AgentChatConversationState>())
+  const tabTouchOrderRef = useRef(new Map<string, number>())
+  const tabTouchCounterRef = useRef(0)
+  const mobileControlsRef = useRef<AgentChatPaneControls>(DESKTOP_SECONDARY_PANE_CONTROLS)
+  const touchTabKey = useCallback((key: string) => {
+    tabTouchCounterRef.current += 1
+    tabTouchOrderRef.current.set(key, tabTouchCounterRef.current)
+  }, [])
   /** Optimistic live state reported by mounted hooks, layered over the project snapshot. */
   const [liveRunningBindings, setLiveRunningBindings] = useState<ReadonlySet<string>>(() => new Set())
   const liveRunningBindingsRef = useRef<ReadonlySet<string>>(new Set())
@@ -218,33 +230,49 @@ export function AgentChatView({
   }, [projectsLoading, workbench])
   useEffect(() => {
     if (projectsLoading) return
-    setMountedTabKeys((current) => {
-      let next: Set<string> | null = null
-      const mount = (projectID: string, tabID: string) => {
-        const key = mountedAgentChatTabKey(projectID, tabID)
-        if (current.has(key)) return
-        next ??= new Set(current)
-        next.add(key)
+    const current = mountedTabKeysRef.current
+    const next = new Set(current)
+    const mount = (projectID: string, tabID: string, touch = false) => {
+      const key = mountedAgentChatTabKey(projectID, tabID)
+      if (touch) touchTabKey(key)
+      next.add(key)
+    }
+    const activeState = workbench.projects[workbench.activeProjectId]
+    if (activeState?.activeTabIds.primary) mount(workbench.activeProjectId, activeState.activeTabIds.primary, true)
+    if (activeState?.secondaryVisible && activeState.activeTabIds.secondary) {
+      mount(workbench.activeProjectId, activeState.activeTabIds.secondary, true)
+    }
+    for (const project of projects) {
+      const runningSessionIDs = new Set(project.sessions.filter((session) => session.running).map((session) => session.id))
+      if (runningSessionIDs.size === 0) continue
+      for (const tab of workbench.projects[project.id]?.tabs ?? []) {
+        if (tab.kind !== 'agent' || !runningSessionIDs.has(tab.sessionId)) continue
+        mount(project.id, tab.id)
       }
-      const activeState = workbench.projects[workbench.activeProjectId]
-      if (activeState?.activeTabIds.primary) mount(workbench.activeProjectId, activeState.activeTabIds.primary)
-      if (activeState?.secondaryVisible && activeState.activeTabIds.secondary) {
-        mount(workbench.activeProjectId, activeState.activeTabIds.secondary)
+    }
+    const pruned = pruneMountedAgentTabKeys(
+      next,
+      workbench,
+      projects,
+      liveRunningBindings,
+      latestConversationStatesRef.current,
+      tabTouchOrderRef.current,
+      MAX_MOUNTED_IDLE_AGENT_TABS,
+    )
+    const evictedKeys = [...current].filter((key) => !pruned.has(key))
+    if (pruned.size !== current.size || [...pruned].some((key) => !current.has(key))) {
+      mountedTabKeysRef.current = pruned
+      setMountedTabKeys(pruned)
+    }
+    if (evictedKeys.length > 0) {
+      const evictedSet = new Set(evictedKeys)
+      for (const key of evictedKeys) {
+        latestConversationStatesRef.current.delete(key)
+        tabTouchOrderRef.current.delete(key)
       }
-      for (const project of projects) {
-        const runningSessionIDs = new Set(project.sessions.filter((session) => session.running).map((session) => session.id))
-        if (runningSessionIDs.size === 0) continue
-        for (const tab of workbench.projects[project.id]?.tabs ?? []) {
-          if (tab.kind !== 'agent' || !runningSessionIDs.has(tab.sessionId)) continue
-          const key = mountedAgentChatTabKey(project.id, tab.id)
-          if (current.has(key)) continue
-          next ??= new Set(current)
-          next.add(key)
-        }
-      }
-      return next ?? current
-    })
-  }, [projects, projectsLoading, workbench.activeProjectId, workbench.projects])
+      setConversationStates((state) => omitRecordEntries(state, (key) => evictedSet.has(key)))
+    }
+  }, [liveRunningBindings, mountedTabKeys, projects, projectsLoading, touchTabKey, workbench])
   const registerTabFlushHandler = useCallback((projectID: string, tabId: string, handler: EditorFlushHandler | null) => {
     const key = mountedAgentChatTabKey(projectID, tabId)
     if (handler) tabFlushHandlersRef.current.set(key, handler)
@@ -274,6 +302,24 @@ export function AgentChatView({
     return () => onFlushHandlerChange?.(null)
   }, [flushTabDrafts, onFlushHandlerChange])
 
+  const handleTabsClosed = useCallback((projectID: string, closingKeys: ReadonlySet<string>, remainingTabs: AgentChatTab[]) => {
+    const keysToDropFromState = new Set<string>(closingKeys)
+    for (const key of closingKeys) {
+      latestConversationStatesRef.current.delete(key)
+      tabTouchOrderRef.current.delete(key)
+    }
+    const activeParentTabIDs = new Set(
+      remainingTabs
+        .filter((tab): tab is AgentChatSubAgentTab => tab.kind === 'subagent')
+        .map((tab) => mountedAgentChatTabKey(projectID, tab.parentTabId)),
+    )
+    const projectPrefix = `${projectID}\u0000`
+    setConversationStates((current) => omitRecordEntries(
+      current,
+      (key) => keysToDropFromState.has(key) || (key.startsWith(projectPrefix) && !activeParentTabIDs.has(key)),
+    ))
+  }, [])
+
   const {
     activateTab,
     closeTabs,
@@ -291,9 +337,16 @@ export function AgentChatView({
     flushTabDrafts,
     tabFlushHandlersRef,
     markTerminalTabsClosing,
+    onTabTouched: touchTabKey,
+    onTabsClosed: handleTabsClosed,
   })
   const handleConversationStateChange = useCallback((projectID: string, tabID: string, state: AgentChatConversationState) => {
     const key = mountedAgentChatTabKey(projectID, tabID)
+    latestConversationStatesRef.current.set(key, state)
+    const hasSubAgentTab = workbenchRef.current.projects[projectID]?.tabs.some(
+      (tab) => tab.kind === 'subagent' && tab.parentTabId === tabID,
+    )
+    if (!hasSubAgentTab) return
     setConversationStates((current) => {
       const previous = current[key]
       if (
@@ -307,6 +360,11 @@ export function AgentChatView({
   }, [])
   const openSubAgentSession = useCallback((parentTab: AgentChatAgentTab, target: AgentSubAgentSessionTarget) => {
     if (target.parentSessionId !== parentTab.sessionId) return
+    const parentKey = mountedAgentChatTabKey(parentTab.projectId, parentTab.id)
+    const latest = latestConversationStatesRef.current.get(parentKey)
+    if (latest) {
+      setConversationStates((current) => current[parentKey] === latest ? current : { ...current, [parentKey]: latest })
+    }
     openTab({
       kind: 'subagent',
       id: createTabId('subagent'),
@@ -736,6 +794,26 @@ export function AgentChatView({
     // restore the removed Project or keep its confirmation dialog blocked.
     refreshSequenceRef.current += 1
     const next = projectsRef.current.filter(project => project.id !== target.id)
+    const archivedPrefix = `${target.id}\u0000`
+    for (const key of [...tabFlushHandlersRef.current.keys()]) {
+      if (key.startsWith(archivedPrefix)) tabFlushHandlersRef.current.delete(key)
+    }
+    for (const key of [...latestConversationStatesRef.current.keys()]) {
+      if (key.startsWith(archivedPrefix)) latestConversationStatesRef.current.delete(key)
+    }
+    for (const key of [...tabTouchOrderRef.current.keys()]) {
+      if (key.startsWith(archivedPrefix)) tabTouchOrderRef.current.delete(key)
+    }
+    setMountedTabKeys((current) => {
+      const retained = new Set([...current].filter((key) => !key.startsWith(archivedPrefix)))
+      return retained.size === current.size ? current : retained
+    })
+    setConversationStates((current) => omitRecordEntries(current, (key) => key.startsWith(archivedPrefix)))
+    setToolNavigationByProject((current) => {
+      if (!(target.id in current)) return current
+      const { [target.id]: _removed, ...rest } = current
+      return rest
+    })
     setProjects(next)
     setWorkbench(current => {
       const reconciled = reconcileWorkbenchProjects(current, next)
@@ -744,6 +822,27 @@ export function AgentChatView({
     })
     return true
   }, [archiveTarget, flushProjectDrafts])
+
+  const handleOpenProjectPageById = useCallback((projectID: string, groupID: AgentChatGroupId, pageID: AgentChatPageId) => {
+    const target = projectsRef.current.find((candidate) => candidate.id === projectID)
+    if (target) openProjectPage(target, groupID, pageID)
+  }, [openProjectPage])
+
+  const handleCreateTabSession = useCallback((projectID: string, group: AgentChatGroupId, _title?: string, customAgentId?: string) => {
+    const target = projectsRef.current.find((candidate) => candidate.id === projectID)
+    if (!target) return
+    return customAgentId === undefined
+      ? openDraftSessionInProject(target, group)
+      : openConfiguredSessionInProject(target, customAgentId, group)
+  }, [openConfiguredSessionInProject, openDraftSessionInProject])
+
+  const handleOpenSubAgentSessionForTab = useCallback((parentTab: AgentChatAgentTab, target: AgentSubAgentSessionTarget) => {
+    openSubAgentSession(parentTab, target)
+    const controls = mobileControlsRef.current
+    if (!controls.isMobile) return
+    if (tabGroup(parentTab) === 'primary') controls.openRight()
+    else controls.closePane()
+  }, [openSubAgentSession])
 
   const treeProps = {
     projects,
@@ -858,7 +957,7 @@ export function AgentChatView({
               running={projectRunning}
               conversationSyncRevision={conversationSyncRevision}
               pendingAction={tab.kind === 'agent' ? pendingActions.get(agentChatSessionBindingKey(project.id, tab.sessionId)) : undefined}
-              onPendingActionConsumed={() => { if (tab.kind === 'agent') consumePendingAction(agentChatSessionBindingKey(project.id, tab.sessionId)) }}
+              onPendingActionConsumed={consumePendingAction}
               conversationState={conversationState}
               activeSubAgentSession={activeSubAgentSession}
               composerSettings={composerSettings}
@@ -874,10 +973,7 @@ export function AgentChatView({
               navigationIntent={documentReviewNavigation?.projectId === tab.projectId ? documentReviewNavigation : null}
               toolNavigationIntent={toolNavigationByProject[tab.projectId] || null}
               onDocumentReviewFeedbackOpen={openDocumentReviewFeedback}
-              onOpenPage={(projectID, groupID, pageID) => {
-                const target = projects.find((candidate) => candidate.id === projectID)
-                if (target) openProjectPage(target, groupID, pageID)
-              }}
+              onOpenPage={handleOpenProjectPageById}
               onFlushHandlerChange={registerTabFlushHandler}
               onFilesSelectedPathChange={setFilesSelectedPath}
               onOpenProjectFile={openProjectFile}
@@ -886,18 +982,11 @@ export function AgentChatView({
               onWorkspaceChanged={handleWorkspaceChanged}
               onRunningChange={handleRunningChange}
               onConversationStateChange={handleConversationStateChange}
-              onOpenSubAgentSession={(parentTab, target) => {
-                openSubAgentSession(parentTab, target)
-                if (!mobileControls.isMobile) return
-                if (tabGroup(parentTab) === 'primary') mobileControls.openRight()
-                else mobileControls.closePane()
-              }}
-              onDraftCommitted={(message) => commitDraftSession(project.id, tab.id, message)}
-              onCreateSession={(_title, customAgentId) => customAgentId === undefined
-                ? openDraftSessionInProject(project, group)
-                : openConfiguredSessionInProject(project, customAgentId, group)}
-              onTerminalSessionEstablished={(tabID, session) => bindTerminalSession(project.id, tabID, session)}
-              onTerminalTitleChange={(tabID, title) => updateTerminalTitle(project.id, tabID, title)}
+              onOpenSubAgentSession={handleOpenSubAgentSessionForTab}
+              onDraftCommitted={commitDraftSession}
+              onCreateSession={handleCreateTabSession}
+              onTerminalSessionEstablished={bindTerminalSession}
+              onTerminalTitleChange={updateTerminalTitle}
               onTerminalStatusChange={handleTerminalStatusChange}
             />
           )
@@ -964,6 +1053,7 @@ export function AgentChatView({
           }}
         >
           {(controls) => {
+            mobileControlsRef.current = controls
             const projectLayers = projects.map((project) => {
               const state = workbench.projects[project.id] ?? emptyProjectTabState()
               const visible = project.id === activeProjectId
@@ -1108,4 +1198,72 @@ export function AgentChatView({
 function toolNavigationPage(target: Exclude<ToolNavigationTarget, { kind: 'workspace_file' }>): AgentChatPageId | null {
   if (target.kind === 'lore_item') return 'lore'
   return null
+}
+
+function omitRecordEntries<T>(record: Record<string, T>, shouldDrop: (key: string) => boolean) {
+  let changed = false
+  const next: Record<string, T> = {}
+  for (const [key, value] of Object.entries(record)) {
+    if (shouldDrop(key)) { changed = true; continue }
+    next[key] = value
+  }
+  return changed ? next : record
+}
+
+function pruneMountedAgentTabKeys(
+  mountedKeys: ReadonlySet<string>,
+  workbench: ReturnType<typeof readStoredWorkbenchState>,
+  projects: AgentChatProject[],
+  liveRunningBindings: ReadonlySet<string>,
+  latestConversationStates: ReadonlyMap<string, AgentChatConversationState>,
+  touchOrder: ReadonlyMap<string, number>,
+  maxIdle: number,
+): Set<string> {
+  const projectById = new Map(projects.map((project) => [project.id, project]))
+  const activeProjectState = workbench.projects[workbench.activeProjectId]
+  const activeKeys = new Set<string>()
+  if (activeProjectState?.activeTabIds.primary) {
+    activeKeys.add(mountedAgentChatTabKey(workbench.activeProjectId, activeProjectState.activeTabIds.primary))
+  }
+  if (activeProjectState?.secondaryVisible && activeProjectState.activeTabIds.secondary) {
+    activeKeys.add(mountedAgentChatTabKey(workbench.activeProjectId, activeProjectState.activeTabIds.secondary))
+  }
+
+  const next = new Set<string>()
+  const evictableIdleAgentKeys: string[] = []
+  for (const key of mountedKeys) {
+    const separator = key.indexOf('\u0000')
+    if (separator <= 0) continue
+    const projectID = key.slice(0, separator)
+    const tabID = key.slice(separator + 1)
+    const project = projectById.get(projectID)
+    const state = workbench.projects[projectID]
+    const tab = state?.tabs.find((candidate) => candidate.id === tabID)
+    if (!project || !state || !tab) continue
+
+    if (tab.kind !== 'agent') {
+      next.add(key)
+      continue
+    }
+    const session = project.sessions.find((candidate) => candidate.id === tab.sessionId)
+    const bindingKey = agentChatSessionBindingKey(projectID, tab.sessionId)
+    const hasSubAgentTab = state.tabs.some((candidate) => candidate.kind === 'subagent' && candidate.parentTabId === tab.id)
+    const protectedTab = activeKeys.has(key)
+      || Boolean(tab.draft)
+      || Boolean(session?.running)
+      || liveRunningBindings.has(bindingKey)
+      || latestConversationStates.get(key)?.isStreaming === true
+      || hasSubAgentTab
+    next.add(key)
+    if (!protectedTab) evictableIdleAgentKeys.push(key)
+  }
+
+  if (evictableIdleAgentKeys.length > maxIdle) {
+    evictableIdleAgentKeys.sort((left, right) => (touchOrder.get(left) ?? 0) - (touchOrder.get(right) ?? 0))
+    const excess = evictableIdleAgentKeys.length - maxIdle
+    for (let i = 0; i < excess; i += 1) {
+      next.delete(evictableIdleAgentKeys[i])
+    }
+  }
+  return next
 }

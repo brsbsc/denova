@@ -138,3 +138,59 @@ it('clears a transient polling failure once the staged update can be read again'
     vi.mocked(getUpdateStatus).mockResolvedValue({ phase: 'idle', current_version: '0.5.1' })
   }
 })
+
+it('pauses idle status polling while settings are hidden and resumes when visible', async () => {
+  vi.useFakeTimers()
+  vi.mocked(getUpdateStatus).mockClear()
+  vi.mocked(getUpdateStatus).mockResolvedValue({ phase: 'idle', current_version: '0.5.1' })
+  const { rerender, unmount } = renderHook(
+    ({ visible }) => useUpdateSettings({ visible }),
+    { initialProps: { visible: false } },
+  )
+  try {
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000) })
+    expect(getUpdateStatus).not.toHaveBeenCalled()
+
+    rerender({ visible: true })
+    await act(async () => {})
+    expect(getUpdateStatus).toHaveBeenCalledTimes(1)
+
+    rerender({ visible: false })
+    vi.mocked(getUpdateStatus).mockClear()
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000) })
+    expect(getUpdateStatus).not.toHaveBeenCalled()
+  } finally {
+    unmount()
+    vi.useRealTimers()
+    vi.mocked(getUpdateStatus).mockResolvedValue({ phase: 'idle', current_version: '0.5.1' })
+  }
+})
+
+it('keeps polling while hidden when waiting to apply an update on idle', async () => {
+  vi.useFakeTimers()
+  vi.mocked(scheduleFrontendReloadAfterUpdate).mockClear()
+  vi.mocked(getUpdateStatus).mockReset()
+    .mockResolvedValueOnce({ phase: 'staged', current_version: '0.5.1', version: '0.5.2', id: 'wait-1', restart_waiting: true })
+    .mockResolvedValue({ phase: 'applying', current_version: '0.5.1', version: '0.5.2', id: 'wait-1' })
+  const { result, rerender, unmount } = renderHook(
+    ({ visible }) => useUpdateSettings({ visible }),
+    { initialProps: { visible: true } },
+  )
+  try {
+    await act(async () => {})
+    expect(result.current.operation).toBe('waiting')
+
+    rerender({ visible: false })
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500) })
+
+    expect(scheduleFrontendReloadAfterUpdate).toHaveBeenCalledWith(
+      { id: 'wait-1', version: '0.5.2' },
+      expect.anything(),
+    )
+    expect(result.current.operation).toBe('restarting')
+  } finally {
+    unmount()
+    vi.useRealTimers()
+    vi.mocked(getUpdateStatus).mockResolvedValue({ phase: 'idle', current_version: '0.5.1' })
+  }
+})

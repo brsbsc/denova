@@ -5,8 +5,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EditorFlushHandler } from '@/components/Editor/useEditorDraftPersistence'
 import {
   agentTabForProject,
+  getConversationRenderCount,
   project,
   renderView,
+  resetConversationRenderCounts,
   setDocumentReviewFeedback,
   terminalSession,
 } from './AgentChatView.test-harness'
@@ -53,6 +55,7 @@ describe('AgentChatView project workbenches', () => {
   beforeEach(() => {
     window.localStorage.clear()
     consumeAgentChatSessionNavigation()
+    resetConversationRenderCounts()
     setDocumentReviewFeedback(null)
     vi.mocked(getAgentChatProjects)
       .mockReset()
@@ -942,5 +945,109 @@ describe('AgentChatView project workbenches', () => {
 
     await user.click(screen.getByRole('button', { name: 'open pending document feedback' }))
     await waitFor(() => expect(screen.getByTestId('review-target-page')).toHaveTextContent('lore|lin-chuan|lore-comment|2'))
+  })
+
+  it('does not re-render sibling agent tabs during streaming when no SubAgent tab is open', async () => {
+    const user = userEvent.setup()
+    const multiSessionProject = project('/books/a', 'Project A', 'session-1', 'Chat 1')
+    multiSessionProject.sessions.push({
+      id: 'session-2',
+      title: 'Chat 2',
+      active: false,
+      running: false,
+      message_count: 1,
+      created_at: '2026-07-26T00:00:00Z',
+      updated_at: '2026-07-26T00:01:00Z',
+    })
+    vi.mocked(getAgentChatProjects).mockResolvedValue([multiSessionProject])
+    persistWorkbenchState({
+      activeProjectId: 'project-a',
+      projects: {
+        'project-a': {
+          tabs: [
+            agentTabForProject('tab-1', 'project-a', '/books/a', 'session-1'),
+            { kind: 'agent', id: 'tab-2', projectId: 'project-a', workspace: '/books/a', group: 'secondary', sessionId: 'session-2' },
+          ],
+          activeTabIds: { primary: 'tab-1', secondary: 'tab-2' },
+          focusedGroup: 'primary',
+          secondaryVisible: true,
+        },
+      },
+    })
+
+    renderView(<AgentChatView composerSettings={{} as never} tellers={[]} imagePresets={[]} renderPage={() => null} renderReview={() => null} />)
+
+    const tab1 = await screen.findByTestId('conversation:/books/a:session-1')
+    await screen.findByTestId('conversation:/books/a:session-2')
+    const baselineTab2Renders = getConversationRenderCount('/books/a', 'session-2')
+
+    await user.click(within(tab1).getByRole('button', { name: 'emit stream chunk' }))
+    await user.click(within(tab1).getByRole('button', { name: 'emit stream chunk' }))
+
+    expect(getConversationRenderCount('/books/a', 'session-2')).toBe(baselineTab2Renders)
+
+    await user.click(within(tab1).getByRole('button', { name: 'open child Agent' }))
+    expect(await screen.findByRole('region', { name: /Researcher/ })).toBeInTheDocument()
+  })
+
+  it('caps mounted idle persisted agent tabs using LRU eviction and drops evicted conversation state', async () => {
+    const user = userEvent.setup()
+    const base = project('/books/a', 'Project A', 'session-running', 'Running Chat')
+    base.sessions[0].running = true
+    for (let i = 1; i <= 6; i += 1) {
+      base.sessions.push({
+        id: `session-${i}`,
+        title: `Idle Chat ${i}`,
+        active: false,
+        running: false,
+        message_count: 1,
+        created_at: `2026-07-26T00:0${i}:00Z`,
+        updated_at: `2026-07-26T00:0${i}:00Z`,
+      })
+    }
+    vi.mocked(getAgentChatProjects).mockResolvedValue([base])
+    persistWorkbenchState({
+      activeProjectId: 'project-a',
+      projects: {
+        'project-a': {
+          tabs: [
+            agentTabForProject('tab-running', 'project-a', '/books/a', 'session-running'),
+            agentTabForProject('tab-1', 'project-a', '/books/a', 'session-1'),
+            agentTabForProject('tab-2', 'project-a', '/books/a', 'session-2'),
+            agentTabForProject('tab-3', 'project-a', '/books/a', 'session-3'),
+            agentTabForProject('tab-4', 'project-a', '/books/a', 'session-4'),
+            agentTabForProject('tab-5', 'project-a', '/books/a', 'session-5'),
+            agentTabForProject('tab-6', 'project-a', '/books/a', 'session-6'),
+          ],
+          activeTabIds: { primary: 'tab-1', secondary: null },
+          focusedGroup: 'primary',
+          secondaryVisible: false,
+        },
+      },
+    })
+
+    renderView(<AgentChatView composerSettings={{} as never} tellers={[]} imagePresets={[]} renderPage={() => null} renderReview={() => null} />)
+
+    const initialTab1 = await screen.findByTestId('conversation:/books/a:session-1')
+    expect(screen.getByTestId('conversation:/books/a:session-running')).toBeInTheDocument()
+    await user.click(within(initialTab1).getByRole('button', { name: 'emit settled message' }))
+
+    for (let i = 2; i <= 6; i += 1) {
+      await user.click(screen.getByRole('tab', { name: `Idle Chat ${i}` }))
+      await screen.findByTestId(`conversation:/books/a:session-${i}`)
+    }
+
+    expect(screen.getByTestId('conversation:/books/a:session-running')).toBeInTheDocument()
+    expect(screen.getByTestId('conversation:/books/a:session-6')).toHaveTextContent('active')
+    expect(screen.getByTestId('conversation:/books/a:session-2')).toBeInTheDocument()
+    expect(screen.getByTestId('conversation:/books/a:session-5')).toBeInTheDocument()
+    expect(screen.queryByTestId('conversation:/books/a:session-1')).not.toBeInTheDocument()
+
+    // Reopening the evicted tab starts fresh without stale pre-eviction conversation state.
+    await user.click(screen.getByRole('tab', { name: 'Idle Chat 1' }))
+    const remountedTab1 = await screen.findByTestId('conversation:/books/a:session-1')
+    await user.click(within(remountedTab1).getByRole('button', { name: 'open child Agent' }))
+    expect(await screen.findByRole('region', { name: /SubAgent/ })).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: /Researcher/ })).not.toBeInTheDocument()
   })
 })

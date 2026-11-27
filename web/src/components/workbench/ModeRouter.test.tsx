@@ -17,6 +17,7 @@ const agentChatRouteLifecycle = vi.hoisted(() => ({ renders: 0 }))
 const markdownEditorLifecycle = vi.hoisted(() => ({ mounts: 0, unmounts: 0 }))
 const loreLibraryFlushMock = vi.hoisted(() => vi.fn(async () => true))
 const agentChatFlushMock = vi.hoisted(() => vi.fn(async () => true))
+const useWritingChangeReviewMock = vi.hoisted(() => vi.fn())
 const writingChangeReviewMock = vi.hoisted(() => ({
   activeReviewThreadID: '',
   activeReviewRequest: null,
@@ -214,7 +215,7 @@ vi.mock('@/features/project-explorer/WritingProjectExplorer', () => ({
 }))
 
 vi.mock('@/features/changes/use-writing-change-review', () => ({
-  useWritingChangeReview: () => writingChangeReviewMock,
+  useWritingChangeReview: useWritingChangeReviewMock,
 }))
 
 vi.mock('@/features/changes/review/ChangeReviewWorkspace', () => ({
@@ -261,6 +262,7 @@ describe('ModeRouter autosave navigation policy', () => {
     markdownEditorLifecycle.mounts = 0
     markdownEditorLifecycle.unmounts = 0
     writingChangeReviewMock.activeReviewThreadID = ''
+    useWritingChangeReviewMock.mockReset().mockReturnValue(writingChangeReviewMock)
     useDocumentReviewMock.mockReturnValue({
       feedback: null,
       thread: { comments: [] },
@@ -716,6 +718,17 @@ describe('ModeRouter autosave navigation policy', () => {
     expect(screen.getByTestId('writing-source-editor')).toHaveTextContent(path)
     expect(screen.queryByTestId('markdown-editor-navigation')).not.toBeInTheDocument()
   })
+
+  it('scopes writing change review to the active writingAgentConversation session', () => {
+    render(withAppProviders(<ModeRouter {...modeRouterProps({
+      writingAgentConversation: { sessionId: 'writing-session-42', messages: [], isStreaming: false },
+    })} />))
+
+    expect(useWritingChangeReviewMock).toHaveBeenCalledWith(expect.objectContaining({
+      workspace: '/book-a',
+      contextKey: 'writing-session-42',
+    }))
+  })
 })
 
 function modeRouterProps(
@@ -729,7 +742,6 @@ function modeRouterProps(
     projectId: 'project-book-a',
     summary: null,
     isStreaming: false,
-    isExecutionActive: false,
     projectVisible: true,
     activityBarExpanded: true,
     rightPanel: null,
@@ -760,20 +772,12 @@ function modeRouterProps(
     editorAutoSaveDelayMs: 1000,
     projectExplorerRefreshSignal: 0,
     versionRefreshSignal: 0,
-    messages: [],
-    sessions: [],
-    activeSessionId: '',
-    activityContent: '',
-    hasEarlierMessages: false,
-    isLoadingEarlierHistory: false,
     references: [],
     loreReferences: [],
     loreItems: [],
-    styleScenes: [],
     textSelections: [],
     writingAgentConversation: { sessionId: '', messages: [], isStreaming: false },
     onOpenWritingSubAgentSession: vi.fn(),
-    chatPlanMode: false,
     onSetMode: vi.fn(),
     onToggleActivityBarExpanded: vi.fn(),
     onToggleProjectVisible: vi.fn(),
@@ -807,25 +811,10 @@ function modeRouterProps(
     onEditorFlushHandlerChange: vi.fn(),
     onWorkspaceChanged: vi.fn(),
     onQuoteSelection: vi.fn(),
-    onCreateChatSession: vi.fn(),
-    onSwitchChatSession: vi.fn(),
-    onRenameChatSession: vi.fn(),
-    onDeleteChatSession: vi.fn(),
-    onLoadEarlierHistory: vi.fn(),
-    onRefreshChatHistory: vi.fn(),
-    onSend: vi.fn(),
-    onAnalyzeContext: vi.fn(async () => ({} as any)),
-    onStop: vi.fn(),
     onReferenceRemove: vi.fn(),
     onLoreReferenceAdd: vi.fn(),
     onLoreReferenceRemove: vi.fn(),
-    onStyleSceneAdd: vi.fn(),
-    onStyleSceneRemove: vi.fn(),
     onTextSelectionRemove: vi.fn(),
-    onChatPlanModeChange: vi.fn(),
-    onChatPlanModeToggle: vi.fn(),
-    onApproveProposedPlan: vi.fn(),
-    onExitChatPlanMode: vi.fn(),
     ...overrides,
   }
 }

@@ -18,15 +18,16 @@ type UpdateOperation = 'idle' | 'checking' | 'installing' | 'uploading' | 'apply
 
 /** Isolates status polling from the rest of the settings form. Keep this mounted
  * so collapsing the update details cannot discard an upload or staged result. */
-export function UpdateSettings() {
-  return desktopBridge() ? <DesktopUpdates /> : <WebUpdates />
+export function UpdateSettings({ visible = true }: { visible?: boolean } = {}) {
+  return desktopBridge() ? <DesktopUpdates /> : <WebUpdates visible={visible} />
 }
 
-function WebUpdates() {
-  return <UpdatePanel {...useUpdateSettings()} />
+function WebUpdates({ visible }: { visible: boolean }) {
+  return <UpdatePanel {...useUpdateSettings({ visible })} />
 }
 
-export function useUpdateSettings() {
+export function useUpdateSettings(options: { visible?: boolean } = {}) {
+  const visible = options.visible ?? true
   const { t } = useTranslation()
   const [updateStatus, setUpdateStatus] = useState<UpdateCheckResult | null>(null)
   const [completedUpdate, setCompletedUpdate] = useState<CompletedUpdate | null>(null)
@@ -97,7 +98,14 @@ export function useUpdateSettings() {
     }
   }, [syncUpdateStatus])
 
+  useEffect(() => () => {
+    cancelReload.current?.()
+    restartTarget.current = null
+  }, [])
+
+  const shouldPoll = visible || operation === 'waiting'
   useEffect(() => {
+    if (!shouldPoll) return
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout>
     const poll = async () => {
@@ -108,8 +116,8 @@ export function useUpdateSettings() {
       if (!controller.signal.aborted) timer = setTimeout(() => void poll(), 2000)
     }
     void poll()
-    return () => { controller.abort(); clearTimeout(timer); cancelReload.current?.(); restartTarget.current = null }
-  }, [syncUpdateStatus])
+    return () => { controller.abort(); clearTimeout(timer) }
+  }, [shouldPoll, syncUpdateStatus])
 
   const runUpdateCheck = useCallback(async () => {
     requestActive.current = true

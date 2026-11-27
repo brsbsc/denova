@@ -8,11 +8,10 @@ import { applyFontSettings, fontSettingsFromEffective } from '@/features/setting
 import { SoftwareUpdateMonitor } from '@/features/updates/SoftwareUpdateMonitor'
 import { AnalyticsNotice } from '@/features/analytics/AnalyticsPreferences'
 import { useAnalyticsActivity } from '@/features/analytics/use-analytics-activity'
-import { getProjectLoreItems, importCharacterCard, previewCharacterCard, setProjectChapterConfirmed, switchWorkspace, type CharacterCardImportResult, type CharacterCardPreview, type ImportDuplicatePreview, type ImportDuplicateReviewEntry, type LoreItem, type WorkspaceSearchResult } from '@/lib/api'
+import { getProjectLoreItems, importCharacterCard, previewCharacterCard, setProjectChapterConfirmed, switchWorkspace, type CharacterCardImportResult, type CharacterCardPreview, type ImportDuplicatePreview, type ImportDuplicateReviewEntry, type LoreItem, type TextSelection, type WorkspaceSearchResult } from '@/lib/api'
 import { APIError, withErrorLogID } from '@/lib/api-client'
 import { CommandPalette } from '@/components/common/command-palette'
 import { useWorkspace } from '@/hooks/useWorkspace'
-import { useAgentChat } from '@/hooks/useAgentChat'
 import { useWorkspaceHotkeys } from '@/hooks/use-workspace-hotkeys'
 import { isSharedWorkspaceMode, useWorkspaceStore, workspaceModeRequiresBook, type RightPanel, type WorkspaceMode } from '@/stores/workspace-store'
 import { useInteractiveStore } from '@/features/interactive/stores/interactive-store'
@@ -44,13 +43,9 @@ import {
 } from '@/components/workbench/CharacterCardImportDialog'
 import { OnboardingGuide, type OnboardingNavigationTarget } from '@/features/onboarding/OnboardingGuide'
 import { requestSettingsSection, SETTINGS_SECTION_EVENT, WRITING_AGENT_INIT_EVENT } from '@/features/onboarding/events'
-import {
-  isProjectChangeForProject,
-  workspaceChangeImpact,
-  workspaceChangePaths,
-  type WorkspaceChangeEvent,
-  type WorkspaceChangeImpact,
-  type WorkspaceChangeMetadata,
+import type {
+  WorkspaceChangeImpact,
+  WorkspaceChangeMetadata,
 } from '@/features/changes/types'
 import {
   AUTOSAVE_CONFLICT_PRESERVED_EVENT,
@@ -227,70 +222,36 @@ function App() {
     await handleAgentFileChange(currentPath, metadata.impact)
   }, [handleAgentFileChange, selectedFile])
 
-  const handleWorkspaceChangeEvent = useCallback(async (event: WorkspaceChangeEvent) => {
-    if (!isProjectChangeForProject(event, projectId)) return
-    const paths = workspaceChangePaths(event)
-    const path = selectedFile && paths.includes(selectedFile) ? selectedFile : paths[0]
-    await handleAgentFileChange(path, workspaceChangeImpact(event))
-  }, [handleAgentFileChange, projectId, selectedFile])
+  const [references, setReferences] = useState<string[]>([])
+  const [loreReferences, setLoreReferences] = useState<string[]>([])
+  const [textSelections, setTextSelections] = useState<TextSelection[]>([])
 
-  const {
-    messages,
-    sessions,
-    activeSessionId,
-    sessionTransitionPending,
-    isExecutionActive,
-    runtimeProjection,
-    abortPending,
-    commandSubmitting,
-    queueActionPendingCommandID,
-    activityContent,
-    recoveryFailed,
-    resumeActiveChat,
-    references,
-    styleScenes,
-    textSelections,
-    planMode,
-    setPlanMode,
-    togglePlanMode,
-    send,
-    analyzeContext,
-    approveProposedPlan,
-    exitPlanMode,
-    stop,
-    suspend,
-    resumeTask,
-    loadHistory,
-    loadEarlierHistory,
-    hasEarlierMessages,
-    isLoadingEarlierHistory,
-    createChatSession,
-    switchChatSession,
-    renameChatSession,
-    deleteChatSession,
-    steerQueuedCommand,
-    deleteQueuedCommand,
-    editQueuedCommand,
-    addReference,
-    removeReference,
-    loreReferences,
-    addLoreReference,
-    removeLoreReference,
-    addStyleScene,
-    removeStyleScene,
-    addTextSelection,
-    removeTextSelection,
-  } = useAgentChat({ projectId, onAgentFileChange: handleAgentFileChange, onWorkspaceChange: handleWorkspaceChangeEvent })
+  useEffect(() => {
+    setReferences([])
+    setLoreReferences([])
+    setTextSelections([])
+  }, [projectId])
+
+  const addReference = useCallback((path: string) => {
+    setReferences((prev) => (prev.includes(path) ? prev : [...prev, path]))
+  }, [])
+  const removeReference = useCallback((path: string) => {
+    setReferences((prev) => prev.filter((item) => item !== path))
+  }, [])
+  const addLoreReference = useCallback((id: string) => {
+    setLoreReferences((prev) => (prev.includes(id) ? prev : [...prev, id]))
+  }, [])
+  const removeLoreReference = useCallback((id: string) => {
+    setLoreReferences((prev) => prev.filter((item) => item !== id))
+  }, [])
+  const addTextSelection = useCallback((sel: TextSelection) => {
+    setTextSelections((prev) => [...prev, sel])
+  }, [])
+  const removeTextSelection = useCallback((index: number) => {
+    setTextSelections((prev) => prev.filter((_, i) => i !== index))
+  }, [])
 
   const { notice, applyUpdateCheckResult, dismissNotice } = useWorkbenchNotice(writingAgentConversation)
-
-  const handleChatPlanModeChange = useCallback((value: boolean) => {
-    setPlanMode(value)
-  }, [setPlanMode])
-
-  const handleChatPlanModeToggle = useCallback(() => {
-    togglePlanMode()
-  }, [togglePlanMode])
 
   useEffect(() => {
     const onLoreUpdated = (event: Event) => {
@@ -978,12 +939,6 @@ function App() {
         summary={summary}
         currentChapter={currentChapter}
         isStreaming={writingAgentConversation.isStreaming}
-        sessionTransitionPending={sessionTransitionPending}
-        isExecutionActive={isExecutionActive}
-        runtimeProjection={runtimeProjection}
-        abortPending={abortPending}
-        commandSubmitting={commandSubmitting}
-        queueActionPendingCommandID={queueActionPendingCommandID}
         projectVisible={projectVisible}
         activityBarExpanded={activityBarExpanded}
         rightPanel={rightPanel}
@@ -1007,21 +962,13 @@ function App() {
         editorAutoSaveDelayMs={editorAutoSaveDelayMs}
         projectExplorerRefreshSignal={projectExplorerRefreshSignal}
         versionRefreshSignal={versionRefreshSignal}
-        messages={messages}
-        sessions={sessions}
-        activeSessionId={activeSessionId}
-        activityContent={activityContent}
         references={references}
         loreReferences={loreReferences}
         loreItems={loreItems}
-        styleScenes={styleScenes}
         textSelections={textSelections}
         writingAgentConversation={writingAgentConversation}
         onWritingAgentConversationStateChange={handleWritingAgentConversationStateChange}
         onOpenWritingSubAgentSession={handleOpenWritingSubAgentSession}
-        chatPlanMode={planMode}
-        hasEarlierMessages={hasEarlierMessages}
-        isLoadingEarlierHistory={isLoadingEarlierHistory}
         onSetMode={handleSetMode}
         onToggleActivityBarExpanded={toggleActivityBarExpanded}
         onToggleProjectVisible={toggleProjectVisible}
@@ -1057,32 +1004,10 @@ function App() {
         onEditorFlushHandlerChange={handleEditorFlushHandlerChange}
         onWorkspaceChanged={handleReviewedWorkspaceChange}
         onQuoteSelection={addTextSelection}
-        onCreateChatSession={createChatSession}
-        onSwitchChatSession={switchChatSession}
-        onRenameChatSession={renameChatSession}
-        onDeleteChatSession={deleteChatSession}
-        onLoadEarlierHistory={loadEarlierHistory}
-        onRefreshChatHistory={loadHistory}
-        onSend={send}
-        onAnalyzeContext={analyzeContext}
-        onStop={stop}
-        onSuspend={suspend}
-        onResumeTask={resumeTask}
-        recoveryFailed={recoveryFailed}
-        onRetryRecovery={() => { void resumeActiveChat() }}
-        onSteerQueuedCommand={steerQueuedCommand}
-        onDeleteQueuedCommand={deleteQueuedCommand}
-        onEditQueuedCommand={editQueuedCommand}
         onReferenceRemove={removeReference}
         onLoreReferenceAdd={addLoreReference}
         onLoreReferenceRemove={removeLoreReference}
-        onStyleSceneAdd={addStyleScene}
-        onStyleSceneRemove={removeStyleScene}
         onTextSelectionRemove={removeTextSelection}
-        onChatPlanModeChange={handleChatPlanModeChange}
-        onChatPlanModeToggle={handleChatPlanModeToggle}
-        onApproveProposedPlan={approveProposedPlan}
-        onExitChatPlanMode={exitPlanMode}
       />
       <CommandPalette
         open={commandOpen}

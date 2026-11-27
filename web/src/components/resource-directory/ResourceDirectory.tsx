@@ -371,8 +371,6 @@ const DirectoryItemRow = memo(function DirectoryItemRow({ item, active, onSelect
   // Move the paint-containing slot itself so sorting cannot clip its button.
   return (
     <SidebarMenuItem ref={nodeRef} style={{
-      contentVisibility: 'auto',
-      containIntrinsicSize: item.summary ? 'auto 48px' : 'auto 32px',
       transform,
       transition,
       zIndex: isDragging ? 10 : undefined,

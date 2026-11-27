@@ -94,11 +94,11 @@ export interface AgentChatConversationHost {
   composerContext: {
     references: AgentPanelProps['references']
     loreReferences: AgentPanelProps['loreReferences']
-    styleScenes: AgentPanelProps['styleScenes']
+    styleScenes?: AgentPanelProps['styleScenes']
     textSelections: AgentPanelProps['textSelections']
     onReferenceConsumed: AgentPanelProps['onReferenceRemove']
     onLoreReferenceConsumed: AgentPanelProps['onLoreReferenceRemove']
-    onStyleSceneConsumed: AgentPanelProps['onStyleSceneRemove']
+    onStyleSceneConsumed?: AgentPanelProps['onStyleSceneRemove']
     onTextSelectionConsumed: AgentPanelProps['onTextSelectionRemove']
   }
 }
@@ -287,7 +287,7 @@ function AgentChatConversationTabComponent({
     const availableStringKeys = new Set([
       ...hostedComposerContext.references.map((value) => `file:${value}`),
       ...hostedComposerContext.loreReferences.map((value) => `lore:${value}`),
-      ...hostedComposerContext.styleScenes.map((value) => `style:${value}`),
+      ...(hostedComposerContext.styleScenes ?? []).map((value) => `style:${value}`),
     ])
     for (const key of consumedComposerStringsRef.current) {
       if (!availableStringKeys.has(key)) consumedComposerStringsRef.current.delete(key)
@@ -309,12 +309,12 @@ function AgentChatConversationTabComponent({
       chat.addLoreReference(reference)
       hostedComposerContext.onLoreReferenceConsumed(reference)
     }
-    for (const scene of hostedComposerContext.styleScenes) {
+    for (const scene of hostedComposerContext.styleScenes ?? []) {
       const key = `style:${scene}`
       if (consumedComposerStringsRef.current.has(key)) continue
       consumedComposerStringsRef.current.add(key)
       chat.addStyleScene(scene)
-      hostedComposerContext.onStyleSceneConsumed(scene)
+      hostedComposerContext.onStyleSceneConsumed?.(scene)
     }
     for (let index = hostedComposerContext.textSelections.length - 1; index >= 0; index -= 1) {
       const selection = hostedComposerContext.textSelections[index]

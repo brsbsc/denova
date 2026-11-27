@@ -110,12 +110,10 @@ function renderWorkspace(overrides: Partial<WritingAgentWorkspaceProps> = {}) {
     loreReferences: [],
     loreReferenceLabels: {},
     loreSuggestions: [],
-    styleScenes: [],
     textSelections: [],
     fileSuggestions: [],
     onReferenceRemove: vi.fn(),
     onLoreReferenceRemove: vi.fn(),
-    onStyleSceneRemove: vi.fn(),
     onTextSelectionRemove: vi.fn(),
     ...overrides,
   } as unknown as WritingAgentWorkspaceProps
@@ -249,5 +247,48 @@ describe('WritingAgentWorkspace', () => {
     expect(getAgentChatProjects).toHaveBeenCalledWith('book-a')
     expect(window.localStorage.getItem('nova.writingAgent.activeSession.v1:book-a')).toBe('session-a')
     expect(window.localStorage.getItem('nova.writingAgent.activeSession.v1:configuration:book-a')).toBe('session-b')
+  })
+
+  it('evicts oldest idle mounted sessions beyond the keep-alive cap while preserving running and active sessions', async () => {
+    const user = userEvent.setup()
+    const multi = project()
+    multi.sessions = [
+      {
+        id: 'session-running',
+        title: 'Running',
+        created_at: '2026-08-26T10:00:00Z',
+        updated_at: '2026-08-26T10:10:00Z',
+        message_count: 2,
+        running: true,
+        active: false,
+      },
+      ...[1, 2, 3, 4, 5, 6].map((i) => ({
+        id: `session-${i}`,
+        title: `Idle ${i}`,
+        created_at: `2026-08-26T09:0${i}:00Z`,
+        updated_at: `2026-08-26T09:0${i}:00Z`,
+        message_count: 1,
+        running: false,
+        active: i === 1,
+      })),
+    ]
+    multi.total = multi.sessions.length
+    vi.mocked(getAgentChatProjects).mockResolvedValue([multi])
+
+    renderWorkspace({ activeSessionId: 'session-1' })
+
+    expect(await screen.findByTestId('conversation:session-1')).toHaveTextContent('active')
+    expect(screen.getByTestId('conversation:session-running')).toBeInTheDocument()
+
+    for (let i = 2; i <= 6; i += 1) {
+      await user.click(screen.getByRole('button', { name: `切换到会话 Idle ${i}，空闲` }))
+      expect(await screen.findByTestId(`conversation:session-${i}`)).toHaveTextContent('active')
+    }
+
+    expect(screen.getByTestId('conversation:session-running')).toBeInTheDocument()
+    expect(screen.getByTestId('conversation:session-6')).toHaveTextContent('active')
+    expect(screen.getByTestId('conversation:session-2')).toBeInTheDocument()
+    expect(screen.getByTestId('conversation:session-5')).toBeInTheDocument()
+    expect(screen.queryByTestId('conversation:session-1')).not.toBeInTheDocument()
   })
 })

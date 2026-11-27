@@ -13,6 +13,7 @@ import {
   liveToolEventKeys,
   promoteMessageTarget,
   promoteMessageTargets,
+  sameLiveMessageSource,
   streamMetadataFromPayload,
   toolMessageInput,
   updateToolMessageInput,
@@ -21,6 +22,29 @@ import {
 import { createLiveTurnRenderKeys, type LiveTurnRenderKeys } from './utils'
 
 type LiveMessageUpdater = (updater: AgentUIMessage[] | ((current: AgentUIMessage[]) => AgentUIMessage[])) => void
+
+type PendingToolArgsOp = {
+  kind: 'tool_args'
+  payload: Record<string, unknown> & { id?: string; name?: string; args?: string; delta?: string }
+  toolKeys: string[]
+  inputDelta: string
+  replaceInput: boolean
+}
+
+type PendingLiveOp =
+  | { kind: 'message'; message: BufferedLiveMessage }
+  | PendingToolArgsOp
+  | { kind: 'collapse_non_narrative' }
+
+const identityMessages = (current: AgentUIMessage[]) => current
+
+function samePendingToolTarget(left: PendingToolArgsOp, right: PendingToolArgsOp) {
+  if (left.toolKeys.length > 0 || right.toolKeys.length > 0) {
+    return left.toolKeys.some((key) => right.toolKeys.includes(key))
+  }
+  if (left.payload.id || right.payload.id) return left.payload.id === right.payload.id
+  return Boolean(left.payload.name && left.payload.name === right.payload.name)
+}
 
 interface UseLiveMessageAccumulatorOptions {
   setMessages: LiveMessageUpdater
@@ -37,17 +61,52 @@ export function useLiveMessageAccumulator({ setMessages }: UseLiveMessageAccumul
   const turnRenderKeysRef = useRef<Record<string, LiveTurnRenderKeys>>({})
   const currentCompactionMessageIdRef = useRef<string | null>(null)
   const compactionIdCounterRef = useRef(0)
+  const pendingOpsRef = useRef<PendingLiveOp[]>([])
+  const drainScheduledRef = useRef(false)
 
-  // Text, thinking and tool-argument deltas share one ordered commit lane. The
-  // staged target is promoted once per batch so the presentation layer can
-  // identify prose immediately without adding another render per provider delta.
+  // Text, thinking and tool-argument deltas share one ordered commit lane. Consecutive
+  // deltas for the same target are coalesced before each frame commit so long streams
+  // stay O(N) instead of cloning the full message list per chunk.
   const updateBatcher = useMemo(
     () => createRafUpdateBatcher<AgentUIMessage[]>(
-      (update) => setMessages((current) => promoteMessageTargets(update(current))),
+      (update) => {
+        drainScheduledRef.current = false
+        const ops = pendingOpsRef.current
+        pendingOpsRef.current = []
+        setMessages((current) => {
+          let next = update(current)
+          for (const op of ops) {
+            if (op.kind === 'message') {
+              next = appendBufferedLiveMessage(next, op.message)
+            } else if (op.kind === 'tool_args') {
+              const targetIndex = findToolMessageIndexForPayload(next, op.payload, toolKeyToMessageIdRef.current)
+              if (targetIndex < 0) continue
+              const matchedId = next[targetIndex].id
+              if (matchedId) {
+                toolKeyToMessageIdRef.current = bindLiveToolEventKeys(op.toolKeys, toolKeyToMessageIdRef.current, matchedId)
+              }
+              next = next.map((message, index) => {
+                if (index !== targetIndex) return message
+                const input = op.replaceInput ? op.inputDelta : `${toolMessageInput(message)}${op.inputDelta}`
+                return updateToolMessageInput(message, input)
+              })
+            } else {
+              next = next.map((message) => settleAgentMessage(promoteMessageTarget(message), false))
+            }
+          }
+          return promoteMessageTargets(next)
+        })
+      },
       { minIntervalMs: STREAMING_RENDER_INTERVAL_MS },
     ),
     [setMessages],
   )
+
+  const scheduleDrain = useCallback(() => {
+    if (drainScheduledRef.current) return
+    drainScheduledRef.current = true
+    updateBatcher.enqueue(identityMessages)
+  }, [updateBatcher])
 
   const flushMessageBuffer = useCallback(() => {
     updateBatcher.flush()
@@ -58,8 +117,15 @@ export function useLiveMessageAccumulator({ setMessages }: UseLiveMessageAccumul
   }, [flushMessageBuffer])
 
   const queue = useCallback((message: BufferedLiveMessage) => {
-    updateBatcher.enqueue((current) => appendBufferedLiveMessage(current, message))
-  }, [updateBatcher])
+    const ops = pendingOpsRef.current
+    const last = ops[ops.length - 1]
+    if (last && last.kind === 'message' && last.message.role === message.role && sameLiveMessageSource(last.message.metadata, message.metadata)) {
+      last.message.content += message.content
+    } else {
+      ops.push({ kind: 'message', message: { ...message } })
+    }
+    scheduleDrain()
+  }, [scheduleDrain])
 
   const appendAssistant = useCallback((content: string, navigationAnchorId: string, metadata: AgentMessageMetadata = {}) => {
     if (!content) return
@@ -118,23 +184,34 @@ export function useLiveMessageAccumulator({ setMessages }: UseLiveMessageAccumul
   }, [flush, setMessages])
 
   const appendToolArgs = useCallback((payload: Record<string, unknown> & { id?: string; name?: string; args?: string; delta?: string }) => {
-    if (!payload.id && !payload.name && liveToolEventKeys(payload).length === 0) return
+    const toolKeys = liveToolEventKeys(payload)
+    if (!payload.id && !payload.name && toolKeys.length === 0) return
     const inputDelta = payload.args !== undefined ? payload.args : (payload.delta || '')
     const replaceInput = payload.args !== undefined
-    updateBatcher.enqueue((current) => {
-      const targetIndex = findToolMessageIndexForPayload(current, payload, toolKeyToMessageIdRef.current)
-      if (targetIndex < 0) return current
-      const matchedId = current[targetIndex].id
-      if (matchedId) {
-        toolKeyToMessageIdRef.current = bindLiveToolEventKeys(liveToolEventKeys(payload), toolKeyToMessageIdRef.current, matchedId)
+    const nextOp: PendingToolArgsOp = {
+      kind: 'tool_args',
+      payload,
+      toolKeys,
+      inputDelta,
+      replaceInput,
+    }
+    const ops = pendingOpsRef.current
+    const last = ops[ops.length - 1]
+    if (last && last.kind === 'tool_args' && samePendingToolTarget(last, nextOp)) {
+      if (replaceInput) {
+        last.inputDelta = inputDelta
+        last.replaceInput = true
+      } else {
+        last.inputDelta += inputDelta
       }
-      return current.map((message, index) => {
-        if (index !== targetIndex) return message
-        const input = replaceInput ? inputDelta : `${toolMessageInput(message)}${inputDelta}`
-        return updateToolMessageInput(message, input)
-      })
-    })
-  }, [updateBatcher])
+      for (const key of toolKeys) {
+        if (!last.toolKeys.includes(key)) last.toolKeys.push(key)
+      }
+    } else {
+      ops.push(nextOp)
+    }
+    scheduleDrain()
+  }, [scheduleDrain])
 
   const completeToolCall = useCallback((payload: Record<string, unknown> & { id?: string; name?: string }, result = '') => {
     updateBatcher.flush()
@@ -160,8 +237,12 @@ export function useLiveMessageAccumulator({ setMessages }: UseLiveMessageAccumul
   const collapseNonNarrative = useCallback(() => {
     if (!nonNarrativeStreamingRef.current) return
     nonNarrativeStreamingRef.current = false
-    updateBatcher.enqueue((current) => current.map((message) => settleAgentMessage(promoteMessageTarget(message), false)))
-  }, [updateBatcher])
+    const ops = pendingOpsRef.current
+    if (ops[ops.length - 1]?.kind !== 'collapse_non_narrative') {
+      ops.push({ kind: 'collapse_non_narrative' })
+    }
+    scheduleDrain()
+  }, [scheduleDrain])
 
   const finishMessages = useCallback((toolStatus: 'success' | 'cancelled' = 'success') => {
     flush()
@@ -170,6 +251,8 @@ export function useLiveMessageAccumulator({ setMessages }: UseLiveMessageAccumul
   }, [flush, setMessages])
 
   const resetForCheckpoint = useCallback(() => {
+    pendingOpsRef.current = []
+    drainScheduledRef.current = false
     updateBatcher.discard()
     toolKeyToMessageIdRef.current = {}
     nonNarrativeStreamingRef.current = false
@@ -224,6 +307,8 @@ export function useLiveMessageAccumulator({ setMessages }: UseLiveMessageAccumul
   }, [])
 
   useEffect(() => () => {
+    pendingOpsRef.current = []
+    drainScheduledRef.current = false
     updateBatcher.discard()
   }, [updateBatcher])
 

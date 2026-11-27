@@ -159,4 +159,42 @@ describe('Agent display connection', () => {
       consoleError.mockRestore()
     }
   })
+
+  it('coalesces multiple streaming chunks into a single projection drain per animation frame', async () => {
+    const active = connection()
+    const rafQueue: FrameRequestCallback[] = []
+    const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      rafQueue.push(cb)
+      return rafQueue.length
+    })
+    const { AgentStreamProjection } = await import('@/lib/agent-stream-projection')
+    const takeSpy = vi.spyOn(AgentStreamProjection.prototype, 'takeUpdates')
+    try {
+      const { result } = setup({ sendMessages: vi.fn().mockResolvedValue(active.stream), reconnectToStream: vi.fn() })
+      let sending!: Promise<void>
+      await act(async () => { sending = result.current.sendMessage({ role: 'user', parts: [] }) })
+      await act(async () => {
+        active.controller.enqueue({ type: 'text-start', id: 'answer' })
+        for (let i = 0; i < 20; i += 1) {
+          active.controller.enqueue({ type: 'text-delta', id: 'answer', delta: 'a' })
+        }
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      const callsBeforeFrame = takeSpy.mock.calls.length
+      await act(async () => {
+        while (rafQueue.length > 0) rafQueue.shift()?.(performance.now())
+      })
+      expect(takeSpy.mock.calls.length - callsBeforeFrame).toBe(1)
+      expect(result.current.messages.at(-1)?.parts[0]).toMatchObject({ text: 'a'.repeat(20) })
+      await act(async () => {
+        active.controller.enqueue({ type: 'finish' })
+        active.controller.close()
+        await sending
+      })
+    } finally {
+      takeSpy.mockRestore()
+      rafSpy.mockRestore()
+    }
+  })
 })

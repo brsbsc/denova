@@ -20,6 +20,8 @@ interface AgentChatTabWorkbenchOptions {
   flushTabDrafts: (keys?: ReadonlySet<string>) => Promise<boolean>
   tabFlushHandlersRef: { current: Map<string, EditorFlushHandler> }
   markTerminalTabsClosing: (tabs: AgentChatTab[]) => void
+  onTabTouched?: (key: string) => void
+  onTabsClosed?: (projectID: string, closingKeys: ReadonlySet<string>, remainingTabs: AgentChatTab[]) => void
 }
 
 export function mountedAgentChatTabKey(projectID: string, tabID: string) {
@@ -34,10 +36,14 @@ export function useAgentChatTabWorkbench({
   flushTabDrafts,
   tabFlushHandlersRef,
   markTerminalTabsClosing,
+  onTabTouched,
+  onTabsClosed,
 }: AgentChatTabWorkbenchOptions) {
   const openTab = useCallback((tab: AgentChatTab) => {
     const state = workbenchRef.current.projects[tab.projectId] ?? emptyProjectTabState()
     const mountedID = appendTab(state.tabs, tab).activeId
+    const mountedKey = mountedAgentChatTabKey(tab.projectId, mountedID)
+    onTabTouched?.(mountedKey)
     setWorkbench((current) => {
       const currentState = current.projects[tab.projectId] ?? emptyProjectTabState()
       const appended = appendTab(currentState.tabs, tab)
@@ -67,8 +73,8 @@ export function useAgentChatTabWorkbench({
         },
       }
     })
-    setMountedTabKeys((current) => new Set(current).add(mountedAgentChatTabKey(tab.projectId, mountedID)))
-  }, [setMountedTabKeys, setWorkbench, workbenchRef])
+    setMountedTabKeys((current) => new Set(current).add(mountedKey))
+  }, [onTabTouched, setMountedTabKeys, setWorkbench, workbenchRef])
 
   const closeTabs = useCallback(async (projectID: string, tabIDs: string[]): Promise<boolean> => {
     if (tabIDs.length === 0) return true
@@ -78,8 +84,10 @@ export function useAgentChatTabWorkbench({
     }
     const closingKeys = new Set([...closing].map((id) => mountedAgentChatTabKey(projectID, id)))
     if (!(await flushTabDrafts(closingKeys))) return false
-    const doomed = workbenchRef.current.projects[projectID]?.tabs.filter((tab) => closing.has(tab.id)) ?? []
+    const currentTabs = workbenchRef.current.projects[projectID]?.tabs ?? []
+    const doomed = currentTabs.filter((tab) => closing.has(tab.id))
     if (doomed.length === 0) return true
+    const remainingTabs = currentTabs.filter((tab) => !closing.has(tab.id))
     markTerminalTabsClosing(doomed)
 
     setWorkbench((current) => {
@@ -111,10 +119,13 @@ export function useAgentChatTabWorkbench({
     })
     closingKeys.forEach((key) => tabFlushHandlersRef.current.delete(key))
     setMountedTabKeys((current) => new Set([...current].filter((key) => !closingKeys.has(key))))
+    onTabsClosed?.(projectID, closingKeys, remainingTabs)
     return true
-  }, [flushTabDrafts, markTerminalTabsClosing, setMountedTabKeys, setWorkbench, tabFlushHandlersRef, workbenchRef])
+  }, [flushTabDrafts, markTerminalTabsClosing, onTabsClosed, setMountedTabKeys, setWorkbench, tabFlushHandlersRef, workbenchRef])
 
   const activateTab = useCallback((projectID: string, group: AgentChatGroupId, tabID: string) => {
+    const key = mountedAgentChatTabKey(projectID, tabID)
+    onTabTouched?.(key)
     setWorkbench((current) => {
       const state = current.projects[projectID] ?? emptyProjectTabState()
       return {
@@ -130,8 +141,8 @@ export function useAgentChatTabWorkbench({
         },
       }
     })
-    setMountedTabKeys((current) => new Set(current).add(mountedAgentChatTabKey(projectID, tabID)))
-  }, [setMountedTabKeys, setWorkbench])
+    setMountedTabKeys((current) => new Set(current).add(key))
+  }, [onTabTouched, setMountedTabKeys, setWorkbench])
 
   const focusGroup = useCallback((projectID: string, group: AgentChatGroupId) => {
     setWorkbench((current) => {

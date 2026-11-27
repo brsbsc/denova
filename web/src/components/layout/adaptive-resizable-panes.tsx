@@ -50,7 +50,7 @@ export function AdaptiveResizablePanes({ left, right, sizing, children }: {
     const measuredWidth = element?.clientWidth ?? 0
     const target = resolve(measuredWidth, navigationPixels)
     if (!target) return
-    if (measuredWidth !== previousWidth.current) element?.setAttribute('data-nova-panel-motion-suspended', 'true')
+    if (layoutsMatch(groupRef.current.getLayout(), target.layout)) return
     applyingLayout.current = true
     try {
       groupRef.current.setLayout(target.layout)
@@ -107,7 +107,23 @@ export function AdaptiveResizablePanes({ left, right, sizing, children }: {
       element.removeAttribute('data-nova-panel-motion-suspended')
     }
     previousWidth.current = width
-  })
+  }, [
+    width,
+    leftPixels,
+    sizing.leftVisible,
+    sizing.rightVisible,
+    sizing.rightExpanded,
+    sizing.left.layoutKey,
+    sizing.left.defaultSize,
+    sizing.left.minSize,
+    sizing.left.maxSize,
+    sizing.left.mainMinSize,
+    sizing.right.layoutKey,
+    sizing.right.defaultSize,
+    sizing.right.minSize,
+    sizing.right.maxSize,
+    sizing.right.mainMinSize,
+  ])
 
   const minimum = resolved?.minimum ?? { left: 0, main: 0, right: 0 }
   // Before measurement the library still needs a feasible layout. Three zero maxima produce a
@@ -145,4 +161,16 @@ export function AdaptiveResizablePanes({ left, right, sizing, children }: {
       </PanelMotionPanel>
     </PanelMotionGroup>
   )
+}
+
+const LAYOUT_EPSILON = 0.05
+
+function layoutsMatch(current: Layout, target: Layout): boolean {
+  const keys = Object.keys(target)
+  if (keys.length === 0) return false
+  return keys.every((key) => {
+    const a = current[key]
+    const b = target[key]
+    return typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < LAYOUT_EPSILON
+  })
 }

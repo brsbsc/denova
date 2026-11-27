@@ -387,7 +387,9 @@ export const SettingsSections = memo(function SettingsSections({ layered, draft,
                  onChange={(v) => setField('update_download_enabled', v)} />
         <p className="text-xs text-[var(--nova-text-muted)]">{t('settings.updates.autoHint')}</p>
         </>}
-        <UpdateSettings />
+        <SettingsPageVisibility.Consumer>{visible => (
+          <UpdateSettings visible={visible} />
+        )}</SettingsPageVisibility.Consumer>
         {layered?.runtime?.managed_agent_clis && (
           <div className="flex flex-col gap-2 border-t border-[var(--nova-border)] pt-3">
             <h3 className="px-2 text-sm font-medium">{t('settings.updates.agentCliTitle')}</h3>

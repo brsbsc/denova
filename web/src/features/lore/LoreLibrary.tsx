@@ -372,7 +372,6 @@ export const LoreLibrary = memo(function LoreLibrary({
               {section.items.map((item) => (
                 <LoreIndexSortableCard key={item.id} id={item.id} name={item.name} disabled={busy || selecting || section.items.length < 2}>
                   <DeferredContent eager={items.length <= 80} className="h-full [&>[data-slot=card]]:h-full"
-                    style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 360px' }}
                     placeholder={<button type="button" onClick={() => selecting ? toggle(item.id) : onSelect(item.id)}
                       className="flex w-full flex-col rounded-xl border bg-card p-4 text-left text-sm"
                       style={{ minHeight: cardSize === 'small' ? 260 : cardSize === 'large' ? 440 : 360 }}>

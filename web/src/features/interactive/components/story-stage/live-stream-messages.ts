@@ -192,7 +192,7 @@ function isStreamingMessageKind(message: AgentUIMessage, role: BufferedLiveMessa
   return message.parts.some((part) => part.type === type && 'state' in part && part.state === 'streaming')
 }
 
-function sameLiveMessageSource(message: AgentMessageMetadata | undefined, metadata: AgentMessageMetadata) {
+export function sameLiveMessageSource(message: AgentMessageMetadata | undefined, metadata: AgentMessageMetadata) {
   if (Boolean(message?.subagent) !== Boolean(metadata.subagent)) return false
   if (message?.subagent || metadata.subagent) return subAgentSessionKey(message) === subAgentSessionKey(metadata)
   return true

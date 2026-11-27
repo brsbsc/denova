@@ -98,11 +98,9 @@ function PageConversation({ project, page, context, presentation, loreReferenceL
     references={[]}
     loreReferenceLabels={loreReferenceLabels}
     loreSuggestions={loreSuggestions}
-    styleScenes={[]}
     textSelections={[]}
     fileSuggestions={[]}
     onReferenceRemove={noop}
-    onStyleSceneRemove={noop}
     onTextSelectionRemove={noop}
     sessionRailVisible={railVisible}
     onSessionRailVisibleChange={setRailVisible}

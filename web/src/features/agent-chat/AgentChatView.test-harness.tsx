@@ -42,6 +42,16 @@ vi.mock('@/features/document-review/use-document-review', () => ({
   }),
 }))
 
+const conversationRenderCounts = vi.hoisted(() => new Map<string, number>())
+
+export function resetConversationRenderCounts() {
+  conversationRenderCounts.clear()
+}
+
+export function getConversationRenderCount(workspace: string, sessionId: string) {
+  return conversationRenderCounts.get(`${workspace}:${sessionId}`) ?? 0
+}
+
 vi.mock('./AgentChatConversationTab', () => ({
   AgentChatConversationTab: ({
     workspace,
@@ -51,6 +61,7 @@ vi.mock('./AgentChatConversationTab', () => ({
     reviewFeedback,
     onReviewFeedbackOpen,
     onWorkspaceChanged,
+    onConversationStateChange,
     onSubAgentSessionOpen,
   }: {
     workspace: string
@@ -66,8 +77,11 @@ vi.mock('./AgentChatConversationTab', () => ({
     }>
     onReviewFeedbackOpen?: (selection: unknown, comment: unknown) => void
     onWorkspaceChanged?: (workspace: string, paths: string[], metadata: WorkspaceChangeMetadata) => void
+    onConversationStateChange?: (state: { sessionId: string; messages: unknown[]; isStreaming: boolean }) => void
     onSubAgentSessionOpen?: (target: { parentSessionId: string; sessionKey: string; name: string }) => void
   }) => {
+    const key = `${workspace}:${sessionId}`
+    conversationRenderCounts.set(key, (conversationRenderCounts.get(key) ?? 0) + 1)
     const selection = reviewFeedback?.[0]
     const comment = selection?.comments[0]
     return (
@@ -83,6 +97,36 @@ vi.mock('./AgentChatConversationTab', () => ({
         </button>
         <button type="button" onClick={() => onWorkspaceChanged?.(workspace, ['src/new.ts'], { impact: 'structure', origin: 'external' })}>
           simulate external structure
+        </button>
+        <button
+          type="button"
+          onClick={() => onConversationStateChange?.({
+            sessionId,
+            messages: [{
+              id: `stream-${Date.now()}`,
+              role: 'assistant',
+              parts: [{ type: 'text', text: 'streamed chunk' }],
+              metadata: { subagent: true, subagent_session_id: 'child-session', agent_name: 'Researcher' },
+            }],
+            isStreaming: true,
+          })}
+        >
+          emit stream chunk
+        </button>
+        <button
+          type="button"
+          onClick={() => onConversationStateChange?.({
+            sessionId,
+            messages: [{
+              id: `settled-${Date.now()}`,
+              role: 'assistant',
+              parts: [{ type: 'text', text: 'settled chunk' }],
+              metadata: { subagent: true, subagent_session_id: 'child-session', agent_name: 'Researcher' },
+            }],
+            isStreaming: false,
+          })}
+        >
+          emit settled message
         </button>
         <button type="button" onClick={() => onSubAgentSessionOpen?.({ parentSessionId: sessionId, sessionKey: 'child-session', name: 'Researcher' })}>
           open child Agent

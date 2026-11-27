@@ -1,5 +1,5 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, type ReactNode } from 'react'
-import type { AgentPanelProps, WritingComposerSettingsController } from '@/components/Chat/AgentPanel'
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, type ReactNode } from 'react'
+import type { WritingComposerSettingsController } from '@/components/Chat/AgentPanel'
 import type { EditorFlushHandler } from '@/components/Editor/useEditorDraftPersistence'
 import type { AgentChatProjectType } from './api'
 import type { ReviewFeedbackBatch, ReviewFeedbackComment, ReviewFeedbackSelection } from '@/features/changes/agent/ReviewFeedbackTray'
@@ -14,6 +14,7 @@ import { AgentSubAgentSessionPanel, type AgentSubAgentSessionTarget } from '@/co
 import { TerminalTabView, type AgentChatTerminalStatus } from './terminal/TerminalTabView'
 import type { TerminalSessionInfo } from './terminal/api'
 import { tabGroup } from './tab-state'
+import { agentChatSessionBindingKey } from './sidebar-activity'
 import type {
   AgentChatDocumentReviewNavigation,
   AgentChatGroupId,
@@ -35,7 +36,7 @@ interface AgentChatTabContentProps {
   running: boolean
   conversationSyncRevision: string
   pendingAction?: AgentChatPendingAction
-  onPendingActionConsumed?: (id: string) => void
+  onPendingActionConsumed?: (bindingKey: string) => void
   conversationState?: AgentChatConversationState
   activeSubAgentSession?: AgentSubAgentSessionTarget | null
   composerSettings: WritingComposerSettingsController
@@ -66,15 +67,15 @@ interface AgentChatTabContentProps {
   onRunningChange: (projectID: string, sessionId: string, running: boolean | null) => void
   onConversationStateChange: (projectID: string, tabId: string, state: AgentChatConversationState) => void
   onOpenSubAgentSession: (parentTab: AgentChatAgentTab, target: AgentSubAgentSessionTarget) => void
-  onDraftCommitted: (message: string) => void
-  onCreateSession: AgentPanelProps['onCreateSession']
-  onTerminalSessionEstablished: (tabId: string, session: TerminalSessionInfo) => boolean
-  onTerminalTitleChange: (tabId: string, title: string) => void
+  onDraftCommitted: (projectID: string, tabId: string, message: string) => void
+  onCreateSession: (projectID: string, group: AgentChatGroupId, title?: string, customAgentId?: string) => void | Promise<void>
+  onTerminalSessionEstablished: (projectID: string, tabId: string, session: TerminalSessionInfo) => boolean
+  onTerminalTitleChange: (projectID: string, tabId: string, title: string) => void
   onTerminalStatusChange: (tabId: string, status: AgentChatTerminalStatus | null) => void
 }
 
 /** Maps a tab record onto its independent, persistently mounted runtime surface. */
-export function AgentChatTabContent({
+function AgentChatTabContentComponent({
   tab,
   projectType,
   active,
@@ -166,6 +167,33 @@ export function AgentChatTabContent({
     paths: string[],
     metadata: WorkspaceChangeMetadata,
   ) => onWorkspaceChanged?.(tab.projectId, changedWorkspace, paths, metadata), [onWorkspaceChanged, tab.projectId])
+  const handlePendingActionConsumed = useCallback(() => {
+    if (tab.kind === 'agent') onPendingActionConsumed?.(agentChatSessionBindingKey(tab.projectId, tab.sessionId))
+  }, [onPendingActionConsumed, tab])
+  const handleOpenChangeReview = useCallback(
+    (threadID: string, groupID: string) => onOpenChangeReview(tab.projectId, tab.workspace, threadID, groupID),
+    [onOpenChangeReview, tab.projectId, tab.workspace],
+  )
+  const handleDraftCommitted = useCallback(
+    (message: string) => onDraftCommitted(tab.projectId, tab.id, message),
+    [onDraftCommitted, tab.id, tab.projectId],
+  )
+  const handleCreateSession = useCallback(
+    (title?: string, customAgentId?: string) => onCreateSession(tab.projectId, tabGroup(tab), title, customAgentId),
+    [onCreateSession, tab.group, tab.projectId],
+  )
+  const handleFilesSelectedPathChange = useCallback(
+    (path: string | null) => onFilesSelectedPathChange(tab.projectId, tab.id, path),
+    [onFilesSelectedPathChange, tab.id, tab.projectId],
+  )
+  const handleTerminalSessionEstablished = useCallback(
+    (tabID: string, session: TerminalSessionInfo) => onTerminalSessionEstablished(tab.projectId, tabID, session),
+    [onTerminalSessionEstablished, tab.projectId],
+  )
+  const handleTerminalTitleChange = useCallback(
+    (tabID: string, title: string) => onTerminalTitleChange(tab.projectId, tabID, title),
+    [onTerminalTitleChange, tab.projectId],
+  )
   const parentToolNavigation = useToolNavigation()
   const toolNavigation = useMemo(() => ({
     workspace: tab.workspace,
@@ -189,14 +217,14 @@ export function AgentChatTabContent({
       return (
         <ToolNavigationProvider value={toolNavigation}>
         <AgentChatConversationTab
-          onCreateSession={onCreateSession}
+          onCreateSession={handleCreateSession}
           projectId={tab.projectId}
           projectType={projectType}
           workspace={tab.workspace}
           sessionId={tab.sessionId}
           syncRevision={conversationSyncRevision}
           pendingAction={development.isPending ? undefined : pendingAction}
-          onPendingActionConsumed={onPendingActionConsumed}
+          onPendingActionConsumed={handlePendingActionConsumed}
           messageTransform={messageTransform}
           quickPromptScope={development.source ? 'extensions' : undefined}
           draft={tab.draft}
@@ -209,10 +237,10 @@ export function AgentChatTabContent({
           onReviewFeedbackRemove={projectType === 'book' ? removeDocumentReviewFeedback : undefined}
           onReviewFeedbackSubmitted={projectType === 'book' ? submitDocumentReviewFeedback : undefined}
           onReviewFeedbackSubmissionFailed={projectType === 'book' ? restoreDocumentReviewFeedback : undefined}
-          onOpenChangeReview={projectType === 'book' ? (threadID, groupID) => onOpenChangeReview(tab.projectId, tab.workspace, threadID, groupID) : undefined}
+          onOpenChangeReview={projectType === 'book' ? handleOpenChangeReview : undefined}
           onWorkspaceChanged={handleWorkspaceChanged}
           onRunningChange={onRunningChange}
-          onDraftCommitted={onDraftCommitted}
+          onDraftCommitted={handleDraftCommitted}
           onConversationStateChange={handleConversationStateChange}
           activeSubAgentSession={activeSubAgentSession}
           onSubAgentSessionOpen={handleOpenSubAgentSession}
@@ -234,8 +262,8 @@ export function AgentChatTabContent({
         <TerminalTabView
           tab={tab}
           active={active}
-          onSessionEstablished={onTerminalSessionEstablished}
-          onTitleChange={onTerminalTitleChange}
+          onSessionEstablished={handleTerminalSessionEstablished}
+          onTitleChange={handleTerminalTitleChange}
           onStatusChange={onTerminalStatusChange}
         />
       )
@@ -250,7 +278,7 @@ export function AgentChatTabContent({
             autoSaveDelayMs={autoSaveDelayMs}
             editorRefreshSignal={filesEditorRefreshSignal}
             treeRefreshSignal={filesTreeRefreshSignal}
-            onSelectedPathChange={(path) => onFilesSelectedPathChange(tab.projectId, tab.id, path)}
+            onSelectedPathChange={handleFilesSelectedPathChange}
             onFlushHandlerChange={handlePageFlushHandlerChange}
             onWorkspaceChanged={handleWorkspaceChanged}
           />
@@ -283,5 +311,7 @@ export function AgentChatTabContent({
       })}</>
   }
 }
+
+export const AgentChatTabContent = memo(AgentChatTabContentComponent)
 
 function noop() {}
